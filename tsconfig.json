@@ -26,6 +26,7 @@
     "dist",
     "**/*.test.ts",
     "**/*.example.ts",
+    "src/src/**",
     "src/api/webhooks/**",
     "src/services/stripeWebhook.ts",
     "src/cli/testE2E.ts",
