@@ -12,6 +12,9 @@
  */
 
 import { resolvePersistence } from './resolver.js';
+
+// Re-export resolvePersistence for legacy code
+export { resolvePersistence };
 import { logUsageIncrementAction } from '../utils/actionLogger.js';
 import type { PersistenceLayer, User } from './persistence.js';
 import type { Dataset } from '../db/datasets.js';

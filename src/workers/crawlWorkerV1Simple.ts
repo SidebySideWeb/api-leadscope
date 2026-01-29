@@ -26,6 +26,7 @@ import { extractEmails, extractPhones, extractSocial } from '../crawl/extractors
 import { normalizeUrl, canonicalize, sameRegistrableDomain, extractDomain, resolveUrl } from '../crawl/url.js';
 import { saveContacts, loadContacts } from '../storage/localDatasetStore.js';
 import { upsertCrawlResultV1 } from '../db/crawlResultsV1.js';
+import { crawlSocialMediaPages } from '../crawl/socialMediaCrawler.js';
 import type { Contact } from '../types/index.js';
 
 export interface CrawlWorkerV1SimpleInput {

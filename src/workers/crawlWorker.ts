@@ -184,7 +184,7 @@ export async function crawlDataset(
 
   // Load businesses
   const businesses = await persistence.listBusinesses(datasetId, opts.maxPages * 10); // Get more than we'll crawl
-  const businessesWithWebsite = businesses.filter(b => b.website_url);
+  const businessesWithWebsite = businesses.filter((b: { website_url: string | null }) => b.website_url);
 
   logger.info(`[crawlDataset] Found ${businessesWithWebsite.length} businesses with websites`);
 
@@ -213,7 +213,7 @@ export async function crawlDataset(
     const batch = businessesWithWebsite.slice(i, i + concurrency);
     
     const batchResults = await Promise.allSettled(
-      batch.map(business => crawlBusiness(business, opts))
+      batch.map((business: BusinessWithWebsite) => crawlBusiness(business, opts))
     );
 
     for (let j = 0; j < batchResults.length; j++) {

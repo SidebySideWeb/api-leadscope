@@ -31,6 +31,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     // Otherwise, resolve or create dataset based on city + industry
     let datasetId: string;
     let isReused = false;
+    let isInternalUser = false; // Declare at function scope
 
     if (input.datasetId) {
       // Explicit dataset ID provided - use it directly
@@ -52,7 +53,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
 
       // Check monthly usage limit for dataset creation (only if creating new)
       // Internal users bypass usage limits
-      const isInternalUser = permissions.is_internal_user; // Server-side only
+      isInternalUser = permissions.is_internal_user || false; // Server-side only
       const usage = await getUserUsage(input.userId);
       const usageCheck = checkUsageLimit(userPlan, 'dataset', usage.datasets_created_this_month, isInternalUser);
       
@@ -108,10 +109,15 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     if (input.userId) {
       permissions = await getUserPermissions(input.userId);
       userPlan = permissions.plan;
+      // Update isInternalUser if not already set
+      if (!isInternalUser) {
+        isInternalUser = permissions.is_internal_user || false;
+      }
     } else {
       // If no userId, default to demo (shouldn't happen in normal flow)
       permissions = await getUserPermissions(''); // Will default to demo
       userPlan = 'demo';
+      isInternalUser = false;
     }
 
     // Count cities in this dataset

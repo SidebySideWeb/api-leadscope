@@ -12,6 +12,9 @@
 
 import { checkPricingGate, type UserPlan, type ActionType, type PricingGateParams } from './pricingGate.js';
 
+// Re-export UserPlan for convenience
+export type { UserPlan };
+
 export interface EnforcementResult {
   allowed: boolean;
   limit: number;

@@ -54,4 +54,9 @@ export interface PersistenceLayer {
     userId: string,
     type: 'export' | 'crawl' | 'dataset'
   ): Promise<UsageTracking>;
+
+  /**
+   * Get user usage tracking
+   */
+  getUserUsage(userId: string): Promise<UsageTracking>;
 }
