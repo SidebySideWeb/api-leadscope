@@ -24,9 +24,7 @@ const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: true,
   sameSite: 'none' as const,
-  domain: '.leadscope.gr',
   path: '/',
-  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
 };
 
 /**
@@ -62,10 +60,10 @@ router.post('/login', async (req: Request, res: Response) => {
     });
 
     // Set cookie
-    res.cookie('token', token, COOKIE_OPTIONS);
+    res.cookie('auth-token', token, COOKIE_OPTIONS);
 
     console.log(`[Auth] Login successful - User ID: ${user.id}, Email: ${user.email}`);
-    console.log(`[Auth] Cookie set with domain: ${COOKIE_OPTIONS.domain}`);
+    console.log(`[Auth] Cookie 'auth-token' set`);
 
     // Return user info (without password)
     return res.json({
@@ -116,10 +114,10 @@ router.post('/register', async (req: Request, res: Response) => {
     });
 
     // Set cookie
-    res.cookie('token', token, COOKIE_OPTIONS);
+    res.cookie('auth-token', token, COOKIE_OPTIONS);
 
     console.log(`[Auth] Register successful - User ID: ${user.id}, Email: ${user.email}`);
-    console.log(`[Auth] Cookie set with domain: ${COOKIE_OPTIONS.domain}`);
+    console.log(`[Auth] Cookie 'auth-token' set`);
 
     // Return user info (without password)
     return res.status(201).json({
@@ -146,7 +144,7 @@ router.post('/logout', (req: Request, res: Response) => {
   console.log(`[Auth] Logout request from origin: ${req.headers.origin}`);
   
   // Clear cookie
-  res.cookie('token', '', {
+  res.cookie('auth-token', '', {
     ...COOKIE_OPTIONS,
     maxAge: 0, // Expire immediately
   });

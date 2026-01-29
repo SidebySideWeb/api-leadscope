@@ -44,14 +44,14 @@ export function getTokenFromCookie(
   cookieHeader?: string | undefined
 ): string | null {
   // Try cookie-parser first (preferred)
-  if (cookies && cookies.token) {
-    return cookies.token;
+  if (cookies && cookies['auth-token']) {
+    return cookies['auth-token'];
   }
 
   // Fallback to manual parsing
   if (cookieHeader) {
     const cookieStrings = cookieHeader.split(';').map(c => c.trim());
-    const tokenCookie = cookieStrings.find(c => c.startsWith('token='));
+    const tokenCookie = cookieStrings.find(c => c.startsWith('auth-token='));
     
     if (tokenCookie) {
       return tokenCookie.split('=')[1] || null;
