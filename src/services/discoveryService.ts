@@ -104,10 +104,11 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     // If discovery_run_id is provided (from endpoint), use it; otherwise create one
     if (input.discoveryRunId) {
       const { getDiscoveryRunById } = await import('../db/discoveryRuns.js');
-      discoveryRun = await getDiscoveryRunById(input.discoveryRunId);
-      if (!discoveryRun) {
+      const foundRun = await getDiscoveryRunById(input.discoveryRunId);
+      if (!foundRun) {
         throw new Error(`Discovery run ${input.discoveryRunId} not found`);
       }
+      discoveryRun = foundRun;
       console.log(`[runDiscoveryJob] Using provided discovery_run: ${discoveryRun.id}`);
     } else {
       // Create discovery_run (orchestration layer) - fallback if not provided
