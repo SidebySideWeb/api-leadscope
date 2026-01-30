@@ -150,29 +150,45 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
 /**
  * Check if all extraction jobs for a discovery_run are complete
  * If so, mark the discovery_run as completed
+ * Uses SQL query to check if ANY extraction_jobs remain with status IN ('queued','running')
  */
 async function checkAndCompleteDiscoveryRun(discoveryRunId: string): Promise<void> {
   try {
-    const jobs = await getExtractionJobsByDiscoveryRunId(discoveryRunId);
+    const { pool } = await import('../config/database.js');
     
-    if (jobs.length === 0) {
-      return; // No jobs for this discovery_run
-    }
-    
-    // Check if all jobs are complete (success or failed)
-    const allComplete = jobs.every(job => 
-      job.status === 'success' || job.status === 'failed'
+    // Check if any extraction jobs remain for this discovery_run with status 'queued' or 'running'
+    // If none remain, mark discovery_run as completed
+    const checkResult = await pool.query<{ has_pending: boolean }>(
+      `SELECT EXISTS (
+        SELECT 1
+        FROM businesses b
+        JOIN extraction_jobs ej ON ej.business_id = b.id
+        WHERE b.discovery_run_id = $1
+        AND ej.status IN ('queued', 'running')
+      ) as has_pending`,
+      [discoveryRunId]
     );
     
-    if (allComplete) {
-      // Check if any jobs failed
-      const hasFailures = jobs.some(job => job.status === 'failed');
+    const hasPendingJobs = checkResult.rows[0]?.has_pending || false;
+    
+    if (!hasPendingJobs) {
+      // No pending/running jobs remain - check if any jobs failed
+      const jobsResult = await pool.query<{ status: string; count: string }>(
+        `SELECT ej.status, COUNT(*) as count
+         FROM businesses b
+         JOIN extraction_jobs ej ON ej.business_id = b.id
+         WHERE b.discovery_run_id = $1
+         GROUP BY ej.status`,
+        [discoveryRunId]
+      );
+      
+      const hasFailures = jobsResult.rows.some(row => row.status === 'failed');
       
       await updateDiscoveryRun(discoveryRunId, {
         status: hasFailures ? 'failed' : 'completed',
         completed_at: new Date(),
         error_message: hasFailures 
-          ? `${jobs.filter(j => j.status === 'failed').length} extraction job(s) failed`
+          ? `${jobsResult.rows.find(r => r.status === 'failed')?.count || '0'} extraction job(s) failed`
           : null
       });
       
