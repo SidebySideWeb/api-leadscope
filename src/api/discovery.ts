@@ -175,7 +175,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       isActive: true, // Default to active
     }));
 
-    res.json({
+    return res.json({
       data: businesses,
       meta: {
         plan_id: 'demo', // Will be set from user's plan
@@ -186,7 +186,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     });
   } catch (error: any) {
     console.error('[API] Error in discovery:', error);
-    res.status(500).json({
+    return res.status(500).json({
       data: null,
       meta: {
         plan_id: 'demo',
