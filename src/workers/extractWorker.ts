@@ -51,8 +51,11 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
     error_message: null
   });
 
+  // Load business once at function scope so it's accessible in both try and catch blocks
+  let business: Business | null = null;
+
   try {
-    const business = await getBusinessById(job.business_id);
+    business = await getBusinessById(job.business_id);
     if (!business) {
       await updateExtractionJob(job.id, {
         status: 'failed',
@@ -130,7 +133,6 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
     
     // Check if this was the last extraction job for the discovery_run
     // Get discovery_run_id from the business (not from extraction_job)
-    const business = await getBusinessById(job.business_id);
     if (business?.discovery_run_id) {
       await checkAndCompleteDiscoveryRun(business.discovery_run_id);
     }
@@ -144,7 +146,10 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
     
     // Check if this was the last extraction job for the discovery_run (even if failed)
     // Get discovery_run_id from the business (not from extraction_job)
-    const business = await getBusinessById(job.business_id);
+    // Load business if not already loaded (in case error occurred before business was loaded)
+    if (!business) {
+      business = await getBusinessById(job.business_id);
+    }
     if (business?.discovery_run_id) {
       await checkAndCompleteDiscoveryRun(business.discovery_run_id);
     }
