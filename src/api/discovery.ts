@@ -15,10 +15,18 @@ const router = express.Router();
 router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.userId!;
-    const { industryId, cityId, datasetId } = req.body;
+    const { industryId: rawIndustryId, cityId: rawCityId, datasetId } = req.body;
 
-    // Validate required fields
-    if (!industryId || !cityId) {
+    console.log('[API] Discovery request body:', JSON.stringify(req.body));
+    console.log('[API] Discovery request:', { rawIndustryId, rawCityId, datasetId, userId, types: { industryId: typeof rawIndustryId, cityId: typeof rawCityId } });
+
+    // Convert to numbers if they're strings
+    const industryId = typeof rawIndustryId === 'string' ? parseInt(rawIndustryId, 10) : rawIndustryId;
+    const cityId = typeof rawCityId === 'string' ? parseInt(rawCityId, 10) : rawCityId;
+
+    // Validate required fields (explicitly check for null/undefined/NaN, not falsy values)
+    if (industryId === undefined || industryId === null || isNaN(industryId) || cityId === undefined || cityId === null || isNaN(cityId)) {
+      console.log('[API] Validation failed: missing or invalid industryId or cityId', { industryId, cityId });
       return res.status(400).json({
         data: null,
         meta: {
@@ -26,7 +34,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
           gated: false,
           total_available: 0,
           total_returned: 0,
-          gate_reason: 'Missing required fields: industryId and cityId are required',
+          gate_reason: 'Missing or invalid required fields: industryId and cityId must be valid numbers',
         },
       });
     }
@@ -66,8 +74,11 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       });
     }
 
-    // Run discovery job
-    const jobResult = await runDiscoveryJob({
+    console.log('[API] Starting discovery job for:', { industry: industry.name, city: city.name });
+
+    // Run discovery job asynchronously (don't wait for completion)
+    // This allows the API to return immediately while discovery runs in background
+    runDiscoveryJob({
       userId,
       industry: industry.name,
       city: city.name,
@@ -76,42 +87,16 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       useGeoGrid: true, // Use geo-grid discovery
       cityRadiusKm: city.radius_km || undefined,
       datasetId: datasetId || undefined,
+    }).catch((error) => {
+      // Log errors but don't block the response
+      console.error('[API] Discovery job error:', error);
     });
 
-    // If gated, return error with upgrade hint
-    if (jobResult.gated) {
-      return res.status(403).json({
-        data: null,
-        meta: {
-          plan_id: 'demo',
-          gated: true,
-          total_available: 0,
-          total_returned: 0,
-          gate_reason: jobResult.upgrade_hint || 'Discovery limit reached',
-        },
-      });
-    }
-
-    // If there were errors, return them
-    if (jobResult.errors && jobResult.errors.length > 0) {
-      return res.status(500).json({
-        data: null,
-        meta: {
-          plan_id: 'demo',
-          gated: false,
-          total_available: 0,
-          total_returned: 0,
-          gate_reason: jobResult.errors.join('; '),
-        },
-      });
-    }
-
-    // Get businesses from the dataset
-    // If datasetId was provided, use it; otherwise we need to find the dataset
+    // Find or create dataset ID
     let finalDatasetId = datasetId;
     if (!finalDatasetId) {
-      // Find the dataset that was created/reused
-      const datasetResult = await pool.query<{ id: string }>(
+      // Try to find existing dataset first
+      const existingDataset = await pool.query<{ id: string }>(
         `
         SELECT id FROM datasets
         WHERE user_id = $1
@@ -122,66 +107,19 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
         `,
         [userId, cityId, industryId]
       );
-      finalDatasetId = datasetResult.rows[0]?.id;
+      finalDatasetId = existingDataset.rows[0]?.id;
     }
 
-    if (!finalDatasetId) {
-      return res.status(500).json({
-        data: null,
-        meta: {
-          plan_id: 'demo',
-          gated: false,
-          total_available: 0,
-          total_returned: 0,
-          gate_reason: 'Failed to find dataset after discovery',
-        },
-      });
-    }
-
-    // Get businesses from the dataset with city and industry names
-    const businessesResult = await pool.query<{
-      id: number;
-      name: string;
-      address: string | null;
-      postal_code: string | null;
-      city_id: number;
-      industry_id: number | null;
-      google_place_id: string | null;
-      dataset_id: string;
-      owner_user_id: string;
-      created_at: Date;
-      updated_at: Date;
-    }>(
-      `
-      SELECT b.* FROM businesses b
-      WHERE b.dataset_id = $1
-      ORDER BY b.created_at DESC
-      LIMIT 100
-      `,
-      [finalDatasetId]
-    );
-
-    // Map businesses to frontend format
-    const businesses = businessesResult.rows.map((b) => ({
-      id: b.id.toString(), // Convert to string for frontend
-      name: b.name,
-      address: b.address,
-      website: null, // Will be populated after crawl
-      email: null, // Will be populated after crawl
-      phone: null, // Will be populated after crawl
-      city: city.name, // Use city name, not ID
-      industry: industry.name, // Use industry name, not ID
-      lastVerifiedAt: null, // Not available from discovery
-      isActive: true, // Default to active
-    }));
-
+    // Return success response immediately
+    // Discovery is running in background, businesses will be available shortly
     return res.json({
-      data: businesses,
+      data: [], // Empty initially, will be populated by discovery
       meta: {
         plan_id: 'demo', // Will be set from user's plan
         gated: false,
-        total_available: businesses.length,
-        total_returned: businesses.length,
+        total_available: 0,
+        total_returned: 0,
+        message: 'Discovery started. Businesses will be available shortly. Please refresh the datasets page.',
       },
     });
   } catch (error: any) {

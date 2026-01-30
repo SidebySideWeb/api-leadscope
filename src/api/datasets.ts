@@ -197,4 +197,142 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
+/**
+ * GET /datasets/:id/results
+ * Get businesses with crawl results for a dataset (must belong to user)
+ */
+router.get('/:id/results', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId!;
+    const datasetId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+
+    // Verify ownership
+    const ownsDataset = await verifyDatasetOwnership(datasetId, userId);
+    if (!ownsDataset) {
+      return res.status(403).json({
+        data: [],
+        meta: {
+          plan_id: 'demo',
+          gated: false,
+          total_available: 0,
+          total_returned: 0,
+          gate_reason: 'Dataset not found or access denied',
+        },
+      });
+    }
+
+    // Get businesses with crawl results
+    const result = await pool.query<{
+      id: number;
+      name: string;
+      address: string | null;
+      postal_code: string | null;
+      city_id: number;
+      industry_id: number | null;
+      google_place_id: string | null;
+      dataset_id: string;
+      owner_user_id: string;
+      created_at: Date;
+      updated_at: Date;
+      city_name: string | null;
+      industry_name: string | null;
+      website_url: string | null;
+      crawl_status: string | null;
+      emails_count: number;
+      phones_count: number;
+      pages_visited: number;
+      finished_at: Date | null;
+    }>(
+      `
+      SELECT 
+        b.id,
+        b.name,
+        b.address,
+        b.postal_code,
+        b.city_id,
+        b.industry_id,
+        b.google_place_id,
+        b.dataset_id,
+        b.owner_user_id,
+        b.created_at,
+        b.updated_at,
+        c.name as city_name,
+        i.name as industry_name,
+        w.url as website_url,
+        CASE 
+          WHEN cr.id IS NULL THEN 'not_crawled'
+          WHEN cr.pages_crawled < 1 THEN 'not_crawled'
+          WHEN cr.pages_crawled >= cr.pages_limit THEN 'completed'
+          ELSE 'partial'
+        END as crawl_status,
+        COALESCE(contact_counts.emails_count, 0) as emails_count,
+        COALESCE(contact_counts.phones_count, 0) as phones_count,
+        COALESCE(cr.pages_crawled, 0) as pages_visited,
+        cr.completed_at as finished_at
+      FROM businesses b
+      LEFT JOIN cities c ON c.id = b.city_id
+      LEFT JOIN industries i ON i.id = b.industry_id
+      LEFT JOIN websites w ON w.business_id = b.id
+      LEFT JOIN crawl_results cr ON cr.business_id = b.id
+      LEFT JOIN (
+        SELECT 
+          business_id,
+          COUNT(*) FILTER (WHERE contact_type = 'email' AND is_active = true) as emails_count,
+          COUNT(*) FILTER (WHERE contact_type IN ('phone', 'mobile') AND is_active = true) as phones_count
+        FROM contacts
+        GROUP BY business_id
+      ) contact_counts ON contact_counts.business_id = b.id
+      WHERE b.dataset_id = $1
+      ORDER BY b.created_at DESC
+      LIMIT 100
+      `,
+      [datasetId]
+    );
+
+    // Map to frontend format
+    const businesses = result.rows.map((b) => ({
+      id: b.id.toString(),
+      name: b.name,
+      address: b.address,
+      website: b.website_url || null,
+      email: null, // Individual emails are in contacts
+      phone: null, // Individual phones are in contacts
+      city: b.city_name || 'Unknown',
+      industry: b.industry_name || 'Unknown',
+      lastVerifiedAt: b.finished_at ? b.finished_at.toISOString() : null,
+      isActive: true,
+      crawl: {
+        status: (b.crawl_status || 'not_crawled') as 'not_crawled' | 'partial' | 'completed',
+        emailsCount: parseInt(b.emails_count.toString()) || 0,
+        phonesCount: parseInt(b.phones_count.toString()) || 0,
+        socialCount: 0, // Not tracked yet
+        finishedAt: b.finished_at ? b.finished_at.toISOString() : null,
+        pagesVisited: parseInt(b.pages_visited.toString()) || 0,
+      },
+    }));
+
+    res.json({
+      data: businesses,
+      meta: {
+        plan_id: 'demo', // Will be set from user's plan
+        gated: false,
+        total_available: businesses.length,
+        total_returned: businesses.length,
+      },
+    });
+  } catch (error: any) {
+    console.error('[API] Error fetching dataset results:', error);
+    res.status(500).json({
+      data: [],
+      meta: {
+        plan_id: 'demo',
+        gated: false,
+        total_available: 0,
+        total_returned: 0,
+        gate_reason: error.message || 'Failed to fetch dataset results',
+      },
+    });
+  }
+});
+
 export default router;

@@ -8,6 +8,7 @@ import exportsRoutes from './api/exports.js';
 import industriesRoutes from './api/industries.js';
 import citiesRoutes from './api/cities.js';
 import discoveryRoutes from './api/discovery.js';
+import businessesRoutes from './api/businesses.js';
 
 const app = express();
 
@@ -38,6 +39,9 @@ app.use('/exports', exportsRoutes);
 
 // Discovery routes (requires authentication)
 app.use('/discovery', discoveryRoutes);
+
+// Businesses routes (requires authentication)
+app.use('/businesses', businessesRoutes);
 
 // Health endpoint
 app.get('/health', (req, res) => {
