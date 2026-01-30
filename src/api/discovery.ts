@@ -4,6 +4,8 @@ import { runDiscoveryJob } from '../services/discoveryService.js';
 import { getIndustries } from '../db/industries.js';
 import { getCities } from '../db/cities.js';
 import { pool } from '../config/database.js';
+import { createDiscoveryRun } from '../db/discoveryRuns.js';
+import { getDatasetById } from '../db/datasets.js';
 
 const router = express.Router();
 
@@ -103,23 +105,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
 
     console.log('[API] Starting discovery job for:', { industry: industry.name, city: city.name });
 
-    // Run discovery job asynchronously (don't wait for completion)
-    // This allows the API to return immediately while discovery runs in background
-    runDiscoveryJob({
-      userId,
-      industry: industry.name,
-      city: city.name,
-      latitude: city.latitude || undefined,
-      longitude: city.longitude || undefined,
-      useGeoGrid: true, // Use geo-grid discovery
-      cityRadiusKm: city.radius_km || undefined,
-      datasetId: datasetId || undefined,
-    }).catch((error) => {
-      // Log errors but don't block the response
-      console.error('[API] Discovery job error:', error);
-    });
-
-    // Find or create dataset ID
+    // Find or resolve dataset ID FIRST (before creating discovery_run)
     let finalDatasetId = datasetId;
     if (!finalDatasetId) {
       // Try to find existing dataset first
@@ -137,16 +123,55 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       finalDatasetId = existingDataset.rows[0]?.id;
     }
 
-    // Return success response immediately
-    // Discovery is running in background, businesses will be available shortly
+    // If dataset doesn't exist yet, create it synchronously so we can link discovery_run to it
+    if (!finalDatasetId) {
+      const { resolveDataset } = await import('../services/datasetResolver.js');
+      const resolverResult = await resolveDataset({
+        userId,
+        cityName: city.name,
+        industryName: industry.name,
+      });
+      finalDatasetId = resolverResult.dataset.id;
+      console.log('[API] Created dataset for discovery_run:', finalDatasetId);
+    }
+
+    // CRITICAL: Create discovery_run at the VERY START (synchronously, before returning)
+    // This makes discovery observable and stateful
+    const discoveryRun = await createDiscoveryRun(finalDatasetId, userId);
+    console.log('[API] Created discovery_run:', discoveryRun.id);
+
+    // Run discovery job asynchronously (don't wait for completion)
+    // Pass discovery_run_id so the job can link businesses and extraction_jobs to it
+    runDiscoveryJob({
+      userId,
+      industry: industry.name,
+      city: city.name,
+      latitude: city.latitude || undefined,
+      longitude: city.longitude || undefined,
+      useGeoGrid: true, // Use geo-grid discovery
+      cityRadiusKm: city.radius_km || undefined,
+      datasetId: finalDatasetId, // Use resolved dataset ID
+      discoveryRunId: discoveryRun.id, // Pass discovery_run_id to link businesses
+    }).catch((error) => {
+      // Log errors but don't block the response
+      console.error('[API] Discovery job error:', error);
+    });
+
+    // Return the discovery_run in the response (not empty data)
     return res.json({
-      data: [], // Empty initially, will be populated by discovery
+      data: [{
+        id: discoveryRun.id,
+        status: discoveryRun.status,
+        created_at: discoveryRun.created_at instanceof Date 
+          ? discoveryRun.created_at.toISOString() 
+          : discoveryRun.created_at,
+      }],
       meta: {
         plan_id: userPlan,
         gated: false,
-        total_available: 0,
-        total_returned: 0,
-        message: 'Discovery started. Businesses will be available shortly. Please refresh the datasets page.',
+        total_available: 1,
+        total_returned: 1,
+        message: 'Discovery started. Businesses will be available shortly.',
       },
     });
   } catch (error: any) {

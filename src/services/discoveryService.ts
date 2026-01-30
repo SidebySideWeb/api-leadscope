@@ -100,9 +100,20 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       }
     }
 
-    // Create discovery_run (orchestration layer)
-    discoveryRun = await createDiscoveryRun(datasetId);
-    console.log(`[runDiscoveryJob] Created discovery_run: ${discoveryRun.id}`);
+    // Use provided discovery_run_id or create a new one
+    // If discovery_run_id is provided (from endpoint), use it; otherwise create one
+    if (input.discoveryRunId) {
+      const { getDiscoveryRunById } = await import('../db/discoveryRuns.js');
+      discoveryRun = await getDiscoveryRunById(input.discoveryRunId);
+      if (!discoveryRun) {
+        throw new Error(`Discovery run ${input.discoveryRunId} not found`);
+      }
+      console.log(`[runDiscoveryJob] Using provided discovery_run: ${discoveryRun.id}`);
+    } else {
+      // Create discovery_run (orchestration layer) - fallback if not provided
+      discoveryRun = await createDiscoveryRun(datasetId, input.userId);
+      console.log(`[runDiscoveryJob] Created discovery_run: ${discoveryRun.id}`);
+    }
 
     // Check discovery limits using permissions - before discovery
     // Use permissions.max_datasets to check if user can create more datasets

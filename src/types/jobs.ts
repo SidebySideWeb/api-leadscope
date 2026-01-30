@@ -10,6 +10,7 @@ export interface DiscoveryJobInput {
   requestedByUserId?: number | string;
   userId?: string; // User ID for dataset reuse logic (required if datasetId not provided)
   datasetId?: string; // Optional: if not provided, will resolve/create based on city + industry
+  discoveryRunId?: string; // Optional: if provided, use this discovery_run instead of creating a new one
   // userPlan removed - always resolved from database via getUserPermissions()
 }
 
