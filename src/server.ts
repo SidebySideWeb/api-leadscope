@@ -5,6 +5,8 @@ import authRoutes from './api/auth.js';
 import datasetsRoutes from './api/datasets.js';
 import dashboardRoutes from './api/dashboard.js';
 import exportsRoutes from './api/exports.js';
+import industriesRoutes from './api/industries.js';
+import citiesRoutes from './api/cities.js';
 
 const app = express();
 
@@ -19,6 +21,10 @@ app.use(express.json());
 
 // Auth routes
 app.use('/api/auth', authRoutes);
+
+// Public data routes (no auth required)
+app.use('/api/industries', industriesRoutes);
+app.use('/api/cities', citiesRoutes);
 
 // Datasets routes (requires authentication)
 app.use('/datasets', datasetsRoutes);
