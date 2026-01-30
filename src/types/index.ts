@@ -6,13 +6,13 @@ export interface Country {
 }
 
 export interface Industry {
-  id: number;
+  id: string; // UUID, not a number
   name: string;
   created_at: Date;
 }
 
 export interface City {
-  id: number;
+  id: string; // UUID, not a number
   name: string;
   normalized_name: string;
   country_id: number;

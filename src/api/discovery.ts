@@ -20,13 +20,13 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     console.log('[API] Discovery request body:', JSON.stringify(req.body));
     console.log('[API] Discovery request:', { rawIndustryId, rawCityId, datasetId, userId, types: { industryId: typeof rawIndustryId, cityId: typeof rawCityId } });
 
-    // Convert to numbers if they're strings
-    const industryId = typeof rawIndustryId === 'string' ? parseInt(rawIndustryId, 10) : rawIndustryId;
-    const cityId = typeof rawCityId === 'string' ? parseInt(rawCityId, 10) : rawCityId;
+    // Both industries and cities use UUIDs (strings)
+    const industryId = rawIndustryId; // UUID string
+    const cityId = rawCityId; // UUID string
 
-    // Validate required fields (explicitly check for null/undefined/NaN, not falsy values)
-    if (industryId === undefined || industryId === null || isNaN(industryId) || cityId === undefined || cityId === null || isNaN(cityId)) {
-      console.log('[API] Validation failed: missing or invalid industryId or cityId', { industryId, cityId });
+    // Validate required fields
+    if (!industryId || industryId === null || industryId === undefined) {
+      console.log('[API] Validation failed: missing industryId', { industryId });
       return res.status(400).json({
         data: null,
         meta: {
@@ -34,7 +34,21 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
           gated: false,
           total_available: 0,
           total_returned: 0,
-          gate_reason: 'Missing or invalid required fields: industryId and cityId must be valid numbers',
+          gate_reason: 'Missing or invalid industryId',
+        },
+      });
+    }
+
+    if (!cityId || cityId === null || cityId === undefined) {
+      console.log('[API] Validation failed: missing or invalid cityId', { cityId });
+      return res.status(400).json({
+        data: null,
+        meta: {
+          plan_id: 'demo',
+          gated: false,
+          total_available: 0,
+          total_returned: 0,
+          gate_reason: 'Missing or invalid cityId',
         },
       });
     }
@@ -45,10 +59,16 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       getCities(),
     ]);
 
-    const industry = industries.find((i) => i.id === industryId);
-    const city = cities.find((c) => c.id === cityId);
+    console.log('[API] Available industries:', industries.map(i => ({ id: i.id, name: i.name })));
+    console.log('[API] Available cities:', cities.map(c => ({ id: c.id, name: c.name })).slice(0, 10)); // Log first 10
+
+    // Both industries and cities use UUIDs (strings), so compare as strings
+    const industry = industries.find((i) => String(i.id) === String(industryId));
+    const city = cities.find((c) => String(c.id) === String(cityId));
 
     if (!industry) {
+      const availableIds = industries.map(i => i.id).join(', ');
+      console.log(`[API] Industry ID ${industryId} not found. Available IDs: ${availableIds}`);
       return res.status(400).json({
         data: null,
         meta: {
@@ -56,7 +76,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
           gated: false,
           total_available: 0,
           total_returned: 0,
-          gate_reason: `Industry with ID ${industryId} not found`,
+          gate_reason: `Industry with ID ${industryId} not found. Available industry IDs: ${availableIds || 'none'}`,
         },
       });
     }

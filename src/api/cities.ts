@@ -35,7 +35,7 @@ router.get('/', async (req, res) => {
 
     console.log('[API] Executing query:', query.substring(0, 100) + '...');
     const result = await pool.query<{
-      id: number;
+      id: string; // UUID
       name: string;
       country: string | null;
       latitude: number | null;
