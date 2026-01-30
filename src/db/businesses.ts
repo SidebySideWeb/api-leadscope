@@ -52,6 +52,7 @@ export async function upsertBusiness(data: {
   google_place_id: string | null;
   dataset_id: string; // UUID
   owner_user_id: string;
+  discovery_run_id?: string | null; // UUID
 }): Promise<{ business: Business; wasUpdated: boolean }> {
   // Compute normalized name BEFORE insert/update
   const normalized_name = computeNormalizedBusinessId({
@@ -64,10 +65,10 @@ export async function upsertBusiness(data: {
   const result = await pool.query<Business>(
     `INSERT INTO businesses (
       name, normalized_name, address, postal_code, city_id, 
-      industry_id, google_place_id, dataset_id, owner_user_id,
+      industry_id, google_place_id, dataset_id, owner_user_id, discovery_run_id,
       created_at, updated_at
     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
      ON CONFLICT (dataset_id, normalized_name) 
      DO UPDATE SET
        name = EXCLUDED.name,
@@ -76,6 +77,7 @@ export async function upsertBusiness(data: {
        city_id = EXCLUDED.city_id,
        industry_id = EXCLUDED.industry_id,
        google_place_id = COALESCE(EXCLUDED.google_place_id, businesses.google_place_id),
+       discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id),
        updated_at = NOW()
      RETURNING *`,
     [
@@ -87,7 +89,8 @@ export async function upsertBusiness(data: {
       data.industry_id,
       data.google_place_id,
       data.dataset_id,
-      data.owner_user_id
+      data.owner_user_id,
+      data.discovery_run_id || null
     ]
   );
 

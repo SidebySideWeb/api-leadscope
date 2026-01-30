@@ -5,11 +5,29 @@ export type ExtractionJobStatus = 'queued' | 'running' | 'success' | 'failed';
 export interface ExtractionJob {
   id: string; // UUID
   business_id: number;
+  discovery_run_id: string | null; // UUID
   status: ExtractionJobStatus;
   error_message: string | null;
   created_at: Date;
   started_at: Date | null;
   completed_at: Date | null;
+}
+
+/**
+ * Create a new extraction job
+ */
+export async function createExtractionJob(
+  businessId: number,
+  discoveryRunId?: string | null
+): Promise<ExtractionJob> {
+  const result = await pool.query<ExtractionJob>(
+    `INSERT INTO extraction_jobs (business_id, discovery_run_id, status)
+     VALUES ($1, $2, 'queued')
+     RETURNING *`,
+    [businessId, discoveryRunId || null]
+  );
+
+  return result.rows[0];
 }
 
 export async function getQueuedExtractionJobs(
@@ -78,3 +96,18 @@ export async function updateExtractionJob(
   return result.rows[0];
 }
 
+/**
+ * Get extraction jobs by discovery_run_id
+ */
+export async function getExtractionJobsByDiscoveryRunId(
+  discoveryRunId: string
+): Promise<ExtractionJob[]> {
+  const result = await pool.query<ExtractionJob>(
+    `SELECT * FROM extraction_jobs
+     WHERE discovery_run_id = $1
+     ORDER BY created_at ASC`,
+    [discoveryRunId]
+  );
+
+  return result.rows;
+}

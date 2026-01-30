@@ -8,6 +8,7 @@ import { getBusinessByGooglePlaceId, upsertBusiness } from '../db/businesses.js'
 import { getOrCreateWebsite } from '../db/websites.js';
 import { createCrawlJob } from '../db/crawlJobs.js';
 import { getDatasetById } from '../db/datasets.js';
+import { createExtractionJob } from '../db/extractionJobs.js';
 
 const GREECE_COUNTRY_CODE = 'GR';
 
@@ -20,7 +21,10 @@ export interface DiscoveryResult {
   errors: string[];
 }
 
-export async function discoverBusinesses(input: DiscoveryInput): Promise<DiscoveryResult> {
+export async function discoverBusinesses(
+  input: DiscoveryInput,
+  discoveryRunId?: string | null
+): Promise<DiscoveryResult> {
   const result: DiscoveryResult = {
     businessesFound: 0,
     businessesCreated: 0,
@@ -147,10 +151,13 @@ export async function discoverBusinesses(input: DiscoveryInput): Promise<Discove
     console.log(`\n💾 Persisting ${places.length} businesses to database...`);
     console.log(`   Dataset ID: ${dataset.id}`);
     console.log(`   Owner User ID: ${dataset.user_id}`);
+    if (discoveryRunId) {
+      console.log(`   Discovery Run ID: ${discoveryRunId}`);
+    }
     
     for (const place of places) {
       try {
-        await processPlace(place, country.id, industry.id, dataset.id, dataset.user_id, result);
+        await processPlace(place, country.id, industry.id, dataset.id, dataset.user_id, discoveryRunId, result);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         result.errors.push(`Error processing place ${place.place_id}: ${errorMsg}`);
@@ -183,6 +190,7 @@ async function processPlace(
   industryId: string, // UUID
   datasetId: string, // UUID
   ownerUserId: string,
+  discoveryRunId: string | null | undefined,
   result: DiscoveryResult
 ): Promise<void> {
   // Validate place_id exists
@@ -234,7 +242,8 @@ async function processPlace(
     industry_id: industryId,
     google_place_id: place.place_id,
     dataset_id: datasetId,
-    owner_user_id: ownerUserId
+    owner_user_id: ownerUserId,
+    discovery_run_id: discoveryRunId || null
   });
 
   if (wasUpdated) {
@@ -243,6 +252,15 @@ async function processPlace(
   } else {
     // Business was inserted (new record)
     result.businessesCreated++;
+    
+    // Create extraction job for new business (if discovery_run_id is provided)
+    if (discoveryRunId) {
+      try {
+        await createExtractionJob(business.id, discoveryRunId);
+      } catch (error) {
+        console.error(`Error creating extraction job for business ${business.id}:`, error);
+      }
+    }
   }
   
   // Create/update website if exists

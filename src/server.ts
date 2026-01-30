@@ -9,6 +9,7 @@ import industriesRoutes from './api/industries.js';
 import citiesRoutes from './api/cities.js';
 import discoveryRoutes from './api/discovery.js';
 import businessesRoutes from './api/businesses.js';
+import refreshRoutes from './api/refresh.js';
 
 const app = express();
 
@@ -42,6 +43,9 @@ app.use('/discovery', discoveryRoutes);
 
 // Businesses routes (requires authentication)
 app.use('/businesses', businessesRoutes);
+
+// Refresh routes (requires authentication)
+app.use('/refresh', refreshRoutes);
 
 // Health endpoint
 app.get('/health', (req, res) => {

@@ -6,8 +6,10 @@ import { createContactSource } from '../db/contactSources.js';
 import {
   type ExtractionJob,
   getQueuedExtractionJobs,
-  updateExtractionJob
+  updateExtractionJob,
+  getExtractionJobsByDiscoveryRunId
 } from '../db/extractionJobs.js';
+import { updateDiscoveryRun } from '../db/discoveryRuns.js';
 import { extractFromHtmlPage, type ExtractedItem } from '../utils/extractors.js';
 import type { Business } from '../types/index.js';
 
@@ -125,6 +127,11 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
       status: 'success',
       completed_at: new Date()
     });
+    
+    // Check if this was the last extraction job for the discovery_run
+    if (job.discovery_run_id) {
+      await checkAndCompleteDiscoveryRun(job.discovery_run_id);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await updateExtractionJob(job.id, {
@@ -132,6 +139,47 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
       error_message: message,
       completed_at: new Date()
     });
+    
+    // Check if this was the last extraction job for the discovery_run (even if failed)
+    if (job.discovery_run_id) {
+      await checkAndCompleteDiscoveryRun(job.discovery_run_id);
+    }
+  }
+}
+
+/**
+ * Check if all extraction jobs for a discovery_run are complete
+ * If so, mark the discovery_run as completed
+ */
+async function checkAndCompleteDiscoveryRun(discoveryRunId: string): Promise<void> {
+  try {
+    const jobs = await getExtractionJobsByDiscoveryRunId(discoveryRunId);
+    
+    if (jobs.length === 0) {
+      return; // No jobs for this discovery_run
+    }
+    
+    // Check if all jobs are complete (success or failed)
+    const allComplete = jobs.every(job => 
+      job.status === 'success' || job.status === 'failed'
+    );
+    
+    if (allComplete) {
+      // Check if any jobs failed
+      const hasFailures = jobs.some(job => job.status === 'failed');
+      
+      await updateDiscoveryRun(discoveryRunId, {
+        status: hasFailures ? 'failed' : 'completed',
+        completed_at: new Date(),
+        error_message: hasFailures 
+          ? `${jobs.filter(j => j.status === 'failed').length} extraction job(s) failed`
+          : null
+      });
+      
+      console.log(`[extractWorker] Marked discovery_run ${discoveryRunId} as ${hasFailures ? 'failed' : 'completed'}`);
+    }
+  } catch (error) {
+    console.error(`[extractWorker] Error checking discovery_run completion:`, error);
   }
 }
 

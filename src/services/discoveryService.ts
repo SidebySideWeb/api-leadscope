@@ -9,6 +9,7 @@ import { checkUsageLimit } from '../limits/usageLimits.js';
 import { getUserPermissions, checkPermission } from '../db/permissions.js';
 import { getUserUsage, incrementUsage } from '../persistence/index.js';
 import { logDiscoveryAction } from '../utils/actionLogger.js';
+import { createDiscoveryRun, updateDiscoveryRun } from '../db/discoveryRuns.js';
 
 /**
  * Run a discovery job
@@ -25,6 +26,8 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
   console.log(`   City: ${input.city}`);
   console.log(`   Use Geo-Grid: ${input.useGeoGrid || false}`);
 
+  let discoveryRun: Awaited<ReturnType<typeof createDiscoveryRun>> | undefined;
+  
   try {
     // Resolve dataset with reuse logic (backend-only)
     // If datasetId is provided, use it directly (for explicit selection)
@@ -97,6 +100,10 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       }
     }
 
+    // Create discovery_run (orchestration layer)
+    discoveryRun = await createDiscoveryRun(datasetId);
+    console.log(`[runDiscoveryJob] Created discovery_run: ${discoveryRun.id}`);
+
     // Check discovery limits using permissions - before discovery
     // Use permissions.max_datasets to check if user can create more datasets
     let isGated = false;
@@ -163,12 +170,31 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       useGeoGrid: input.useGeoGrid || true, // Default to geo-grid for discovery
       cityRadiusKm: input.cityRadiusKm,
       datasetId: datasetId
-    });
+    }, discoveryRun.id);
 
     // Mark dataset as refreshed after successful discovery
     if (!isReused || discoveryResult.businessesCreated > 0) {
       await markDatasetRefreshed(datasetId);
       console.log(`[runDiscoveryJob] Marked dataset as refreshed: ${datasetId}`);
+    }
+
+    // Check if any extraction jobs were created for this discovery_run
+    // If no extraction jobs exist, mark discovery_run as completed immediately
+    const { getExtractionJobsByDiscoveryRunId } = await import('../db/extractionJobs.js');
+    const extractionJobs = await getExtractionJobsByDiscoveryRunId(discoveryRun.id);
+    
+    if (extractionJobs.length === 0) {
+      // No extraction jobs created (all businesses were updates, not new)
+      // Mark discovery_run as completed immediately
+      await updateDiscoveryRun(discoveryRun.id, {
+        status: 'completed',
+        completed_at: new Date(),
+        error_message: null
+      });
+      console.log(`[runDiscoveryJob] No extraction jobs created, marked discovery_run as completed: ${discoveryRun.id}`);
+    } else {
+      // Extraction jobs exist - they will mark discovery_run as completed when they finish
+      console.log(`[runDiscoveryJob] Created ${extractionJobs.length} extraction jobs for discovery_run: ${discoveryRun.id}`);
     }
 
     // Get count of websites created
@@ -246,6 +272,19 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     const endTime = new Date();
     const errorMsg = error instanceof Error ? error.message : String(error);
     errors.push(`Discovery job failed: ${errorMsg}`);
+    
+    // Mark discovery_run as failed if it was created
+    try {
+      if (typeof discoveryRun !== 'undefined') {
+        await updateDiscoveryRun(discoveryRun.id, {
+          status: 'failed',
+          completed_at: new Date(),
+          error_message: errorMsg
+        });
+      }
+    } catch (updateError) {
+      console.error('[runDiscoveryJob] Failed to update discovery_run status:', updateError);
+    }
 
     // Log error action
     logDiscoveryAction({
