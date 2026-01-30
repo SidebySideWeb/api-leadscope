@@ -12,7 +12,7 @@ const router = express.Router();
  * Discover businesses for a given industry and city
  * Requires authentication
  */
-router.post('/businesses', authMiddleware, async (req: AuthRequest, res): Promise<void> => {
+router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.userId!;
     const { industryId, cityId, datasetId } = req.body;
