@@ -128,8 +128,8 @@ export async function createBusiness(data: {
   name: string;
   address: string | null;
   postal_code: string | null;
-  city_id: number;
-  industry_id: number | null;
+  city_id: string; // UUID
+  industry_id: string | null; // UUID
   google_place_id: string | null;
   dataset_id: string; // UUID
   owner_user_id: string;
