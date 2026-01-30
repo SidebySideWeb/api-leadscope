@@ -2,6 +2,9 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import { corsMiddleware } from './middleware/cors.js';
 import authRoutes from './api/auth.js';
+import datasetsRoutes from './api/datasets.js';
+import dashboardRoutes from './api/dashboard.js';
+import exportsRoutes from './api/exports.js';
 
 const app = express();
 
@@ -16,6 +19,15 @@ app.use(express.json());
 
 // Auth routes
 app.use('/api/auth', authRoutes);
+
+// Datasets routes (requires authentication)
+app.use('/datasets', datasetsRoutes);
+
+// Dashboard routes (requires authentication)
+app.use('/dashboard', dashboardRoutes);
+
+// Exports routes (requires authentication)
+app.use('/exports', exportsRoutes);
 
 // Health endpoint
 app.get('/health', (req, res) => {
