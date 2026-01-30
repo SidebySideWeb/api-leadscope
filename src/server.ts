@@ -7,6 +7,7 @@ import dashboardRoutes from './api/dashboard.js';
 import exportsRoutes from './api/exports.js';
 import industriesRoutes from './api/industries.js';
 import citiesRoutes from './api/cities.js';
+import discoveryRoutes from './api/discovery.js';
 
 const app = express();
 
@@ -34,6 +35,9 @@ app.use('/dashboard', dashboardRoutes);
 
 // Exports routes (requires authentication)
 app.use('/exports', exportsRoutes);
+
+// Discovery routes (requires authentication)
+app.use('/discovery', discoveryRoutes);
 
 // Health endpoint
 app.get('/health', (req, res) => {
