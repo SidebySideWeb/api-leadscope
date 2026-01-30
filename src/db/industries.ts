@@ -24,3 +24,13 @@ export async function getOrCreateIndustry(name: string): Promise<Industry> {
   }
   return createIndustry(name);
 }
+
+/**
+ * Get all industries
+ */
+export async function getIndustries(): Promise<Industry[]> {
+  const result = await pool.query<Industry>(
+    'SELECT * FROM industries ORDER BY name ASC'
+  );
+  return result.rows;
+}

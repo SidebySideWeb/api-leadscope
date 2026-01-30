@@ -62,3 +62,13 @@ export async function getOrCreateCity(
   }
   return createCity(name, country_id, coordinates);
 }
+
+/**
+ * Get all cities
+ */
+export async function getCities(): Promise<City[]> {
+  const result = await pool.query<City>(
+    'SELECT * FROM cities ORDER BY name ASC'
+  );
+  return result.rows;
+}

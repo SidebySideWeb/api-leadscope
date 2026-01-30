@@ -4,6 +4,8 @@ import { pool } from '../config/database.js';
 import { getDatasetById, verifyDatasetOwnership } from '../db/datasets.js';
 import { getIndustries } from '../db/industries.js';
 import { getCities } from '../db/cities.js';
+import type { Industry } from '../types/index.js';
+import type { City } from '../types/index.js';
 
 const router = express.Router();
 
@@ -54,8 +56,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       getCities(),
     ]);
 
-    const industryMap = new Map(industries.map(i => [i.id, i.name]));
-    const cityMap = new Map(cities.map(c => [c.id, c.name]));
+    const industryMap = new Map(industries.map((i: Industry) => [i.id, i.name]));
+    const cityMap = new Map(cities.map((c: City) => [c.id, c.name]));
 
     const datasets = result.rows.map(row => {
       const now = new Date();
@@ -109,7 +111,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.userId!;
-    const datasetId = req.params.id;
+    const datasetId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
 
     // Verify ownership
     const ownsDataset = await verifyDatasetOwnership(datasetId, userId);
@@ -149,10 +151,10 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
     ]);
 
     const industry = dataset.industry_id 
-      ? industries.find(i => i.id === dataset.industry_id)?.name || 'Unknown'
+      ? industries.find((i: Industry) => i.id === dataset.industry_id)?.name || 'Unknown'
       : 'Unknown';
     const city = dataset.city_id
-      ? cities.find(c => c.id === dataset.city_id)?.name || 'Unknown'
+      ? cities.find((c: City) => c.id === dataset.city_id)?.name || 'Unknown'
       : 'Unknown';
 
     const lastRefresh = dataset.last_refreshed_at ? new Date(dataset.last_refreshed_at) : null;
