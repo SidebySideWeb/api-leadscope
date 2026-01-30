@@ -38,20 +38,21 @@ export function verifyToken(token: string): JWTPayload | null {
 /**
  * Get JWT from cookie
  * Can be used with cookie-parser (req.cookies) or raw cookie header
+ * Checks for 'token' cookie name (matches frontend middleware)
  */
 export function getTokenFromCookie(
   cookies: { [key: string]: string } | undefined,
   cookieHeader?: string | undefined
 ): string | null {
   // Try cookie-parser first (preferred)
-  if (cookies && cookies['auth-token']) {
-    return cookies['auth-token'];
+  if (cookies && cookies['token']) {
+    return cookies['token'];
   }
 
   // Fallback to manual parsing
   if (cookieHeader) {
     const cookieStrings = cookieHeader.split(';').map(c => c.trim());
-    const tokenCookie = cookieStrings.find(c => c.startsWith('auth-token='));
+    const tokenCookie = cookieStrings.find(c => c.startsWith('token='));
     
     if (tokenCookie) {
       return tokenCookie.split('=')[1] || null;

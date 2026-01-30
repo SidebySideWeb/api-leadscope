@@ -19,12 +19,15 @@ const registerSchema = z.object({
 
 /**
  * Cookie configuration for production
+ * domain: '.leadscope.gr' allows cookie to be shared across subdomains
  */
 const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: true,
   sameSite: 'none' as const,
+  domain: '.leadscope.gr', // Shared domain cookie for cross-subdomain access
   path: '/',
+  maxAge: 60 * 60 * 24 * 7 * 1000, // 7 days in milliseconds
 };
 
 /**
@@ -59,11 +62,11 @@ router.post('/login', async (req: Request, res: Response) => {
       email: user.email,
     });
 
-    // Set cookie
-    res.cookie('auth-token', token, COOKIE_OPTIONS);
+    // Set cookie with name 'token' to match frontend middleware
+    res.cookie('token', token, COOKIE_OPTIONS);
 
     console.log(`[Auth] Login successful - User ID: ${user.id}, Email: ${user.email}`);
-    console.log(`[Auth] Cookie 'auth-token' set`);
+    console.log(`[Auth] Cookie 'token' set with domain '.leadscope.gr'`);
 
     // Return user info (without password)
     return res.json({
@@ -113,11 +116,11 @@ router.post('/register', async (req: Request, res: Response) => {
       email: user.email,
     });
 
-    // Set cookie
-    res.cookie('auth-token', token, COOKIE_OPTIONS);
+    // Set cookie with name 'token' to match frontend middleware
+    res.cookie('token', token, COOKIE_OPTIONS);
 
     console.log(`[Auth] Register successful - User ID: ${user.id}, Email: ${user.email}`);
-    console.log(`[Auth] Cookie 'auth-token' set`);
+    console.log(`[Auth] Cookie 'token' set with domain '.leadscope.gr'`);
 
     // Return user info (without password)
     return res.status(201).json({
@@ -143,8 +146,8 @@ router.post('/register', async (req: Request, res: Response) => {
 router.post('/logout', (req: Request, res: Response) => {
   console.log(`[Auth] Logout request from origin: ${req.headers.origin}`);
   
-  // Clear cookie
-  res.cookie('auth-token', '', {
+  // Clear cookie (use 'token' name to match what was set)
+  res.cookie('token', '', {
     ...COOKIE_OPTIONS,
     maxAge: 0, // Expire immediately
   });
