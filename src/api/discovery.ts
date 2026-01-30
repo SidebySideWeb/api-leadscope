@@ -16,6 +16,13 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.userId!;
     const { industryId: rawIndustryId, cityId: rawCityId, datasetId } = req.body;
+    
+    // Get user's plan from database
+    const userResult = await pool.query<{ plan: string }>(
+      'SELECT plan FROM users WHERE id = $1',
+      [userId]
+    );
+    const userPlan = (userResult.rows[0]?.plan || 'demo') as string;
 
     console.log('[API] Discovery request body:', JSON.stringify(req.body));
     console.log('[API] Discovery request:', { rawIndustryId, rawCityId, datasetId, userId, types: { industryId: typeof rawIndustryId, cityId: typeof rawCityId } });
@@ -30,7 +37,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(400).json({
         data: null,
         meta: {
-          plan_id: 'demo',
+          plan_id: userPlan,
           gated: false,
           total_available: 0,
           total_returned: 0,
@@ -44,7 +51,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(400).json({
         data: null,
         meta: {
-          plan_id: 'demo',
+          plan_id: userPlan,
           gated: false,
           total_available: 0,
           total_returned: 0,
@@ -72,7 +79,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(400).json({
         data: null,
         meta: {
-          plan_id: 'demo',
+          plan_id: userPlan,
           gated: false,
           total_available: 0,
           total_returned: 0,
@@ -85,7 +92,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       return res.status(400).json({
         data: null,
         meta: {
-          plan_id: 'demo',
+          plan_id: userPlan,
           gated: false,
           total_available: 0,
           total_returned: 0,
@@ -135,7 +142,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     return res.json({
       data: [], // Empty initially, will be populated by discovery
       meta: {
-        plan_id: 'demo', // Will be set from user's plan
+        plan_id: userPlan,
         gated: false,
         total_available: 0,
         total_returned: 0,
@@ -144,10 +151,25 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     });
   } catch (error: any) {
     console.error('[API] Error in discovery:', error);
+    // Try to get user plan for error response, but don't fail if it errors
+    let errorPlan = 'demo';
+    try {
+      const userId = (req as AuthRequest).userId;
+      if (userId) {
+        const userResult = await pool.query<{ plan: string }>(
+          'SELECT plan FROM users WHERE id = $1',
+          [userId]
+        );
+        errorPlan = (userResult.rows[0]?.plan || 'demo') as string;
+      }
+    } catch {
+      // Ignore errors getting plan
+    }
+    
     return res.status(500).json({
       data: null,
       meta: {
-        plan_id: 'demo',
+        plan_id: errorPlan,
         gated: false,
         total_available: 0,
         total_returned: 0,

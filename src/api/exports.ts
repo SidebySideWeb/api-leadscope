@@ -12,6 +12,13 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.userId!;
     const datasetId = req.query.dataset as string | undefined;
+    
+    // Get user's plan from database
+    const userResult = await pool.query<{ plan: string }>(
+      'SELECT plan FROM users WHERE id = $1',
+      [userId]
+    );
+    const userPlan = (userResult.rows[0]?.plan || 'demo') as string;
 
     // The exports table structure uses filters JSONB to store dataset_id
     // We need to query exports by user_id and parse the filters
@@ -75,15 +82,24 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     res.json({
       data: exports,
       meta: {
-        plan_id: 'demo',
+        plan_id: userPlan,
         gated: false,
         total_available: exports.length,
         total_returned: exports.length,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('[API] Error fetching exports:', error);
-    res.status(500).json({ error: 'Failed to fetch exports' });
+    res.status(500).json({
+      data: null,
+      meta: {
+        plan_id: 'demo',
+        gated: false,
+        total_available: 0,
+        total_returned: 0,
+        gate_reason: error.message || 'Failed to fetch exports',
+      },
+    });
   }
 });
 

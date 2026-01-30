@@ -173,6 +173,7 @@ router.post('/logout', (req: Request, res: Response) => {
 /**
  * GET /api/auth/me
  * Get current user info (requires authentication)
+ * Returns { data, meta } format for consistency with frontend
  */
 router.get('/me', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
@@ -180,23 +181,46 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res: Response) => {
     const user = await getUserById(userId);
 
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ 
+        data: null,
+        meta: {
+          plan_id: 'demo',
+          gated: false,
+          total_available: 0,
+          total_returned: 0,
+          gate_reason: 'User not found',
+        },
+      });
     }
 
     // Debug log
-    console.log(`[Auth] /me request - User ID: ${user.id}, Email: ${user.email}`);
-    console.log(`[Auth] JWT payload ID: ${user.id}`);
+    console.log(`[Auth] /me request - User ID: ${user.id}, Email: ${user.email}, Plan: ${user.plan}`);
 
     return res.json({
-      user: {
+      data: {
         id: user.id,
         email: user.email,
         plan: user.plan,
       },
+      meta: {
+        plan_id: user.plan,
+        gated: false,
+        total_available: 1,
+        total_returned: 1,
+      },
     });
   } catch (error) {
     console.error('[Auth] /me error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ 
+      data: null,
+      meta: {
+        plan_id: 'demo',
+        gated: false,
+        total_available: 0,
+        total_returned: 0,
+        gate_reason: 'Internal server error',
+      },
+    });
   }
 });
 
