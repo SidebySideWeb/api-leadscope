@@ -1,7 +1,7 @@
 export interface Country {
   id: number;
   name: string;
-  code: string;
+  iso_code: string; // Database column name is iso_code, not code
   created_at: Date;
 }
 

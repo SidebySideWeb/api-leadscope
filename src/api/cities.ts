@@ -20,14 +20,14 @@ router.get('/', async (req, res) => {
         c.name,
         c.latitude,
         c.longitude,
-        co.code as country
+        co.iso_code as country
       FROM cities c
       LEFT JOIN countries co ON co.id = c.country_id
     `;
     const params: any[] = [];
 
     if (countryCode) {
-      query += ' WHERE co.code = $1';
+      query += ' WHERE co.iso_code = $1';
       params.push(countryCode);
     }
 
