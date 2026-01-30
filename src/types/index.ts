@@ -33,6 +33,7 @@ export interface Business {
   google_place_id: string | null;
   dataset_id: string; // UUID
   owner_user_id: string;
+  discovery_run_id: string | null; // UUID - links business to discovery run
   created_at: Date;
   updated_at: Date;
 }

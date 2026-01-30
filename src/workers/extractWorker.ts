@@ -129,8 +129,10 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
     });
     
     // Check if this was the last extraction job for the discovery_run
-    if (job.discovery_run_id) {
-      await checkAndCompleteDiscoveryRun(job.discovery_run_id);
+    // Get discovery_run_id from the business (not from extraction_job)
+    const business = await getBusinessById(job.business_id);
+    if (business?.discovery_run_id) {
+      await checkAndCompleteDiscoveryRun(business.discovery_run_id);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -141,8 +143,10 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
     });
     
     // Check if this was the last extraction job for the discovery_run (even if failed)
-    if (job.discovery_run_id) {
-      await checkAndCompleteDiscoveryRun(job.discovery_run_id);
+    // Get discovery_run_id from the business (not from extraction_job)
+    const business = await getBusinessById(job.business_id);
+    if (business?.discovery_run_id) {
+      await checkAndCompleteDiscoveryRun(business.discovery_run_id);
     }
   }
 }
@@ -150,29 +154,35 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
 /**
  * Check if all extraction jobs for a discovery_run are complete
  * If so, mark the discovery_run as completed
- * Uses SQL query to check if ANY extraction_jobs remain with status IN ('queued','running')
+ * Uses SQL UPDATE with NOT EXISTS pattern to atomically check and update
+ * Note: Uses 'queued' instead of 'pending' as that's the actual extraction_job status value
  */
 async function checkAndCompleteDiscoveryRun(discoveryRunId: string): Promise<void> {
   try {
     const { pool } = await import('../config/database.js');
     
-    // Check if any extraction jobs remain for this discovery_run with status 'queued' or 'running'
-    // If none remain, mark discovery_run as completed
-    const checkResult = await pool.query<{ has_pending: boolean }>(
-      `SELECT EXISTS (
-        SELECT 1
-        FROM businesses b
-        JOIN extraction_jobs ej ON ej.business_id = b.id
-        WHERE b.discovery_run_id = $1
-        AND ej.status IN ('queued', 'running')
-      ) as has_pending`,
+    // Use UPDATE with NOT EXISTS pattern as specified
+    // This atomically checks if any extraction_jobs remain and updates if none do
+    // Note: Using 'queued' instead of 'pending' as that's the actual status value
+    const updateResult = await pool.query(
+      `UPDATE discovery_runs
+       SET status = 'completed',
+           completed_at = NOW()
+       WHERE id = $1
+       AND NOT EXISTS (
+         SELECT 1
+         FROM businesses b
+         JOIN extraction_jobs ej ON ej.business_id = b.id
+         WHERE b.discovery_run_id = $1
+         AND ej.status IN ('queued', 'running')
+       )
+       RETURNING *`,
       [discoveryRunId]
     );
     
-    const hasPendingJobs = checkResult.rows[0]?.has_pending || false;
-    
-    if (!hasPendingJobs) {
-      // No pending/running jobs remain - check if any jobs failed
+    if (updateResult.rows.length > 0) {
+      // Discovery run was marked as completed
+      // Check if any jobs failed to set appropriate status
       const jobsResult = await pool.query<{ status: string; count: string }>(
         `SELECT ej.status, COUNT(*) as count
          FROM businesses b
@@ -184,15 +194,17 @@ async function checkAndCompleteDiscoveryRun(discoveryRunId: string): Promise<voi
       
       const hasFailures = jobsResult.rows.some(row => row.status === 'failed');
       
-      await updateDiscoveryRun(discoveryRunId, {
-        status: hasFailures ? 'failed' : 'completed',
-        completed_at: new Date(),
-        error_message: hasFailures 
-          ? `${jobsResult.rows.find(r => r.status === 'failed')?.count || '0'} extraction job(s) failed`
-          : null
-      });
-      
-      console.log(`[extractWorker] Marked discovery_run ${discoveryRunId} as ${hasFailures ? 'failed' : 'completed'}`);
+      if (hasFailures) {
+        // Update to failed if any jobs failed
+        await updateDiscoveryRun(discoveryRunId, {
+          status: 'failed',
+          completed_at: new Date(),
+          error_message: `${jobsResult.rows.find(r => r.status === 'failed')?.count || '0'} extraction job(s) failed`
+        });
+        console.log(`[extractWorker] Marked discovery_run ${discoveryRunId} as failed (some extraction jobs failed)`);
+      } else {
+        console.log(`[extractWorker] Marked discovery_run ${discoveryRunId} as completed`);
+      }
     }
   } catch (error) {
     console.error(`[extractWorker] Error checking discovery_run completion:`, error);
