@@ -311,7 +311,7 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res) => {
       },
     }));
 
-    res.json({
+    return res.json({
       data: businesses,
       meta: {
         plan_id: 'demo', // Will be set from user's plan
@@ -322,7 +322,7 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res) => {
     });
   } catch (error: any) {
     console.error('[API] Error fetching dataset results:', error);
-    res.status(500).json({
+    return res.status(500).json({
       data: [],
       meta: {
         plan_id: 'demo',
