@@ -9,7 +9,7 @@ import {
   handleCheckoutSessionCompleted,
   handleSubscriptionUpdated,
   handleSubscriptionDeleted,
-} from '../services/stripeWebhook.js';
+} from '../../services/stripeWebhook.js';
 
 export interface WebhookEvent {
   type: string;
