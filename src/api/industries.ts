@@ -10,9 +10,13 @@ const router = express.Router();
  */
 router.get('/', async (req, res) => {
   try {
+    console.log('[API] GET /api/industries - Request received');
+    console.log('[API] Executing industries query...');
     const result = await pool.query<Industry>(
       'SELECT id, name FROM industries ORDER BY name ASC'
     );
+
+    console.log('[API] Query returned', result.rows.length, 'industries');
 
     res.json({
       data: result.rows,
@@ -23,8 +27,13 @@ router.get('/', async (req, res) => {
         total_returned: result.rows.length,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('[API] Error fetching industries:', error);
+    console.error('[API] Error details:', {
+      message: error?.message,
+      code: error?.code,
+      stack: error?.stack?.substring(0, 200),
+    });
     res.status(500).json({
       data: [],
       meta: {
@@ -32,7 +41,7 @@ router.get('/', async (req, res) => {
         gated: false,
         total_available: 0,
         total_returned: 0,
-        gate_reason: 'Failed to fetch industries',
+        gate_reason: error?.message || 'Failed to fetch industries',
       },
     });
   }
