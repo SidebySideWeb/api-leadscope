@@ -56,16 +56,17 @@ router.post('/login', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    // Generate JWT
+    // Generate JWT with user's plan from database
     const token = generateToken({
       id: user.id,
       email: user.email,
+      plan: user.plan,
     });
 
     // Set cookie with name 'token' to match frontend middleware
     res.cookie('token', token, COOKIE_OPTIONS);
 
-    console.log(`[Auth] Login successful - User ID: ${user.id}, Email: ${user.email}`);
+    console.log(`[Auth] Login successful - User ID: ${user.id}, Email: ${user.email}, Plan: ${user.plan}`);
     console.log(`[Auth] Cookie 'token' set with domain '.leadscope.gr'`);
 
     // Return user info (without password)
@@ -110,10 +111,11 @@ router.post('/register', async (req: Request, res: Response) => {
     // Create user
     const user = await createUser(email, passwordHash, 'demo');
 
-    // Generate JWT
+    // Generate JWT with user's plan from database
     const token = generateToken({
       id: user.id,
       email: user.email,
+      plan: user.plan,
     });
 
     // Set cookie with name 'token' to match frontend middleware

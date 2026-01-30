@@ -11,6 +11,7 @@ if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
 export interface JWTPayload {
   id: string;
   email: string;
+  plan?: 'demo' | 'starter' | 'pro' | 'snapshot' | 'professional' | 'agency';
 }
 
 /**
