@@ -69,12 +69,18 @@ router.post('/login', async (req: Request, res: Response) => {
     console.log(`[Auth] Login successful - User ID: ${user.id}, Email: ${user.email}, Plan: ${user.plan}`);
     console.log(`[Auth] Cookie 'token' set with domain '.leadscope.gr'`);
 
-    // Return user info (without password)
+    // Return user info (without password) in format expected by frontend
     return res.json({
-      user: {
+      data: {
         id: user.id,
         email: user.email,
         plan: user.plan,
+      },
+      meta: {
+        plan_id: user.plan,
+        gated: false,
+        total_available: 0,
+        total_returned: 0,
       },
     });
   } catch (error) {
@@ -124,12 +130,18 @@ router.post('/register', async (req: Request, res: Response) => {
     console.log(`[Auth] Register successful - User ID: ${user.id}, Email: ${user.email}`);
     console.log(`[Auth] Cookie 'token' set with domain '.leadscope.gr'`);
 
-    // Return user info (without password)
+    // Return user info (without password) in format expected by frontend
     return res.status(201).json({
-      user: {
+      data: {
         id: user.id,
         email: user.email,
         plan: user.plan,
+      },
+      meta: {
+        plan_id: user.plan,
+        gated: false,
+        total_available: 0,
+        total_returned: 0,
       },
     });
   } catch (error) {
