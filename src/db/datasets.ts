@@ -4,8 +4,8 @@ export interface Dataset {
   id: string; // UUID
   user_id: string;
   name: string;
-  city_id: number | null;
-  industry_id: number | null;
+  city_id: string | null; // UUID
+  industry_id: string | null; // UUID
   last_refreshed_at: Date | null;
   created_at: Date;
 }
@@ -39,8 +39,8 @@ export async function verifyDatasetOwnership(
  */
 export async function findReusableDataset(
   userId: string,
-  cityId: number,
-  industryId: number
+  cityId: string, // UUID
+  industryId: string // UUID
 ): Promise<Dataset | null> {
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
@@ -69,8 +69,8 @@ export async function findReusableDataset(
  */
 export async function getOrCreateDataset(
   userId: string,
-  cityId: number,
-  industryId: number,
+  cityId: string, // UUID
+  industryId: string, // UUID
   datasetName?: string
 ): Promise<Dataset> {
   // Try to find reusable dataset

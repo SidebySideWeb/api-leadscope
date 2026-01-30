@@ -22,8 +22,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       id: string;
       user_id: string;
       name: string;
-      city_id: number | null;
-      industry_id: number | null;
+      city_id: string | null; // UUID
+      industry_id: string | null; // UUID
       last_refreshed_at: Date | null;
       created_at: Date;
       businesses_count: number;
@@ -79,8 +79,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       return {
         id: row.id,
         name: row.name,
-        industry: row.industry_id ? industryMap.get(row.industry_id) || 'Unknown' : 'Unknown',
-        city: row.city_id ? cityMap.get(row.city_id) || 'Unknown' : 'Unknown',
+        industry: row.industry_id ? industryMap.get(String(row.industry_id)) || 'Unknown' : 'Unknown',
+        city: row.city_id ? cityMap.get(String(row.city_id)) || 'Unknown' : 'Unknown',
         businesses: parseInt(row.businesses_count.toString()) || 0,
         contacts: parseInt(row.contacts_count.toString()) || 0,
         createdAt: row.created_at.toISOString(),
@@ -151,10 +151,10 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
     ]);
 
     const industry = dataset.industry_id 
-      ? industries.find((i: Industry) => i.id === dataset.industry_id)?.name || 'Unknown'
+      ? industries.find((i: Industry) => String(i.id) === String(dataset.industry_id))?.name || 'Unknown'
       : 'Unknown';
     const city = dataset.city_id
-      ? cities.find((c: City) => c.id === dataset.city_id)?.name || 'Unknown'
+      ? cities.find((c: City) => String(c.id) === String(dataset.city_id))?.name || 'Unknown'
       : 'Unknown';
 
     const lastRefresh = dataset.last_refreshed_at ? new Date(dataset.last_refreshed_at) : null;

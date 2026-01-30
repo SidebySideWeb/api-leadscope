@@ -33,7 +33,7 @@ export async function createCity(
 }
 
 export async function updateCityCoordinates(
-  cityId: number,
+  cityId: string, // UUID
   coordinates: { lat: number; lng: number; radiusKm: number }
 ): Promise<City> {
   const result = await pool.query<City>(

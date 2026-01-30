@@ -180,7 +180,7 @@ export async function discoverBusinesses(input: DiscoveryInput): Promise<Discove
 async function processPlace(
   place: any,
   countryId: number,
-  industryId: number,
+  industryId: string, // UUID
   datasetId: string, // UUID
   ownerUserId: string,
   result: DiscoveryResult
