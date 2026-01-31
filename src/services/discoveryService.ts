@@ -181,11 +181,13 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     // Run discovery (this creates businesses and websites)
     // If gated, discovery will still run but we'll mark it in the result
     const discoveryResult = await discoverBusinesses({
-      industry: input.industry,
-      city: input.city,
+      industry: input.industry, // Legacy support
+      industry_id: input.industry_id, // Preferred
+      city: input.city, // Legacy support
+      city_id: input.city_id, // Preferred
       latitude: input.latitude,
       longitude: input.longitude,
-      useGeoGrid: input.useGeoGrid || true, // Default to geo-grid for discovery
+      useGeoGrid: input.useGeoGrid || false, // Don't use geo-grid by default - use keyword fan-out
       cityRadiusKm: input.cityRadiusKm,
       datasetId: datasetId
     }, discoveryRun.id);
@@ -197,22 +199,21 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     }
 
     // Check if any extraction jobs were created for this discovery_run
-    // If no extraction jobs exist, mark discovery_run as failed (not completed - this is an error condition)
     const { getExtractionJobsByDiscoveryRunId } = await import('../db/extractionJobs.js');
     const extractionJobs = await getExtractionJobsByDiscoveryRunId(discoveryRun.id);
     
     if (extractionJobs.length === 0) {
-      // No extraction jobs created - this is a failure condition
-      // Discovery should create extraction jobs for new businesses
+      // No extraction jobs created - mark discovery_run as completed (not failed)
+      // This is acceptable if no new businesses were found
       await updateDiscoveryRun(discoveryRun.id, {
-        status: 'failed',
-        completed_at: new Date(),
-        error_message: 'No extraction jobs were created during discovery. This may indicate no new businesses were found or an error occurred.'
+        status: 'completed',
+        completed_at: new Date()
       });
-      console.log(`[runDiscoveryJob] No extraction jobs created, marked discovery_run as failed: ${discoveryRun.id}`);
+      console.log(`[runDiscoveryJob] No extraction jobs created, marked discovery_run as completed: ${discoveryRun.id}`);
     } else {
       // Extraction jobs exist - they will mark discovery_run as completed when they finish
       console.log(`[runDiscoveryJob] Created ${extractionJobs.length} extraction jobs for discovery_run: ${discoveryRun.id}`);
+      console.log(`[runDiscoveryJob] Discovery_run will be marked as completed when all extraction jobs finish`);
       
       // Note: Extraction jobs will mark discovery_run as completed when they finish
       // The completion logic in extractWorker.ts handles this

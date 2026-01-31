@@ -1,8 +1,10 @@
 export type JobType = 'discovery' | 'refresh';
 
 export interface DiscoveryJobInput {
-  industry: string;
-  city: string;
+  industry?: string; // Legacy: industry name (for backward compatibility)
+  industry_id?: string; // Preferred: industry UUID
+  city?: string; // Legacy: city name (for backward compatibility)
+  city_id?: string; // Preferred: city UUID
   latitude?: number;
   longitude?: number;
   cityRadiusKm?: number;

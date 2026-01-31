@@ -72,3 +72,14 @@ export async function getCities(): Promise<City[]> {
   );
   return result.rows;
 }
+
+/**
+ * Get city by ID
+ */
+export async function getCityById(id: string): Promise<City | null> {
+  const result = await pool.query<City>(
+    'SELECT * FROM cities WHERE id = $1',
+    [id]
+  );
+  return result.rows[0] || null;
+}

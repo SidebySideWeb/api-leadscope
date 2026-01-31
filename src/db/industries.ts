@@ -34,3 +34,14 @@ export async function getIndustries(): Promise<Industry[]> {
   );
   return result.rows;
 }
+
+/**
+ * Get industry by ID with discovery_keywords
+ */
+export async function getIndustryById(id: string): Promise<Industry | null> {
+  const result = await pool.query<Industry>(
+    'SELECT * FROM industries WHERE id = $1',
+    [id]
+  );
+  return result.rows[0] || null;
+}

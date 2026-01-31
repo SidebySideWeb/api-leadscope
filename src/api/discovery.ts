@@ -142,13 +142,14 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
 
     // Run discovery job asynchronously (don't wait for completion)
     // Pass discovery_run_id so the job can link businesses and extraction_jobs to it
+    // Use industry_id and city_id for keyword-based discovery
     runDiscoveryJob({
       userId,
-      industry: industry.name,
-      city: city.name,
+      industry_id: industry.id, // Use industry_id for keyword-based discovery
+      city_id: city.id, // Use city_id for coordinate-based discovery
       latitude: city.latitude || undefined,
       longitude: city.longitude || undefined,
-      useGeoGrid: true, // Use geo-grid discovery
+      useGeoGrid: false, // Don't use geo-grid - use keyword fan-out instead
       cityRadiusKm: city.radius_km || undefined,
       datasetId: finalDatasetId, // Use resolved dataset ID
       discoveryRunId: discoveryRun.id, // Pass discovery_run_id to link businesses

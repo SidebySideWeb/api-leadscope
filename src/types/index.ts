@@ -8,6 +8,7 @@ export interface Country {
 export interface Industry {
   id: string; // UUID, not a number
   name: string;
+  discovery_keywords: string[] | null; // JSONB array of keywords for discovery
   created_at: Date;
 }
 
@@ -100,8 +101,10 @@ export interface GooglePlaceResult {
 }
 
 export interface DiscoveryInput {
-  industry: string;
-  city?: string;
+  industry?: string; // Legacy: industry name (for backward compatibility)
+  industry_id?: string; // Preferred: industry UUID
+  city?: string; // Legacy: city name (for backward compatibility)
+  city_id?: string; // Preferred: city UUID
   latitude?: number;
   longitude?: number;
   useGeoGrid?: boolean; // Use geo-grid discovery instead of simple text search
