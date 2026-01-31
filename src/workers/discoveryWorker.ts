@@ -1,4 +1,4 @@
-import type { DiscoveryInput } from '../types/index.js';
+import type { DiscoveryInput, City } from '../types/index.js';
 import { googleMapsService } from '../services/googleMaps.js';
 import { getCountryByCode } from '../db/countries.js';
 import { getOrCreateIndustry, getIndustryById } from '../db/industries.js';
@@ -139,7 +139,7 @@ export async function discoverBusinesses(
     console.log(`[discoverBusinesses] Discovery keywords: ${industry.discovery_keywords.join(', ')}`);
 
     // Resolve city: prefer city_id, fallback to city name (legacy)
-    let city;
+    let city: City | null = null;
     let resolvedLatitude: number | undefined;
     let resolvedLongitude: number | undefined;
     let resolvedRadiusKm: number | undefined;
