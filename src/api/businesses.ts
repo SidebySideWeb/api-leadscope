@@ -108,30 +108,73 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     // Get websites for businesses (to populate website field)
     const businessIds = result.rows.map(b => b.id);
     let websites: { business_id: number; url: string }[] = [];
+    let contacts: { business_id: number; email: string | null; phone: string | null }[] = [];
     
     if (businessIds.length > 0) {
+      // Get websites
       const websitesResult = await pool.query<{ business_id: number; url: string }>(
         `SELECT business_id, url FROM websites WHERE business_id = ANY($1)`,
         [businessIds]
       );
       websites = websitesResult.rows;
+
+      // Get contacts (email and phone) - get first email and first phone per business
+      const contactsResult = await pool.query<{ 
+        business_id: number; 
+        email: string | null; 
+        phone: string | null;
+      }>(
+        `SELECT DISTINCT ON (cs.business_id, c.contact_type)
+           cs.business_id,
+           CASE WHEN c.contact_type = 'email' THEN c.email ELSE NULL END as email,
+           CASE WHEN c.contact_type = 'phone' THEN COALESCE(c.phone, c.mobile) ELSE NULL END as phone
+         FROM contacts c
+         JOIN contact_sources cs ON cs.contact_id = c.id
+         WHERE cs.business_id = ANY($1)
+           AND (c.email IS NOT NULL OR c.phone IS NOT NULL OR c.mobile IS NOT NULL)
+         ORDER BY cs.business_id, c.contact_type, cs.found_at ASC`,
+        [businessIds]
+      );
+      
+      // Aggregate contacts per business (get first email and first phone)
+      const contactMap = new Map<number, { email: string | null; phone: string | null }>();
+      for (const row of contactsResult.rows) {
+        if (!contactMap.has(row.business_id)) {
+          contactMap.set(row.business_id, { email: null, phone: null });
+        }
+        const contact = contactMap.get(row.business_id)!;
+        if (row.email && !contact.email) {
+          contact.email = row.email;
+        }
+        if (row.phone && !contact.phone) {
+          contact.phone = row.phone;
+        }
+      }
+      contacts = Array.from(contactMap.entries()).map(([business_id, contact]) => ({
+        business_id,
+        ...contact,
+      }));
     }
 
     const websiteMap = new Map(websites.map(w => [w.business_id, w.url]));
+    const contactMap = new Map(contacts.map(c => [c.business_id, c]));
 
     // Map to frontend format
-    const businesses = result.rows.map((b) => ({
-      id: b.id.toString(),
-      name: b.name,
-      address: b.address,
-      website: websiteMap.get(b.id) || null,
-      email: null, // Will be populated from contacts
-      phone: null, // Will be populated from contacts
-      city: b.city_name || 'Unknown',
-      industry: b.industry_name || 'Unknown',
-      lastVerifiedAt: null,
-      isActive: true,
-    }));
+    const businesses = result.rows.map((b) => {
+      const contact = contactMap.get(b.id);
+      return {
+        id: b.id.toString(),
+        name: b.name,
+        address: b.address,
+        website: websiteMap.get(b.id) || null,
+        email: contact?.email || null,
+        phone: contact?.phone || null,
+        city: b.city_name || 'Unknown',
+        industry: b.industry_name || 'Unknown',
+        lastVerifiedAt: null,
+        isActive: true,
+      };
+    });
 
     return res.json({
       data: businesses,

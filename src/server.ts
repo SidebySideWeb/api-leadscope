@@ -10,6 +10,7 @@ import citiesRoutes from './api/cities.js';
 import discoveryRoutes from './api/discovery.js';
 import businessesRoutes from './api/businesses.js';
 import refreshRoutes from './api/refresh.js';
+import extractionJobsRoutes from './api/extractionJobs.js';
 
 const app = express();
 
@@ -46,6 +47,9 @@ app.use('/businesses', businessesRoutes);
 
 // Refresh routes (requires authentication)
 app.use('/refresh', refreshRoutes);
+
+// Extraction jobs routes (requires authentication)
+app.use('/extraction-jobs', extractionJobsRoutes);
 
 // Health endpoint
 app.get('/health', (req, res) => {
