@@ -201,6 +201,8 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     // CRITICAL: Discovery MUST ALWAYS complete
     // Mark discovery_run as completed after all businesses are processed
     // Extraction jobs will be processed separately by extraction worker
+    // NOTE: discoveryWorker also marks discovery_run as completed after enqueuing extraction jobs
+    // This is idempotent - both updates will result in 'completed' status
     const { getExtractionJobsByDiscoveryRunId } = await import('../db/extractionJobs.js');
     const extractionJobs = await getExtractionJobsByDiscoveryRunId(discoveryRun.id);
     

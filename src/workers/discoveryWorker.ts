@@ -5,6 +5,7 @@ import { getOrCreateIndustry, getIndustryById } from '../db/industries.js';
 import { getOrCreateCity, getCityByNormalizedName, updateCityCoordinates, getCityById } from '../db/cities.js';
 import { getBusinessByGooglePlaceId, upsertBusiness } from '../db/businesses.js';
 import { getDatasetById } from '../db/datasets.js';
+import { updateDiscoveryRun } from '../db/discoveryRuns.js';
 import type { GooglePlaceResult } from '../types/index.js';
 
 const GREECE_COUNTRY_CODE = 'GR';
@@ -301,7 +302,7 @@ export async function discoverBusinesses(
       
       try {
         const { pool } = await import('../config/database.js');
-        const insertResult = await pool.query<{ count: string }>(
+        const insertResult = await pool.query<{ id: string }>(
           `INSERT INTO extraction_jobs (business_id, status, created_at)
            SELECT b.id, 'pending', NOW()
            FROM businesses b
@@ -313,10 +314,58 @@ export async function discoverBusinesses(
         
         const extractionJobsCreated = insertResult.rows.length;
         console.log(`[discoverBusinesses] Enqueued ${extractionJobsCreated} extraction_jobs for discovery_run: ${discoveryRunId}`);
+        
+        if (extractionJobsCreated === 0) {
+          // Check if businesses exist but extraction jobs already exist
+          const businessesCount = await pool.query<{ count: string }>(
+            `SELECT COUNT(*) as count FROM businesses WHERE discovery_run_id = $1`,
+            [discoveryRunId]
+          );
+          const businessesInRun = parseInt(businessesCount.rows[0]?.count || '0', 10);
+          if (businessesInRun > 0) {
+            console.log(`[discoverBusinesses] Note: ${businessesInRun} businesses found in discovery_run, but extraction jobs already exist (idempotent)`);
+          }
+        }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         console.error(`[discoverBusinesses] Error enqueuing extraction jobs:`, errorMsg);
         result.errors.push(`Failed to enqueue extraction jobs: ${errorMsg}`);
+      }
+
+      // CRITICAL: Discovery MUST ALWAYS complete after enqueuing extraction jobs
+      // Mark discovery_run as 'completed' regardless of whether businesses were found or errors occurred
+      // Even if 0 businesses were found, discovery is complete (no businesses to extract)
+      try {
+        await updateDiscoveryRun(discoveryRunId, {
+          status: 'completed',
+          completed_at: new Date()
+        });
+        console.log(`[discoverBusinesses] Marked discovery_run ${discoveryRunId} as completed`);
+        
+        // CRITICAL: Trigger extraction immediately after discovery completes
+        // Extraction should start processing extraction_jobs right away
+        try {
+          const { runExtractionBatch } = await import('../workers/extractWorker.js');
+          const EXTRACTION_BATCH_SIZE = parseInt(process.env.EXTRACTION_BATCH_SIZE || '5', 10);
+          
+          console.log(`[discoverBusinesses] Triggering extraction worker for discovery_run ${discoveryRunId}...`);
+          // Run extraction asynchronously (don't wait for it to complete)
+          // This allows discovery to complete while extraction runs in background
+          runExtractionBatch(EXTRACTION_BATCH_SIZE).catch((extractError) => {
+            const extractErrorMsg = extractError instanceof Error ? extractError.message : String(extractError);
+            console.error(`[discoverBusinesses] Error in extraction worker:`, extractErrorMsg);
+            // Don't fail discovery if extraction fails - extraction will retry via periodic worker
+          });
+        } catch (importError) {
+          const importErrorMsg = importError instanceof Error ? importError.message : String(importError);
+          console.error(`[discoverBusinesses] Error importing extraction worker:`, importErrorMsg);
+          // Don't fail discovery if extraction worker can't be imported
+        }
+      } catch (updateError) {
+        const updateErrorMsg = updateError instanceof Error ? updateError.message : String(updateError);
+        console.error(`[discoverBusinesses] Error updating discovery_run status:`, updateErrorMsg);
+        result.errors.push(`Failed to update discovery_run status: ${updateErrorMsg}`);
+        // Don't throw - discovery is still considered complete even if status update fails
       }
     }
 
@@ -335,6 +384,23 @@ export async function discoverBusinesses(
     const errorMsg = error instanceof Error ? error.message : String(error);
     result.errors.push(`Discovery error: ${errorMsg}`);
     console.error('[discoverBusinesses] Discovery error:', error);
+    
+    // CRITICAL: On errors, mark discovery_run as 'failed'
+    // Discovery MUST always end in 'completed' or 'failed', never stuck in 'running'
+    if (discoveryRunId) {
+      try {
+        await updateDiscoveryRun(discoveryRunId, {
+          status: 'failed',
+          completed_at: new Date(),
+          error_message: errorMsg
+        });
+        console.log(`[discoverBusinesses] Marked discovery_run ${discoveryRunId} as failed due to error`);
+      } catch (updateError) {
+        const updateErrorMsg = updateError instanceof Error ? updateError.message : String(updateError);
+        console.error(`[discoverBusinesses] Error updating discovery_run to failed status:`, updateErrorMsg);
+        // Don't throw - we've already logged the error
+      }
+    }
   }
 
   return result;
