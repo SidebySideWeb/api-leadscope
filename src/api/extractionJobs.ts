@@ -161,6 +161,18 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         },
       });
     }
+
+    // This should never be reached due to the check at the top, but TypeScript needs it
+    return res.status(400).json({
+      data: [],
+      meta: {
+        plan_id: 'demo',
+        gated: false,
+        total_available: 0,
+        total_returned: 0,
+        gate_reason: 'datasetId or discoveryRunId is required',
+      },
+    });
   } catch (error: any) {
     console.error('[API] Error fetching extraction jobs:', error);
     return res.status(500).json({
