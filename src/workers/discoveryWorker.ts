@@ -5,7 +5,6 @@ import { getOrCreateIndustry, getIndustryById } from '../db/industries.js';
 import { getOrCreateCity, getCityByNormalizedName, updateCityCoordinates, getCityById } from '../db/cities.js';
 import { getBusinessByGooglePlaceId, upsertBusiness } from '../db/businesses.js';
 import { getDatasetById } from '../db/datasets.js';
-import { createExtractionJob } from '../db/extractionJobs.js';
 import type { GooglePlaceResult } from '../types/index.js';
 
 const GREECE_COUNTRY_CODE = 'GR';
@@ -274,12 +273,10 @@ export async function discoverBusinesses(
       throw new Error('City ID is required but could not be resolved');
     }
 
-    // Track businesses created in this discovery run
-    const createdBusinessIds: number[] = [];
-
+    // Process all places and insert businesses
     for (const place of uniquePlaces) {
       try {
-        const businessId = await processPlace(
+        await processPlace(
           place,
           country.id,
           industry.id,
@@ -289,11 +286,6 @@ export async function discoverBusinesses(
           discoveryRunId,
           result
         );
-        
-        // Track newly created businesses (not updated ones)
-        if (businessId) {
-          createdBusinessIds.push(businessId);
-        }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         result.errors.push(`Error processing place ${place.place_id || place.name}: ${errorMsg}`);
@@ -302,23 +294,30 @@ export async function discoverBusinesses(
     }
 
     // CRITICAL: Create extraction_jobs AFTER all businesses are processed
-    // Create extraction_jobs for ALL businesses created in THIS discovery_run
+    // Enqueue extraction jobs for ALL businesses created in THIS discovery_run
     // NOTE: extraction_jobs does NOT have discovery_run_id - use businesses.discovery_run_id to link
-    if (discoveryRunId && createdBusinessIds.length > 0) {
-      console.log(`\n[discoverBusinesses] Creating extraction_jobs for ${createdBusinessIds.length} businesses...`);
+    if (discoveryRunId) {
+      console.log(`\n[discoverBusinesses] Enqueuing extraction_jobs for businesses in discovery_run: ${discoveryRunId}...`);
       
-      let extractionJobsCreated = 0;
-      for (const businessId of createdBusinessIds) {
-        try {
-          await createExtractionJob(businessId);
-          extractionJobsCreated++;
-        } catch (error) {
-          console.error(`[discoverBusinesses] Error creating extraction job for business ${businessId}:`, error);
-          result.errors.push(`Failed to create extraction job for business ${businessId}`);
-        }
+      try {
+        const { pool } = await import('../config/database.js');
+        const insertResult = await pool.query<{ count: string }>(
+          `INSERT INTO extraction_jobs (business_id, status, created_at)
+           SELECT b.id, 'pending', NOW()
+           FROM businesses b
+           WHERE b.discovery_run_id = $1
+           ON CONFLICT (business_id) DO NOTHING
+           RETURNING id`,
+          [discoveryRunId]
+        );
+        
+        const extractionJobsCreated = insertResult.rows.length;
+        console.log(`[discoverBusinesses] Enqueued ${extractionJobsCreated} extraction_jobs for discovery_run: ${discoveryRunId}`);
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error(`[discoverBusinesses] Error enqueuing extraction jobs:`, errorMsg);
+        result.errors.push(`Failed to enqueue extraction jobs: ${errorMsg}`);
       }
-      
-      console.log(`[discoverBusinesses] Created ${extractionJobsCreated} extraction_jobs`);
     }
 
     // Log persistence summary
@@ -350,7 +349,7 @@ async function processPlace(
   ownerUserId: string,
   discoveryRunId: string | null | undefined,
   result: DiscoveryResult
-): Promise<number | null> {
+): Promise<void> {
   // Extract postal code from address components
   let postalCode: string | null = null;
 
@@ -387,16 +386,14 @@ async function processPlace(
   if (wasUpdated) {
     // Business was updated (existing record refreshed)
     result.businessesUpdated++;
-    return null; // Don't create extraction job for updated businesses
   } else {
     // Business was inserted (new record)
     result.businessesCreated++;
-    return business.id; // Return business ID for extraction job creation
   }
 
   // CRITICAL: Discovery phase does NOT have website/phone data
   // These are only available from Place Details API, which is NOT called during discovery
   // Website/phone will be fetched in extraction phase if needed
   // Do NOT try to create website here - it doesn't exist in Text Search results
-  // Extraction jobs are created AFTER all businesses are processed
+  // Extraction jobs are created AFTER all businesses are processed (in batch via SQL)
 }

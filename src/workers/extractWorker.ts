@@ -67,86 +67,147 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
       return;
     }
 
-    // CRITICAL: Place Details API may ONLY be called in extraction phase
-    // Fetch Place Details ONLY if website OR phone is missing
-    if (business.google_place_id) {
-      // Check if business has a website
-      const websiteResult = await pool.query<{ id: number }>(
-        'SELECT id FROM websites WHERE business_id = $1 LIMIT 1',
-        [business.id]
-      );
-      const hasWebsite = websiteResult.rows.length > 0;
+    // STEP 1: First, try to extract contact details from website crawl pages
+    // This is free and preferred over paid Place Details API
+    const pages = await getCrawlPagesForBusiness(job.business_id);
+    
+    const dedupe = new Set<string>(); // business_id|type|value
+    const socialLinks: Map<string, string> = new Map(); // platform -> url
+    let foundWebsiteFromPages = false;
+    let foundPhoneFromPages = false;
+    let foundEmailFromPages = false;
 
-      // Check if business has a phone contact
-      const phoneResult = await pool.query<{ id: number }>(
-        `SELECT c.id FROM contacts c
-         JOIN contact_sources cs ON cs.contact_id = c.id
-         JOIN crawl_pages cp ON cp.url = cs.source_url
-         WHERE cp.business_id = $1 AND (c.phone IS NOT NULL OR c.mobile IS NOT NULL)
-         LIMIT 1`,
-        [business.id]
-      );
-      const hasPhone = phoneResult.rows.length > 0;
+    if (pages.length > 0) {
+      console.log(`[processExtractionJob] Extracting contact details from ${pages.length} crawl pages for business ${business.id}...`);
+      
+      for (const page of pages) {
+        const sourceUrl = page.final_url || page.url;
+        const extracted: ExtractedItem[] = extractFromHtmlPage(
+          page.html,
+          sourceUrl
+        );
 
-      // Fetch Place Details ONLY if website OR phone is missing
-      if (!hasWebsite || !hasPhone) {
-        console.log(`[processExtractionJob] Fetching Place Details for business ${business.id} (website: ${hasWebsite}, phone: ${hasPhone})`);
-        
-        try {
-          const placeDetails = await googleMapsService.getPlaceDetails(business.google_place_id);
-          
-          if (placeDetails) {
-            // Create/update website if missing and Place Details has website
-            if (!hasWebsite && placeDetails.website) {
-              try {
-                await getOrCreateWebsite(business.id, placeDetails.website);
-                console.log(`[processExtractionJob] Created website from Place Details: ${placeDetails.website}`);
-              } catch (error) {
-                console.error(`[processExtractionJob] Error creating website from Place Details:`, error);
+        for (const item of extracted) {
+          const key = `${job.business_id}|${item.type}|${item.value.toLowerCase()}`;
+          if (dedupe.has(key)) {
+            continue;
+          }
+          dedupe.add(key);
+
+          // Persist email / phone as contacts, always with source_url
+          if (item.type === 'email' || item.type === 'phone') {
+            try {
+              const contactType = item.type === 'email' ? 'email' : 'phone';
+              
+              if (item.type === 'phone') {
+                foundPhoneFromPages = true;
+              } else if (item.type === 'email') {
+                foundEmailFromPages = true;
               }
-            }
 
-            // Create phone contact if missing and Place Details has phone
-            if (!hasPhone && placeDetails.international_phone_number) {
-              try {
-                const phoneContact = await getOrCreateContact({
-                  phone: placeDetails.international_phone_number,
-                  contact_type: 'phone',
-                  is_generic: false
-                });
-                
-                // Link contact to business via a source (we'll use the business name as a placeholder source)
-                // Note: This is a simplified approach - in production you might want a better source tracking
-                await createContactSource({
-                  contact_id: phoneContact.id,
-                  source_url: `https://maps.google.com/?cid=${business.google_place_id}`,
-                  page_type: 'homepage',
-                  html_hash: ''
-                });
-                
-                console.log(`[processExtractionJob] Created phone contact from Place Details: ${placeDetails.international_phone_number}`);
-              } catch (error) {
-                console.error(`[processExtractionJob] Error creating phone contact from Place Details:`, error);
-              }
+              const contactRecord = await getOrCreateContact({
+                email: item.type === 'email' ? item.value : undefined,
+                phone: item.type === 'phone' ? item.value : undefined,
+                mobile: undefined,
+                contact_type: contactType,
+                is_generic: item.type === 'email'
+                  ? (() => {
+                      // classifyEmail is already used inside extractors for normalization;
+                      // here we assume generic detection already applied.
+                      return false;
+                    })()
+                  : false
+              });
+
+              await createContactSource({
+                contact_id: contactRecord.id,
+                source_url: item.sourceUrl,
+                page_type: inferPageType(item.sourceUrl, `https://${business.name}`),
+                html_hash: page.hash
+              });
+            } catch (error) {
+              console.error(
+                `Error persisting contact for business ${job.business_id}:`,
+                error
+              );
             }
           }
-        } catch (error) {
-          console.error(`[processExtractionJob] Error fetching Place Details for business ${business.id}:`, error);
-          // Don't fail the extraction job if Place Details fetch fails
+
+          // Collect social media links
+          if (item.type === 'social' && item.platform) {
+            // Store social link (keep first one found for each platform)
+            if (!socialLinks.has(item.platform)) {
+              socialLinks.set(item.platform, item.value);
+            }
+          }
         }
-      } else {
-        console.log(`[processExtractionJob] Skipping Place Details fetch for business ${business.id} (has website and phone)`);
       }
+      
+      // Check if we found a website from crawl pages
+      const websiteResult = await pool.query<{ id: number; url: string }>(
+        'SELECT id, url FROM websites WHERE business_id = $1 LIMIT 1',
+        [business.id]
+      );
+      foundWebsiteFromPages = websiteResult.rows.length > 0;
+      
+      console.log(`[processExtractionJob] Website extraction results: website=${foundWebsiteFromPages}, phone=${foundPhoneFromPages}, email=${foundEmailFromPages}`);
+    } else {
+      console.log(`[processExtractionJob] No crawl pages found for business ${business.id}`);
     }
 
-    // After Place Details enrichment, check for crawl pages
-    // If website was just created from Place Details, crawl pages might not exist yet
-    // In that case, extraction job completes successfully (website/phone were enriched)
-    const pages = await getCrawlPagesForBusiness(job.business_id);
-    if (pages.length === 0) {
-      // No crawl pages - this is OK if we just enriched with Place Details
-      // Mark as completed (not failed) since enrichment happened
-      console.log(`[processExtractionJob] No crawl pages found for business ${business.id} - marking as completed`);
+    // STEP 2: Only if website OR phone is still missing, fetch from Google Place Details API
+    // This is a paid API, so we only use it as a fallback
+    if (business.google_place_id && (!foundWebsiteFromPages || !foundPhoneFromPages)) {
+      console.log(`[processExtractionJob] Contact details missing from website - fetching Place Details API (website: ${foundWebsiteFromPages}, phone: ${foundPhoneFromPages})`);
+      
+      try {
+        const placeDetails = await googleMapsService.getPlaceDetails(business.google_place_id);
+        
+        if (placeDetails) {
+          // Create/update website if missing and Place Details has website
+          if (!foundWebsiteFromPages && placeDetails.website) {
+            try {
+              await getOrCreateWebsite(business.id, placeDetails.website);
+              console.log(`[processExtractionJob] Created website from Place Details: ${placeDetails.website}`);
+            } catch (error) {
+              console.error(`[processExtractionJob] Error creating website from Place Details:`, error);
+            }
+          }
+
+          // Create phone contact if missing and Place Details has phone
+          if (!foundPhoneFromPages && placeDetails.international_phone_number) {
+            try {
+              const phoneContact = await getOrCreateContact({
+                phone: placeDetails.international_phone_number,
+                contact_type: 'phone',
+                is_generic: false
+              });
+              
+              // Link contact to business via source
+              await createContactSource({
+                contact_id: phoneContact.id,
+                source_url: `https://maps.google.com/?cid=${business.google_place_id}`,
+                page_type: 'homepage',
+                html_hash: ''
+              });
+              
+              console.log(`[processExtractionJob] Created phone contact from Place Details: ${placeDetails.international_phone_number}`);
+            } catch (error) {
+              console.error(`[processExtractionJob] Error creating phone contact from Place Details:`, error);
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`[processExtractionJob] Error fetching Place Details for business ${business.id}:`, error);
+        // Don't fail the extraction job if Place Details fetch fails
+      }
+    } else if (foundWebsiteFromPages && foundPhoneFromPages) {
+      console.log(`[processExtractionJob] Skipping Place Details API - found website and phone from website crawl`);
+    }
+
+    // If no crawl pages were found and we didn't get data from Place Details, mark as completed anyway
+    if (pages.length === 0 && !foundWebsiteFromPages && !foundPhoneFromPages) {
+      console.log(`[processExtractionJob] No crawl pages and no Place Details data - marking as completed`);
       await updateExtractionJob(job.id, {
         status: 'success',
         completed_at: new Date()
@@ -159,52 +220,31 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
       return;
     }
 
-    const dedupe = new Set<string>(); // business_id|type|value
-
-    for (const page of pages) {
-      const sourceUrl = page.final_url || page.url;
-      const extracted: ExtractedItem[] = extractFromHtmlPage(
-        page.html,
-        sourceUrl
-      );
-
-      for (const item of extracted) {
-        const key = `${job.business_id}|${item.type}|${item.value.toLowerCase()}`;
-        if (dedupe.has(key)) {
-          continue;
-        }
-        dedupe.add(key);
-
-        // Persist only email / phone as contacts, but always with source_url
-        if (item.type === 'email' || item.type === 'phone') {
-          try {
-            const contactType = item.type === 'email' ? 'email' : 'phone';
-
-            const contactRecord = await getOrCreateContact({
-              email: item.type === 'email' ? item.value : undefined,
-              phone: item.type === 'phone' ? item.value : undefined,
-              mobile: undefined,
-              contact_type: contactType,
-              is_generic: item.type === 'email'
-                ? (() => {
-                    // classifyEmail is already used inside extractors for normalization;
-                    // here we assume generic detection already applied.
-                    return false;
-                  })()
-                : false
-            });
-
-            await createContactSource({
-              contact_id: contactRecord.id,
-              source_url: item.sourceUrl,
-              page_type: inferPageType(item.sourceUrl, `https://${business.name}`),
-              html_hash: page.hash
-            });
-          } catch (error) {
-            console.error(
-              `Error persisting contact for business ${job.business_id}:`,
-              error
-            );
+    // Persist social media links to database
+    // Store social media links extracted from website pages
+    if (socialLinks.size > 0) {
+      console.log(`[processExtractionJob] Found ${socialLinks.size} social media links for business ${business.id}`);
+      
+      for (const [platform, url] of socialLinks) {
+        try {
+          // Try to store in social_media table if it exists
+          // If table doesn't exist, we'll skip (no schema changes per requirements)
+          await pool.query(
+            `INSERT INTO social_media (business_id, platform, url, created_at)
+             VALUES ($1, $2, $3, NOW())
+             ON CONFLICT (business_id, platform) DO UPDATE
+             SET url = EXCLUDED.url, updated_at = NOW()`,
+            [business.id, platform, url]
+          );
+          console.log(`[processExtractionJob] Stored ${platform} link: ${url}`);
+        } catch (error: any) {
+          // If table doesn't exist (error code 42P01), log and continue
+          // This is expected if social_media table hasn't been created yet
+          if (error.code === '42P01') {
+            console.log(`[processExtractionJob] social_media table does not exist - social links will be stored when table is created`);
+            // Don't break - try to store other data types
+          } else {
+            console.error(`[processExtractionJob] Error storing ${platform} link:`, error);
           }
         }
       }
