@@ -4,8 +4,6 @@ import { getCountryByCode } from '../db/countries.js';
 import { getOrCreateIndustry, getIndustryById } from '../db/industries.js';
 import { getOrCreateCity, getCityByNormalizedName, updateCityCoordinates, getCityById } from '../db/cities.js';
 import { getBusinessByGooglePlaceId, upsertBusiness } from '../db/businesses.js';
-import { getOrCreateWebsite } from '../db/websites.js';
-import { createCrawlJob } from '../db/crawlJobs.js';
 import { getDatasetById } from '../db/datasets.js';
 import { createExtractionJob } from '../db/extractionJobs.js';
 import type { GooglePlaceResult } from '../types/index.js';
@@ -17,8 +15,8 @@ export interface DiscoveryResult {
   businessesCreated: number;
   businessesSkipped: number;
   businessesUpdated: number;
-  websitesCreated: number;
   errors: string[];
+  // Note: websitesCreated removed - websites are created in extraction phase, not discovery
 }
 
 /**
@@ -95,7 +93,6 @@ export async function discoverBusinesses(
     businessesCreated: 0,
     businessesSkipped: 0,
     businessesUpdated: 0,
-    websitesCreated: 0,
     errors: []
   };
 
@@ -303,7 +300,7 @@ export async function discoverBusinesses(
     console.log(`  Businesses inserted: ${result.businessesCreated}`);
     console.log(`  Businesses skipped (duplicates): ${result.businessesSkipped}`);
     console.log(`  Businesses updated: ${result.businessesUpdated}`);
-    console.log(`  Websites created: ${result.websitesCreated}`);
+    // Note: Websites are created in extraction phase, not discovery
     if (result.errors.length > 0) {
       console.log(`  Errors: ${result.errors.length}`);
     }
@@ -403,21 +400,8 @@ async function processPlace(
     // But log it so we know there's an issue
   }
 
-  // Create/update website if exists
-  if (place.website) {
-    try {
-      const website = await getOrCreateWebsite(business.id, place.website);
-      if (!website.business_id || website.business_id !== business.id) {
-        result.websitesCreated++;
-      }
-
-      // Create crawl job for the website (discovery type)
-      // Only create if this is a new business or if we want to re-crawl updated businesses
-      if (!wasUpdated) {
-        await createCrawlJob(website.id, 'discovery');
-      }
-    } catch (error) {
-      console.error(`[processPlace] Error creating website for business ${business.id}:`, error);
-    }
-  }
+  // CRITICAL: Discovery phase does NOT have website/phone data
+  // These are only available from Place Details API, which is NOT called during discovery
+  // Website/phone will be fetched in extraction phase if needed
+  // Do NOT try to create website here - it doesn't exist in Text Search results
 }

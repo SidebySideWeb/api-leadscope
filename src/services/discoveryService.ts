@@ -268,7 +268,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     logDiscoveryAction({
       userId: input.userId || 'unknown',
       datasetId,
-      resultSummary: `Discovery completed: ${discoveryResult.businessesFound} businesses found, ${discoveryResult.businessesCreated} created, ${discoveryResult.websitesCreated} websites, ${crawlJobsCreated} crawl jobs created`,
+      resultSummary: `Discovery completed: ${discoveryResult.businessesFound} businesses found, ${discoveryResult.businessesCreated} created, ${crawlJobsCreated} crawl jobs created`,
       gated: isGated,
       error: errors.length > 0 ? errors.join('; ') : null,
       metadata: {
@@ -277,7 +277,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         city: input.city,
         businesses_found: discoveryResult.businessesFound,
         businesses_created: discoveryResult.businessesCreated,
-        websites_created: discoveryResult.websitesCreated,
+        // Note: websites_created removed - websites are created in extraction phase
         crawl_jobs_created: crawlJobsCreated,
         duration_seconds: (endTime.getTime() - startTime.getTime()) / 1000,
         is_reused: isReused,
@@ -289,7 +289,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     console.log(`   Duration: ${(endTime.getTime() - startTime.getTime()) / 1000}s`);
     console.log(`   Businesses found: ${discoveryResult.businessesFound}`);
     console.log(`   Businesses created: ${discoveryResult.businessesCreated}`);
-    console.log(`   Websites created: ${discoveryResult.websitesCreated}`);
+    // Note: Websites are created in extraction phase, not discovery
     console.log(`   Crawl jobs created: ${crawlJobsCreated}`);
 
     return result;

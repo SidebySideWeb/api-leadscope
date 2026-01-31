@@ -11,6 +11,8 @@ import {
 } from '../db/extractionJobs.js';
 import { updateDiscoveryRun } from '../db/discoveryRuns.js';
 import { extractFromHtmlPage, type ExtractedItem } from '../utils/extractors.js';
+import { googleMapsService } from '../services/googleMaps.js';
+import { getOrCreateWebsite } from '../db/websites.js';
 import type { Business } from '../types/index.js';
 
 dotenv.config();
@@ -63,6 +65,78 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
         completed_at: new Date()
       });
       return;
+    }
+
+    // CRITICAL: Place Details API may ONLY be called in extraction phase
+    // Fetch Place Details ONLY if website OR phone is missing
+    if (business.google_place_id) {
+      // Check if business has a website
+      const websiteResult = await pool.query<{ id: number }>(
+        'SELECT id FROM websites WHERE business_id = $1 LIMIT 1',
+        [business.id]
+      );
+      const hasWebsite = websiteResult.rows.length > 0;
+
+      // Check if business has a phone contact
+      const phoneResult = await pool.query<{ id: number }>(
+        `SELECT c.id FROM contacts c
+         JOIN contact_sources cs ON cs.contact_id = c.id
+         JOIN crawl_pages cp ON cp.url = cs.source_url
+         WHERE cp.business_id = $1 AND (c.phone IS NOT NULL OR c.mobile IS NOT NULL)
+         LIMIT 1`,
+        [business.id]
+      );
+      const hasPhone = phoneResult.rows.length > 0;
+
+      // Fetch Place Details ONLY if website OR phone is missing
+      if (!hasWebsite || !hasPhone) {
+        console.log(`[processExtractionJob] Fetching Place Details for business ${business.id} (website: ${hasWebsite}, phone: ${hasPhone})`);
+        
+        try {
+          const placeDetails = await googleMapsService.getPlaceDetails(business.google_place_id);
+          
+          if (placeDetails) {
+            // Create/update website if missing and Place Details has website
+            if (!hasWebsite && placeDetails.website) {
+              try {
+                await getOrCreateWebsite(business.id, placeDetails.website);
+                console.log(`[processExtractionJob] Created website from Place Details: ${placeDetails.website}`);
+              } catch (error) {
+                console.error(`[processExtractionJob] Error creating website from Place Details:`, error);
+              }
+            }
+
+            // Create phone contact if missing and Place Details has phone
+            if (!hasPhone && placeDetails.international_phone_number) {
+              try {
+                const phoneContact = await getOrCreateContact({
+                  phone: placeDetails.international_phone_number,
+                  contact_type: 'phone',
+                  is_generic: false
+                });
+                
+                // Link contact to business via a source (we'll use the business name as a placeholder source)
+                // Note: This is a simplified approach - in production you might want a better source tracking
+                await createContactSource({
+                  contact_id: phoneContact.id,
+                  source_url: `https://maps.google.com/?cid=${business.google_place_id}`,
+                  page_type: 'homepage',
+                  html_hash: ''
+                });
+                
+                console.log(`[processExtractionJob] Created phone contact from Place Details: ${placeDetails.international_phone_number}`);
+              } catch (error) {
+                console.error(`[processExtractionJob] Error creating phone contact from Place Details:`, error);
+              }
+            }
+          }
+        } catch (error) {
+          console.error(`[processExtractionJob] Error fetching Place Details for business ${business.id}:`, error);
+          // Don't fail the extraction job if Place Details fetch fails
+        }
+      } else {
+        console.log(`[processExtractionJob] Skipping Place Details fetch for business ${business.id} (has website and phone)`);
+      }
     }
 
     const pages = await getCrawlPagesForBusiness(job.business_id);

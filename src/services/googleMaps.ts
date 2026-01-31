@@ -60,7 +60,9 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
         headers: {
           'Content-Type': 'application/json',
           'X-Goog-Api-Key': this.apiKey,
-          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.addressComponents'
+          // CRITICAL: Discovery phase only - no Place Details fields (website, phone)
+          // Only fetch: id, name, address, location, rating, types, addressComponents
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.addressComponents'
         }
       });
 
@@ -68,18 +70,29 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
         return [];
       }
 
-      // Get detailed information for each place
-      const detailedResults: GooglePlaceResult[] = [];
+      // CRITICAL: Discovery phase MUST NOT call Place Details API
+      // Return only data from Text Search API (no Place Details calls)
+      // Place Details will be fetched later in extraction phase if needed
+      const results: GooglePlaceResult[] = [];
       for (const place of response.data.places) {
-        const details = await this.getPlaceDetails(place.id);
-        if (details) {
-          detailedResults.push(details);
-        }
-        // Rate limiting: small delay between requests
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Map Text Search response directly (no Place Details call)
+        // Text Search provides: id, name, address, location, rating, types, addressComponents
+        // Text Search does NOT provide: website, phone (these require Place Details API)
+        results.push({
+          place_id: place.id,
+          name: place.displayName?.text || '',
+          formatted_address: place.formattedAddress || '',
+          // website and phone are NOT available from Text Search - will be fetched in extraction if needed
+          website: undefined,
+          international_phone_number: undefined,
+          address_components: this.mapAddressComponents(place.addressComponents),
+          // rating and user_rating_count may be available from Text Search
+          rating: place.rating || undefined,
+          user_rating_count: place.userRatingCount || undefined
+        });
       }
 
-      return detailedResults;
+      return results;
     } catch (error: any) {
       console.error('Error searching Google Maps:', error.response?.data || error.message);
       throw error;
