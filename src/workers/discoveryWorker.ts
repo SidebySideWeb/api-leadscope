@@ -252,15 +252,42 @@ async function processPlace(
   } else {
     // Business was inserted (new record)
     result.businessesCreated++;
+  }
+  
+  // CRITICAL: Every discovered business MUST have at least one extraction_job
+  // Create extraction job for ALL discovered businesses (both new and updated)
+  // This ensures manual discovery, automatic discovery, and bulk/seed paths all create jobs
+  // Do NOT skip job creation - every business needs extraction
+  try {
+    // Check if extraction job already exists for this business
+    const { pool } = await import('../config/database.js');
+    const existingJob = await pool.query(
+      `SELECT id, discovery_run_id FROM extraction_jobs 
+       WHERE business_id = $1 
+       LIMIT 1`,
+      [business.id]
+    );
     
-    // Create extraction job for new business (if discovery_run_id is provided)
-    if (discoveryRunId) {
-      try {
-        await createExtractionJob(business.id, discoveryRunId);
-      } catch (error) {
-        console.error(`Error creating extraction job for business ${business.id}:`, error);
-      }
+    if (existingJob.rows.length === 0) {
+      // No extraction job exists - create one (always, even without discovery_run_id)
+      await createExtractionJob(business.id, discoveryRunId || null);
+      console.log(`[processPlace] Created extraction job for business ${business.id} (discovery_run_id: ${discoveryRunId || 'none'})`);
+    } else if (discoveryRunId && !existingJob.rows[0].discovery_run_id) {
+      // Extraction job exists but doesn't have discovery_run_id - update it
+      await pool.query(
+        `UPDATE extraction_jobs 
+         SET discovery_run_id = $1 
+         WHERE business_id = $2 
+         AND discovery_run_id IS NULL
+         LIMIT 1`,
+        [discoveryRunId, business.id]
+      );
+      console.log(`[processPlace] Updated extraction job ${existingJob.rows[0].id} with discovery_run_id: ${discoveryRunId}`);
     }
+  } catch (error) {
+    console.error(`[processPlace] Error ensuring extraction job for business ${business.id}:`, error);
+    // Don't fail the entire discovery if extraction job creation fails
+    // But log it so we know there's an issue
   }
   
   // Create/update website if exists
