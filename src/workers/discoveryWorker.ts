@@ -274,9 +274,12 @@ export async function discoverBusinesses(
       throw new Error('City ID is required but could not be resolved');
     }
 
+    // Track businesses created in this discovery run
+    const createdBusinessIds: number[] = [];
+
     for (const place of uniquePlaces) {
       try {
-        await processPlace(
+        const businessId = await processPlace(
           place,
           country.id,
           industry.id,
@@ -286,11 +289,36 @@ export async function discoverBusinesses(
           discoveryRunId,
           result
         );
+        
+        // Track newly created businesses (not updated ones)
+        if (businessId) {
+          createdBusinessIds.push(businessId);
+        }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         result.errors.push(`Error processing place ${place.place_id || place.name}: ${errorMsg}`);
         console.error(`[discoverBusinesses] Error processing place ${place.place_id || place.name}:`, error);
       }
+    }
+
+    // CRITICAL: Create extraction_jobs AFTER all businesses are processed
+    // Create extraction_jobs for ALL businesses created in THIS discovery_run
+    // NOTE: extraction_jobs does NOT have discovery_run_id - use businesses.discovery_run_id to link
+    if (discoveryRunId && createdBusinessIds.length > 0) {
+      console.log(`\n[discoverBusinesses] Creating extraction_jobs for ${createdBusinessIds.length} businesses...`);
+      
+      let extractionJobsCreated = 0;
+      for (const businessId of createdBusinessIds) {
+        try {
+          await createExtractionJob(businessId);
+          extractionJobsCreated++;
+        } catch (error) {
+          console.error(`[discoverBusinesses] Error creating extraction job for business ${businessId}:`, error);
+          result.errors.push(`Failed to create extraction job for business ${businessId}`);
+        }
+      }
+      
+      console.log(`[discoverBusinesses] Created ${extractionJobsCreated} extraction_jobs`);
     }
 
     // Log persistence summary
@@ -322,7 +350,7 @@ async function processPlace(
   ownerUserId: string,
   discoveryRunId: string | null | undefined,
   result: DiscoveryResult
-): Promise<void> {
+): Promise<number | null> {
   // Extract postal code from address components
   let postalCode: string | null = null;
 
@@ -359,49 +387,16 @@ async function processPlace(
   if (wasUpdated) {
     // Business was updated (existing record refreshed)
     result.businessesUpdated++;
+    return null; // Don't create extraction job for updated businesses
   } else {
     // Business was inserted (new record)
     result.businessesCreated++;
-  }
-
-  // CRITICAL: Every discovered business MUST have at least one extraction_job
-  // Create extraction job for ALL discovered businesses (both new and updated)
-  // This ensures manual discovery, automatic discovery, and bulk/seed paths all create jobs
-  // Do NOT skip job creation - every business needs extraction
-  try {
-    // Check if extraction job already exists for this business
-    const { pool } = await import('../config/database.js');
-    const existingJob = await pool.query(
-      `SELECT id, discovery_run_id FROM extraction_jobs 
-       WHERE business_id = $1 
-       LIMIT 1`,
-      [business.id]
-    );
-
-    if (existingJob.rows.length === 0) {
-      // No extraction job exists - create one with discovery_run_id (required during discovery)
-      await createExtractionJob(business.id, discoveryRunId);
-      console.log(`[processPlace] Created extraction job for business ${business.id} (discovery_run_id: ${discoveryRunId})`);
-    } else if (discoveryRunId && !existingJob.rows[0].discovery_run_id) {
-      // Extraction job exists but doesn't have discovery_run_id - update it
-      await pool.query(
-        `UPDATE extraction_jobs 
-         SET discovery_run_id = $1 
-         WHERE business_id = $2 
-         AND discovery_run_id IS NULL
-         LIMIT 1`,
-        [discoveryRunId, business.id]
-      );
-      console.log(`[processPlace] Updated extraction job ${existingJob.rows[0].id} with discovery_run_id: ${discoveryRunId}`);
-    }
-  } catch (error) {
-    console.error(`[processPlace] Error ensuring extraction job for business ${business.id}:`, error);
-    // Don't fail the entire discovery if extraction job creation fails
-    // But log it so we know there's an issue
+    return business.id; // Return business ID for extraction job creation
   }
 
   // CRITICAL: Discovery phase does NOT have website/phone data
   // These are only available from Place Details API, which is NOT called during discovery
   // Website/phone will be fetched in extraction phase if needed
   // Do NOT try to create website here - it doesn't exist in Text Search results
+  // Extraction jobs are created AFTER all businesses are processed
 }

@@ -198,28 +198,26 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       console.log(`[runDiscoveryJob] Marked dataset as refreshed: ${datasetId}`);
     }
 
-    // Check if any extraction jobs were created for this discovery_run
-    // CRITICAL: Only count extraction_jobs that are linked to this discovery_run
+    // CRITICAL: Discovery MUST ALWAYS complete
+    // Mark discovery_run as completed after all businesses are processed
+    // Extraction jobs will be processed separately by extraction worker
     const { getExtractionJobsByDiscoveryRunId } = await import('../db/extractionJobs.js');
     const extractionJobs = await getExtractionJobsByDiscoveryRunId(discoveryRun.id);
     
     console.log(`[runDiscoveryJob] Found ${extractionJobs.length} extraction jobs for discovery_run: ${discoveryRun.id}`);
     
-    if (extractionJobs.length === 0) {
-      // No extraction jobs created - mark discovery_run as completed (not failed)
-      // This is acceptable if no new businesses were found
-      await updateDiscoveryRun(discoveryRun.id, {
-        status: 'completed',
-        completed_at: new Date()
-      });
-      console.log(`[runDiscoveryJob] No extraction jobs created, marked discovery_run as completed: ${discoveryRun.id}`);
+    // ALWAYS mark discovery_run as completed after processing
+    // Even if 0 businesses were found or 0 extraction jobs were created
+    await updateDiscoveryRun(discoveryRun.id, {
+      status: 'completed',
+      completed_at: new Date()
+    });
+    console.log(`[runDiscoveryJob] Marked discovery_run as completed: ${discoveryRun.id}`);
+    
+    if (extractionJobs.length > 0) {
+      console.log(`[runDiscoveryJob] ${extractionJobs.length} extraction jobs will be processed by extraction worker`);
     } else {
-      // Extraction jobs exist - they will mark discovery_run as completed when they finish
-      console.log(`[runDiscoveryJob] Created ${extractionJobs.length} extraction jobs for discovery_run: ${discoveryRun.id}`);
-      console.log(`[runDiscoveryJob] Discovery_run will be marked as completed when all extraction jobs finish`);
-      
-      // Note: Extraction jobs will mark discovery_run as completed when they finish
-      // The completion logic in extractWorker.ts handles this
+      console.log(`[runDiscoveryJob] No extraction jobs created (no new businesses found)`);
     }
 
     // Get count of websites created

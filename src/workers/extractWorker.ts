@@ -139,13 +139,23 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
       }
     }
 
+    // After Place Details enrichment, check for crawl pages
+    // If website was just created from Place Details, crawl pages might not exist yet
+    // In that case, extraction job completes successfully (website/phone were enriched)
     const pages = await getCrawlPagesForBusiness(job.business_id);
     if (pages.length === 0) {
+      // No crawl pages - this is OK if we just enriched with Place Details
+      // Mark as completed (not failed) since enrichment happened
+      console.log(`[processExtractionJob] No crawl pages found for business ${business.id} - marking as completed`);
       await updateExtractionJob(job.id, {
-        status: 'failed',
-        error_message: 'No crawl pages found for business',
+        status: 'success',
         completed_at: new Date()
       });
+      
+      // Still need to check and complete discovery_run
+      if (business?.discovery_run_id) {
+        await checkAndCompleteDiscoveryRun(business.discovery_run_id);
+      }
       return;
     }
 
@@ -234,7 +244,7 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
  * Check if all extraction jobs for a discovery_run are complete
  * If so, mark the discovery_run as completed
  * Uses SQL UPDATE with NOT EXISTS pattern to atomically check and update
- * Note: Uses 'queued' instead of 'pending' as that's the actual extraction_job status value
+ * NOTE: extraction_jobs does NOT have discovery_run_id - query through businesses table
  */
 async function checkAndCompleteDiscoveryRun(discoveryRunId: string): Promise<void> {
   try {
@@ -242,7 +252,7 @@ async function checkAndCompleteDiscoveryRun(discoveryRunId: string): Promise<voi
     
     // Use UPDATE with NOT EXISTS pattern as specified
     // This atomically checks if any extraction_jobs remain and updates if none do
-    // Note: Using 'queued' instead of 'pending' as that's the actual status value
+    // NOTE: extraction_jobs does NOT have discovery_run_id - query through businesses table
     const updateResult = await pool.query(
       `UPDATE discovery_runs
        SET status = 'completed',
@@ -253,7 +263,7 @@ async function checkAndCompleteDiscoveryRun(discoveryRunId: string): Promise<voi
          FROM businesses b
          JOIN extraction_jobs ej ON ej.business_id = b.id
          WHERE b.discovery_run_id = $1
-         AND ej.status IN ('queued', 'running')
+         AND ej.status IN ('pending', 'running')
        )
        RETURNING *`,
       [discoveryRunId]

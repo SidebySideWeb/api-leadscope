@@ -1,11 +1,12 @@
 import { pool } from '../config/database.js';
 
-export type ExtractionJobStatus = 'queued' | 'running' | 'success' | 'failed';
+export type ExtractionJobStatus = 'pending' | 'running' | 'success' | 'failed';
 
 export interface ExtractionJob {
   id: string; // UUID
   business_id: number;
-  discovery_run_id: string | null; // UUID
+  // NOTE: extraction_jobs does NOT have discovery_run_id column
+  // Use businesses.discovery_run_id to link extraction_jobs to discovery_runs
   status: ExtractionJobStatus;
   error_message: string | null;
   created_at: Date;
@@ -15,17 +16,28 @@ export interface ExtractionJob {
 
 /**
  * Create a new extraction job
+ * NOTE: extraction_jobs does NOT have discovery_run_id column
+ * Use businesses.discovery_run_id to link extraction_jobs to discovery_runs
  */
 export async function createExtractionJob(
-  businessId: number,
-  discoveryRunId?: string | null
+  businessId: number
 ): Promise<ExtractionJob> {
   const result = await pool.query<ExtractionJob>(
-    `INSERT INTO extraction_jobs (business_id, discovery_run_id, status)
-     VALUES ($1, $2, 'queued')
+    `INSERT INTO extraction_jobs (business_id, status)
+     VALUES ($1, 'pending')
+     ON CONFLICT (business_id) DO NOTHING
      RETURNING *`,
-    [businessId, discoveryRunId || null]
+    [businessId]
   );
+
+  if (result.rows.length === 0) {
+    // Job already exists, fetch it
+    const existing = await pool.query<ExtractionJob>(
+      'SELECT * FROM extraction_jobs WHERE business_id = $1',
+      [businessId]
+    );
+    return existing.rows[0];
+  }
 
   return result.rows[0];
 }
@@ -36,7 +48,7 @@ export async function getQueuedExtractionJobs(
   const result = await pool.query<ExtractionJob>(
     `SELECT *
      FROM extraction_jobs
-     WHERE status = 'queued'
+     WHERE status = 'pending'
      ORDER BY created_at ASC
      LIMIT $1`,
     [limit]
@@ -98,14 +110,16 @@ export async function updateExtractionJob(
 
 /**
  * Get extraction jobs by discovery_run_id
+ * NOTE: extraction_jobs does NOT have discovery_run_id - query through businesses table
  */
 export async function getExtractionJobsByDiscoveryRunId(
   discoveryRunId: string
 ): Promise<ExtractionJob[]> {
   const result = await pool.query<ExtractionJob>(
-    `SELECT * FROM extraction_jobs
-     WHERE discovery_run_id = $1
-     ORDER BY created_at ASC`,
+    `SELECT ej.* FROM extraction_jobs ej
+     JOIN businesses b ON b.id = ej.business_id
+     WHERE b.discovery_run_id = $1
+     ORDER BY ej.created_at ASC`,
     [discoveryRunId]
   );
 
