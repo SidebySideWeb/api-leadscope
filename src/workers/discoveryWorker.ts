@@ -100,6 +100,12 @@ export async function discoverBusinesses(
   };
 
   try {
+    // CRITICAL: Validate discovery_run_id is provided
+    // Every business created during discovery MUST be linked to a discovery_run
+    if (!discoveryRunId) {
+      throw new Error('discovery_run_id is required for discovery. Cannot create businesses without linking them to a discovery_run.');
+    }
+
     // Validate dataset exists
     if (!input.datasetId) {
       throw new Error('Dataset ID is required for discovery');
@@ -332,8 +338,15 @@ async function processPlace(
     }
   }
 
+  // CRITICAL: discoveryRunId must be provided (validated at function entry)
+  // Every business MUST be linked to the discovery_run
+  if (!discoveryRunId) {
+    throw new Error(`[processPlace] discovery_run_id is required but was not provided. Cannot create business ${place.name} without linking it to a discovery_run.`);
+  }
+
   // Upsert business: Insert if new, Update if exists
   // Deduplication by: (dataset_id, normalized_name) or google_place_id
+  // ALWAYS include discovery_run_id - this is mandatory for discovery-created businesses
   const { business, wasUpdated } = await upsertBusiness({
     name: place.name,
     address: place.formatted_address || null,
@@ -343,7 +356,7 @@ async function processPlace(
     google_place_id: place.place_id || null,
     dataset_id: datasetId,
     owner_user_id: ownerUserId,
-    discovery_run_id: discoveryRunId || null
+    discovery_run_id: discoveryRunId // REQUIRED - never null during discovery
   });
 
   if (wasUpdated) {
@@ -369,9 +382,9 @@ async function processPlace(
     );
 
     if (existingJob.rows.length === 0) {
-      // No extraction job exists - create one (always, even without discovery_run_id)
-      await createExtractionJob(business.id, discoveryRunId || null);
-      console.log(`[processPlace] Created extraction job for business ${business.id} (discovery_run_id: ${discoveryRunId || 'none'})`);
+      // No extraction job exists - create one with discovery_run_id (required during discovery)
+      await createExtractionJob(business.id, discoveryRunId);
+      console.log(`[processPlace] Created extraction job for business ${business.id} (discovery_run_id: ${discoveryRunId})`);
     } else if (discoveryRunId && !existingJob.rows[0].discovery_run_id) {
       // Extraction job exists but doesn't have discovery_run_id - update it
       await pool.query(

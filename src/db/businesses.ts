@@ -62,6 +62,7 @@ export async function upsertBusiness(data: {
 
   // Try to insert, handling conflicts on (dataset_id, normalized_name)
   // On conflict: UPDATE existing business with fresh data
+  // CRITICAL: discovery_run_id must be set if provided (never use COALESCE to keep old NULL)
   const result = await pool.query<Business>(
     `INSERT INTO businesses (
       name, normalized_name, address, postal_code, city_id, 
@@ -77,6 +78,8 @@ export async function upsertBusiness(data: {
        city_id = EXCLUDED.city_id,
        industry_id = EXCLUDED.industry_id,
        google_place_id = COALESCE(EXCLUDED.google_place_id, businesses.google_place_id),
+       -- CRITICAL: Always set discovery_run_id if provided (EXCLUDED.discovery_run_id is not null)
+       -- If EXCLUDED.discovery_run_id is NULL, keep existing value (for non-discovery updates)
        discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id),
        updated_at = NOW()
      RETURNING *`,

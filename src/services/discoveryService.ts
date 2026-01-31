@@ -199,8 +199,11 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     }
 
     // Check if any extraction jobs were created for this discovery_run
+    // CRITICAL: Only count extraction_jobs that are linked to this discovery_run
     const { getExtractionJobsByDiscoveryRunId } = await import('../db/extractionJobs.js');
     const extractionJobs = await getExtractionJobsByDiscoveryRunId(discoveryRun.id);
+    
+    console.log(`[runDiscoveryJob] Found ${extractionJobs.length} extraction jobs for discovery_run: ${discoveryRun.id}`);
     
     if (extractionJobs.length === 0) {
       // No extraction jobs created - mark discovery_run as completed (not failed)
