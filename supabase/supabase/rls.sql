@@ -25,8 +25,13 @@
 
 ALTER TABLE datasets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE businesses ENABLE ROW LEVEL SECURITY;
-ALTER TABLE crawl_results ENABLE ROW LEVEL SECURITY;
+ALTER TABLE discovery_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE extraction_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE exports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dataset_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE websites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE crawl_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE crawl_results ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usage_tracking ENABLE ROW LEVEL SECURITY;
 ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY;
 
@@ -64,63 +69,31 @@ CREATE POLICY "Users can delete their own datasets"
 -- BUSINESSES POLICIES
 -- ============================================================================
 
--- Users can SELECT businesses that belong to their datasets
--- Join through datasets table to verify ownership
--- Note: businesses.dataset_id may be UUID or INTEGER depending on schema
--- This policy works for both by using implicit type casting
-CREATE POLICY "Users can view businesses in their datasets"
+-- Users can SELECT businesses that they own
+-- Use owner_user_id directly (VARCHAR(255))
+CREATE POLICY "Users can view their own businesses"
   ON businesses
   FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM datasets
-      WHERE datasets.id::text = businesses.dataset_id::text
-        AND datasets.user_id = auth.uid()::text
-    )
-  );
+  USING (owner_user_id = auth.uid()::text);
 
--- Users can INSERT businesses into their datasets
-CREATE POLICY "Users can create businesses in their datasets"
+-- Users can INSERT businesses they own
+CREATE POLICY "Users can create their own businesses"
   ON businesses
   FOR INSERT
-  WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM datasets
-      WHERE datasets.id::text = businesses.dataset_id::text
-        AND datasets.user_id = auth.uid()::text
-    )
-  );
+  WITH CHECK (owner_user_id = auth.uid()::text);
 
--- Users can UPDATE businesses in their datasets
-CREATE POLICY "Users can update businesses in their datasets"
+-- Users can UPDATE businesses they own
+CREATE POLICY "Users can update their own businesses"
   ON businesses
   FOR UPDATE
-  USING (
-    EXISTS (
-      SELECT 1 FROM datasets
-      WHERE datasets.id::text = businesses.dataset_id::text
-        AND datasets.user_id = auth.uid()::text
-    )
-  )
-  WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM datasets
-      WHERE datasets.id::text = businesses.dataset_id::text
-        AND datasets.user_id = auth.uid()::text
-    )
-  );
+  USING (owner_user_id = auth.uid()::text)
+  WITH CHECK (owner_user_id = auth.uid()::text);
 
--- Users can DELETE businesses from their datasets
-CREATE POLICY "Users can delete businesses from their datasets"
+-- Users can DELETE businesses they own
+CREATE POLICY "Users can delete their own businesses"
   ON businesses
   FOR DELETE
-  USING (
-    EXISTS (
-      SELECT 1 FROM datasets
-      WHERE datasets.id::text = businesses.dataset_id::text
-        AND datasets.user_id = auth.uid()::text
-    )
-  );
+  USING (owner_user_id = auth.uid()::text);
 
 -- ============================================================================
 -- CRAWL_RESULTS POLICIES
@@ -270,6 +243,286 @@ CREATE POLICY "Users can update their own subscriptions"
 
 -- Users cannot DELETE subscriptions (webhook-managed)
 -- No DELETE policy = no DELETE access for authenticated users
+
+-- ============================================================================
+-- DISCOVERY_RUNS POLICIES
+-- ============================================================================
+
+-- Users can SELECT discovery_runs for their datasets
+-- discovery_runs.dataset_id is UUID, check through datasets.user_id
+CREATE POLICY "Users can view discovery runs for their datasets"
+  ON discovery_runs
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM datasets
+      WHERE datasets.id = discovery_runs.dataset_id
+        AND datasets.user_id = auth.uid()::text
+    )
+  );
+
+-- Users can INSERT discovery_runs for their datasets
+CREATE POLICY "Users can create discovery runs for their datasets"
+  ON discovery_runs
+  FOR INSERT
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM datasets
+      WHERE datasets.id = discovery_runs.dataset_id
+        AND datasets.user_id = auth.uid()::text
+    )
+  );
+
+-- Users can UPDATE discovery_runs for their datasets
+CREATE POLICY "Users can update discovery runs for their datasets"
+  ON discovery_runs
+  FOR UPDATE
+  USING (
+    EXISTS (
+      SELECT 1 FROM datasets
+      WHERE datasets.id = discovery_runs.dataset_id
+        AND datasets.user_id = auth.uid()::text
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM datasets
+      WHERE datasets.id = discovery_runs.dataset_id
+        AND datasets.user_id = auth.uid()::text
+    )
+  );
+
+-- Users can DELETE discovery_runs from their datasets
+CREATE POLICY "Users can delete discovery runs from their datasets"
+  ON discovery_runs
+  FOR DELETE
+  USING (
+    EXISTS (
+      SELECT 1 FROM datasets
+      WHERE datasets.id = discovery_runs.dataset_id
+        AND datasets.user_id = auth.uid()::text
+    )
+  );
+
+-- ============================================================================
+-- EXTRACTION_JOBS POLICIES
+-- ============================================================================
+
+-- Users can SELECT extraction_jobs for businesses they own
+-- Check through business_id -> businesses.owner_user_id
+CREATE POLICY "Users can view extraction jobs for their businesses"
+  ON extraction_jobs
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM businesses
+      WHERE businesses.id = extraction_jobs.business_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  );
+
+-- Users can INSERT extraction_jobs for businesses they own
+CREATE POLICY "Users can create extraction jobs for their businesses"
+  ON extraction_jobs
+  FOR INSERT
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM businesses
+      WHERE businesses.id = extraction_jobs.business_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  );
+
+-- Users can UPDATE extraction_jobs for businesses they own
+CREATE POLICY "Users can update extraction jobs for their businesses"
+  ON extraction_jobs
+  FOR UPDATE
+  USING (
+    EXISTS (
+      SELECT 1 FROM businesses
+      WHERE businesses.id = extraction_jobs.business_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM businesses
+      WHERE businesses.id = extraction_jobs.business_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  );
+
+-- Users can DELETE extraction_jobs from their businesses
+CREATE POLICY "Users can delete extraction jobs from their businesses"
+  ON extraction_jobs
+  FOR DELETE
+  USING (
+    EXISTS (
+      SELECT 1 FROM businesses
+      WHERE businesses.id = extraction_jobs.business_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  );
+
+-- ============================================================================
+-- DATASET_SNAPSHOTS POLICIES
+-- ============================================================================
+
+-- Users can SELECT their own dataset snapshots
+-- user_id is UUID, compare directly with auth.uid()
+CREATE POLICY "Users can view their own dataset snapshots"
+  ON dataset_snapshots
+  FOR SELECT
+  USING (user_id = auth.uid());
+
+-- Users can INSERT their own dataset snapshots
+CREATE POLICY "Users can create their own dataset snapshots"
+  ON dataset_snapshots
+  FOR INSERT
+  WITH CHECK (user_id = auth.uid());
+
+-- Users can UPDATE their own dataset snapshots
+CREATE POLICY "Users can update their own dataset snapshots"
+  ON dataset_snapshots
+  FOR UPDATE
+  USING (user_id = auth.uid())
+  WITH CHECK (user_id = auth.uid());
+
+-- Users can DELETE their own dataset snapshots
+CREATE POLICY "Users can delete their own dataset snapshots"
+  ON dataset_snapshots
+  FOR DELETE
+  USING (user_id = auth.uid());
+
+-- ============================================================================
+-- WEBSITES POLICIES
+-- ============================================================================
+
+-- Users can SELECT websites for businesses they own
+-- Check through business_id -> businesses.owner_user_id
+CREATE POLICY "Users can view websites for their businesses"
+  ON websites
+  FOR SELECT
+  USING (
+    websites.business_id IS NULL OR
+    EXISTS (
+      SELECT 1 FROM businesses
+      WHERE businesses.id = websites.business_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  );
+
+-- Users can INSERT websites for businesses they own
+CREATE POLICY "Users can create websites for their businesses"
+  ON websites
+  FOR INSERT
+  WITH CHECK (
+    websites.business_id IS NULL OR
+    EXISTS (
+      SELECT 1 FROM businesses
+      WHERE businesses.id = websites.business_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  );
+
+-- Users can UPDATE websites for businesses they own
+CREATE POLICY "Users can update websites for their businesses"
+  ON websites
+  FOR UPDATE
+  USING (
+    websites.business_id IS NULL OR
+    EXISTS (
+      SELECT 1 FROM businesses
+      WHERE businesses.id = websites.business_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  )
+  WITH CHECK (
+    websites.business_id IS NULL OR
+    EXISTS (
+      SELECT 1 FROM businesses
+      WHERE businesses.id = websites.business_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  );
+
+-- Users can DELETE websites from their businesses
+CREATE POLICY "Users can delete websites from their businesses"
+  ON websites
+  FOR DELETE
+  USING (
+    websites.business_id IS NULL OR
+    EXISTS (
+      SELECT 1 FROM businesses
+      WHERE businesses.id = websites.business_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  );
+
+-- ============================================================================
+-- CRAWL_JOBS POLICIES
+-- ============================================================================
+
+-- Users can SELECT crawl_jobs for websites they own
+-- Check through website_id -> websites.business_id -> businesses.owner_user_id
+CREATE POLICY "Users can view crawl jobs for their websites"
+  ON crawl_jobs
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM websites
+      JOIN businesses ON businesses.id = websites.business_id
+      WHERE websites.id = crawl_jobs.website_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  );
+
+-- Users can INSERT crawl_jobs for websites they own
+CREATE POLICY "Users can create crawl jobs for their websites"
+  ON crawl_jobs
+  FOR INSERT
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM websites
+      JOIN businesses ON businesses.id = websites.business_id
+      WHERE websites.id = crawl_jobs.website_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  );
+
+-- Users can UPDATE crawl_jobs for websites they own
+CREATE POLICY "Users can update crawl jobs for their websites"
+  ON crawl_jobs
+  FOR UPDATE
+  USING (
+    EXISTS (
+      SELECT 1 FROM websites
+      JOIN businesses ON businesses.id = websites.business_id
+      WHERE websites.id = crawl_jobs.website_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM websites
+      JOIN businesses ON businesses.id = websites.business_id
+      WHERE websites.id = crawl_jobs.website_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  );
+
+-- Users can DELETE crawl_jobs from their websites
+CREATE POLICY "Users can delete crawl jobs from their websites"
+  ON crawl_jobs
+  FOR DELETE
+  USING (
+    EXISTS (
+      SELECT 1 FROM websites
+      JOIN businesses ON businesses.id = websites.business_id
+      WHERE websites.id = crawl_jobs.website_id
+        AND businesses.owner_user_id = auth.uid()::text
+    )
+  );
 
 -- ============================================================================
 -- DENY ANON ACCESS (DEFAULT BEHAVIOR)

@@ -172,6 +172,12 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       }
     }
 
+    // Mark discovery_run as started (execution truly begins now, before creating extraction_jobs)
+    await updateDiscoveryRun(discoveryRun.id, {
+      started_at: new Date()
+    });
+    console.log(`[runDiscoveryJob] Marked discovery_run as started: ${discoveryRun.id}`);
+
     // Run discovery (this creates businesses and websites)
     // If gated, discovery will still run but we'll mark it in the result
     const discoveryResult = await discoverBusinesses({
@@ -191,22 +197,25 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     }
 
     // Check if any extraction jobs were created for this discovery_run
-    // If no extraction jobs exist, mark discovery_run as completed immediately
+    // If no extraction jobs exist, mark discovery_run as failed (not completed - this is an error condition)
     const { getExtractionJobsByDiscoveryRunId } = await import('../db/extractionJobs.js');
     const extractionJobs = await getExtractionJobsByDiscoveryRunId(discoveryRun.id);
     
     if (extractionJobs.length === 0) {
-      // No extraction jobs created (all businesses were updates, not new)
-      // Mark discovery_run as completed immediately
+      // No extraction jobs created - this is a failure condition
+      // Discovery should create extraction jobs for new businesses
       await updateDiscoveryRun(discoveryRun.id, {
-        status: 'completed',
+        status: 'failed',
         completed_at: new Date(),
-        error_message: null
+        error_message: 'No extraction jobs were created during discovery. This may indicate no new businesses were found or an error occurred.'
       });
-      console.log(`[runDiscoveryJob] No extraction jobs created, marked discovery_run as completed: ${discoveryRun.id}`);
+      console.log(`[runDiscoveryJob] No extraction jobs created, marked discovery_run as failed: ${discoveryRun.id}`);
     } else {
       // Extraction jobs exist - they will mark discovery_run as completed when they finish
       console.log(`[runDiscoveryJob] Created ${extractionJobs.length} extraction jobs for discovery_run: ${discoveryRun.id}`);
+      
+      // Note: Extraction jobs will mark discovery_run as completed when they finish
+      // The completion logic in extractWorker.ts handles this
     }
 
     // Get count of websites created
@@ -286,13 +295,16 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     errors.push(`Discovery job failed: ${errorMsg}`);
     
     // Mark discovery_run as failed if it was created
+    // Ensure it always ends in completed or failed, never stuck in running
     try {
       if (typeof discoveryRun !== 'undefined') {
         await updateDiscoveryRun(discoveryRun.id, {
           status: 'failed',
           completed_at: new Date(),
-          error_message: errorMsg
+          error_message: errorMsg,
+          started_at: discoveryRun.started_at || new Date() // Set started_at if not already set
         });
+        console.log(`[runDiscoveryJob] Marked discovery_run as failed due to error: ${discoveryRun.id}`);
       }
     } catch (updateError) {
       console.error('[runDiscoveryJob] Failed to update discovery_run status:', updateError);
