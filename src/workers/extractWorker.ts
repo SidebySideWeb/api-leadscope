@@ -131,9 +131,10 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
               // This requires business_id to be passed, but contact_sources table links contact_id to business_id
               // Let's check if we need to pass business_id
               // Create contact_source with business_id if available
+              // Convert business.id to string (UUID) to match contact_sources.business_id type
               await createContactSource({
                 contact_id: contactRecord.id,
-                business_id: job.business_id, // Link contact to business directly
+                business_id: business.id.toString(), // Convert to string (UUID) - businesses.id is UUID in DB
                 source_url: item.sourceUrl,
                 page_type: inferPageType(item.sourceUrl, `https://${business.name}`),
                 html_hash: page.hash
@@ -225,9 +226,10 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
               console.log(`[processExtractionJob] Contact created/found with id: ${phoneContact.id}, now creating contact_source...`);
               
               // Link contact to business via source with business_id
+              // Convert business.id to string (UUID) to match contact_sources.business_id type
               await createContactSource({
                 contact_id: phoneContact.id,
-                business_id: job.business_id, // Link contact to business directly
+                business_id: business.id.toString(), // Convert to string (UUID) - businesses.id is UUID in DB
                 source_url: `https://maps.google.com/?cid=${business.google_place_id}`,
                 page_type: 'homepage',
                 html_hash: ''
