@@ -66,26 +66,36 @@ pool.on('remove', (client) => {
 export async function testConnection(): Promise<boolean> {
   try {
     console.log('[DATABASE] Testing database connection...');
-    const result = await pool.query('SELECT NOW(), current_user, current_database()');
+    const result = await pool.query<{
+      now: Date;
+      current_user: string;
+      current_database: string;
+    }>('SELECT NOW() as now, current_user, current_database() as current_database');
+    
     console.log('[DATABASE] Connection successful:', {
       timestamp: result.rows[0].now,
       user: result.rows[0].current_user,
-      database: result.rows[0].current_database()
+      database: result.rows[0].current_database
     });
     
     // Test RLS is enabled on key tables
-    const rlsCheck = await pool.query(`
-      SELECT tablename, rowsecurity 
-      FROM pg_tables 
-      WHERE schemaname = 'public' 
-      AND tablename IN ('contacts', 'contact_sources', 'websites', 'businesses', 'extraction_jobs')
-      ORDER BY tablename
-    `);
-    
-    console.log('[DATABASE] RLS Status on key tables:');
-    rlsCheck.rows.forEach(row => {
-      console.log(`[DATABASE]   ${row.tablename}: RLS ${row.rowsecurity ? 'ENABLED' : 'DISABLED'}`);
-    });
+    try {
+      const rlsCheck = await pool.query<{ tablename: string; rowsecurity: boolean }>(`
+        SELECT tablename, rowsecurity 
+        FROM pg_tables 
+        WHERE schemaname = 'public' 
+        AND tablename IN ('contacts', 'contact_sources', 'websites', 'businesses', 'extraction_jobs')
+        ORDER BY tablename
+      `);
+      
+      console.log('[DATABASE] RLS Status on key tables:');
+      rlsCheck.rows.forEach(row => {
+        console.log(`[DATABASE]   ${row.tablename}: RLS ${row.rowsecurity ? 'ENABLED' : 'DISABLED'}`);
+      });
+    } catch (rlsError: any) {
+      // RLS check is optional - don't fail connection test if it fails
+      console.log('[DATABASE] Could not check RLS status (non-critical):', rlsError.message);
+    }
     
     return true;
   } catch (error: any) {
