@@ -41,11 +41,12 @@ export const pool = new Pool({
 
 // Add error handlers for connection pool
 pool.on('error', (err, client) => {
+  const pgError = err as any; // PostgreSQL errors have additional properties
   console.error('[DATABASE] Unexpected error on idle client:', {
-    error_code: err.code,
+    error_code: pgError.code,
     error_message: err.message,
-    error_detail: (err as any).detail,
-    error_hint: (err as any).hint,
+    error_detail: pgError.detail,
+    error_hint: pgError.hint,
     stack: err.stack
   });
 });
