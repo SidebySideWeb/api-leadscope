@@ -120,7 +120,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
  * GET /exports/:id/download
  * Download an export file
  */
-router.get('/:id/download', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/:id/download', authMiddleware, async (req: AuthRequest, res): Promise<void> => {
   try {
     const userId = req.userId!;
     const exportId = req.params.id;
@@ -137,14 +137,16 @@ router.get('/:id/download', authMiddleware, async (req: AuthRequest, res) => {
     );
 
     if (exportResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Export not found' });
+      res.status(404).json({ error: 'Export not found' });
+      return;
     }
 
     const exportRow = exportResult.rows[0];
     
     // Check if file exists
     if (!exportRow.file_path || !fs.existsSync(exportRow.file_path)) {
-      return res.status(404).json({ error: 'Export file not found' });
+      res.status(404).json({ error: 'Export file not found' });
+      return;
     }
 
     // Set appropriate headers
@@ -155,9 +157,19 @@ router.get('/:id/download', authMiddleware, async (req: AuthRequest, res) => {
     // Stream the file
     const fileStream = fs.createReadStream(exportRow.file_path);
     fileStream.pipe(res);
+    
+    // Handle stream errors
+    fileStream.on('error', (error) => {
+      console.error('[API] File stream error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to stream export file' });
+      }
+    });
   } catch (error: any) {
     console.error('[API] Error downloading export:', error);
-    res.status(500).json({ error: 'Failed to download export' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to download export' });
+    }
   }
 });
 
