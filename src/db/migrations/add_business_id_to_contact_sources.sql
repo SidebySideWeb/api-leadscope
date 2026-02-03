@@ -3,8 +3,9 @@
 -- Date: 2025-01-XX
 
 -- Add business_id column (nullable, as existing records may not have it)
+-- Note: businesses.id is UUID, so business_id must also be UUID
 ALTER TABLE contact_sources 
-ADD COLUMN IF NOT EXISTS business_id INTEGER;
+ADD COLUMN IF NOT EXISTS business_id UUID;
 
 -- Add foreign key constraint to businesses table
 ALTER TABLE contact_sources

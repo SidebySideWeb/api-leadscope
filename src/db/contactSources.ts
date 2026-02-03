@@ -6,7 +6,7 @@ export async function createContactSource(data: {
   source_url: string;
   page_type: 'homepage' | 'contact' | 'about' | 'company' | 'footer';
   html_hash: string;
-  business_id?: number | null;
+  business_id?: string | null; // UUID - must match businesses.id type
 }): Promise<ContactSource> {
   try {
     console.log(`[createContactSource] Attempting to create contact_source:`, {

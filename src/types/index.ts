@@ -65,6 +65,7 @@ export interface Contact {
 export interface ContactSource {
   id: number;
   contact_id: number;
+  business_id: string | null; // UUID - links to businesses.id
   source_url: string;
   page_type: 'homepage' | 'contact' | 'about' | 'company' | 'footer';
   found_at: Date;
