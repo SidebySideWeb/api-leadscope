@@ -105,6 +105,12 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
                 foundEmailFromPages = true;
               }
 
+              console.log(`[processExtractionJob] Creating contact for business ${job.business_id}:`, {
+                type: contactType,
+                value: item.type === 'email' ? `${item.value.substring(0, 10)}...` : `${item.value.substring(0, 5)}...`,
+                source_url: item.sourceUrl.substring(0, 50) + '...'
+              });
+
               const contactRecord = await getOrCreateContact({
                 email: item.type === 'email' ? item.value : undefined,
                 phone: item.type === 'phone' ? item.value : undefined,
@@ -119,17 +125,38 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
                   : false
               });
 
+              console.log(`[processExtractionJob] Contact created/found with id: ${contactRecord.id}, now creating contact_source...`);
+
+              // CRITICAL: Link contact to business via contact_sources
+              // This requires business_id to be passed, but contact_sources table links contact_id to business_id
+              // Let's check if we need to pass business_id
+              // Create contact_source with business_id if available
               await createContactSource({
                 contact_id: contactRecord.id,
+                business_id: job.business_id, // Link contact to business directly
                 source_url: item.sourceUrl,
                 page_type: inferPageType(item.sourceUrl, `https://${business.name}`),
                 html_hash: page.hash
               });
-            } catch (error) {
+
+              console.log(`[processExtractionJob] Successfully persisted ${contactType} contact for business ${job.business_id}`);
+            } catch (error: any) {
               console.error(
-                `Error persisting contact for business ${job.business_id}:`,
-                error
+                `[processExtractionJob] CRITICAL ERROR persisting contact for business ${job.business_id}:`,
+                {
+                  error_code: error.code,
+                  error_message: error.message,
+                  error_detail: error.detail,
+                  error_hint: error.hint,
+                  error_constraint: error.constraint,
+                  contact_type: item.type,
+                  contact_value: item.type === 'email' ? `${item.value.substring(0, 10)}...` : `${item.value.substring(0, 5)}...`,
+                  source_url: item.sourceUrl,
+                  stack: error.stack
+                }
               );
+              
+              // Don't throw - continue processing other contacts
             }
           }
 
@@ -167,33 +194,57 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
           // Create/update website if missing and Place Details has website
           if (!foundWebsiteFromPages && placeDetails.website) {
             try {
+              console.log(`[processExtractionJob] Creating website from Place Details for business ${business.id}: ${placeDetails.website}`);
               await getOrCreateWebsite(business.id, placeDetails.website);
-              console.log(`[processExtractionJob] Created website from Place Details: ${placeDetails.website}`);
-            } catch (error) {
-              console.error(`[processExtractionJob] Error creating website from Place Details:`, error);
+              console.log(`[processExtractionJob] Successfully created website from Place Details: ${placeDetails.website}`);
+            } catch (error: any) {
+              console.error(`[processExtractionJob] CRITICAL ERROR creating website from Place Details:`, {
+                error_code: error.code,
+                error_message: error.message,
+                error_detail: error.detail,
+                error_hint: error.hint,
+                error_constraint: error.constraint,
+                business_id: business.id,
+                website_url: placeDetails.website,
+                stack: error.stack
+              });
             }
           }
 
           // Create phone contact if missing and Place Details has phone
           if (!foundPhoneFromPages && placeDetails.international_phone_number) {
             try {
+              console.log(`[processExtractionJob] Creating phone contact from Place Details for business ${business.id}: ${placeDetails.international_phone_number}`);
+              
               const phoneContact = await getOrCreateContact({
                 phone: placeDetails.international_phone_number,
                 contact_type: 'phone',
                 is_generic: false
               });
               
-              // Link contact to business via source
+              console.log(`[processExtractionJob] Contact created/found with id: ${phoneContact.id}, now creating contact_source...`);
+              
+              // Link contact to business via source with business_id
               await createContactSource({
                 contact_id: phoneContact.id,
+                business_id: job.business_id, // Link contact to business directly
                 source_url: `https://maps.google.com/?cid=${business.google_place_id}`,
                 page_type: 'homepage',
                 html_hash: ''
               });
               
-              console.log(`[processExtractionJob] Created phone contact from Place Details: ${placeDetails.international_phone_number}`);
-            } catch (error) {
-              console.error(`[processExtractionJob] Error creating phone contact from Place Details:`, error);
+              console.log(`[processExtractionJob] Successfully created phone contact from Place Details: ${placeDetails.international_phone_number}`);
+            } catch (error: any) {
+              console.error(`[processExtractionJob] CRITICAL ERROR creating phone contact from Place Details:`, {
+                error_code: error.code,
+                error_message: error.message,
+                error_detail: error.detail,
+                error_hint: error.hint,
+                error_constraint: error.constraint,
+                business_id: business.id,
+                phone: placeDetails.international_phone_number,
+                stack: error.stack
+              });
             }
           }
         }
