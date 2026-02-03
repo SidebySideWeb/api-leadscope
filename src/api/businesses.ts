@@ -222,7 +222,20 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 router.get('/dataset/:datasetId/contacts', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.userId!;
-    const datasetId = req.params.datasetId;
+    const datasetId = Array.isArray(req.params.datasetId) ? req.params.datasetId[0] : req.params.datasetId;
+
+    if (!datasetId) {
+      return res.status(400).json({
+        data: [],
+        meta: {
+          plan_id: 'demo',
+          gated: false,
+          total_available: 0,
+          total_returned: 0,
+          gate_reason: 'datasetId is required',
+        },
+      });
+    }
 
     // Verify dataset ownership
     const ownsDataset = await verifyDatasetOwnership(datasetId, userId);

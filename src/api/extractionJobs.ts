@@ -414,7 +414,7 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       }
 
       // Get businesses without extraction jobs
-      const businessesResult = await pool.query<{ id: string }>(
+      const businessesResult = await pool.query<{ id: number }>(
         `SELECT b.id
          FROM businesses b
          LEFT JOIN extraction_jobs ej ON ej.business_id = b.id
@@ -428,7 +428,7 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
         const job = await createExtractionJob(business.id);
         createdJobs.push({
           id: job.id,
-          business_id: job.business_id,
+          business_id: job.business_id.toString(),
           status: job.status,
         });
       }
