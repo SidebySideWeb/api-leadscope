@@ -51,9 +51,42 @@ app.use('/refresh', refreshRoutes);
 // Extraction jobs routes (requires authentication)
 app.use('/extraction-jobs', extractionJobsRoutes);
 
-// Health endpoint
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'leadscop-backend' });
+// Health endpoint - enhanced for diagnostics
+app.get('/health', async (req, res) => {
+  try {
+    const { testConnection } = await import('./config/database.js');
+    const dbConnected = await testConnection();
+    
+    res.json({ 
+      status: dbConnected ? 'ok' : 'degraded',
+      service: 'leadscop-backend',
+      database: dbConnected ? 'connected' : 'disconnected',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      port: process.env.PORT || '3000',
+      node_version: process.version
+    });
+  } catch (error: any) {
+    res.status(503).json({ 
+      status: 'error',
+      service: 'leadscop-backend',
+      database: 'error',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Root endpoint for basic connectivity test
+app.get('/', (req, res) => {
+  res.json({ 
+    service: 'leadscop-backend',
+    status: 'running',
+    endpoints: {
+      health: '/health',
+      api: '/api'
+    }
+  });
 });
 
 export default app;
