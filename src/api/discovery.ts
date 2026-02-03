@@ -222,21 +222,29 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       );
       websites = websitesResult.rows;
 
-      // Get contacts (email and phone)
+      // Get contacts (email and phone) - use business_id if available, otherwise fallback to website join
       const contactsResult = await pool.query<{
         business_id: number;
         email: string | null;
         phone: string | null;
       }>(
-        `SELECT DISTINCT ON (cs.business_id, c.contact_type)
-           cs.business_id,
+        `SELECT DISTINCT ON (COALESCE(cs.business_id, w.business_id), c.contact_type)
+           COALESCE(cs.business_id, w.business_id) as business_id,
            CASE WHEN c.contact_type = 'email' THEN c.email ELSE NULL END as email,
            CASE WHEN c.contact_type = 'phone' THEN COALESCE(c.phone, c.mobile) ELSE NULL END as phone
          FROM contacts c
          JOIN contact_sources cs ON cs.contact_id = c.id
-         WHERE cs.business_id = ANY($1)
+         LEFT JOIN websites w ON (
+           cs.business_id IS NULL 
+           AND (
+             cs.source_url LIKE '%' || REPLACE(REPLACE(w.url, 'https://', ''), 'http://', '') || '%'
+             OR cs.source_url = w.url
+             OR cs.source_url LIKE w.url || '%'
+           )
+         )
+         WHERE (cs.business_id = ANY($1) OR w.business_id = ANY($1))
            AND (c.email IS NOT NULL OR c.phone IS NOT NULL OR c.mobile IS NOT NULL)
-         ORDER BY cs.business_id, c.contact_type, cs.found_at ASC`,
+         ORDER BY COALESCE(cs.business_id, w.business_id), c.contact_type, cs.found_at ASC`,
         [businessIds]
       );
 

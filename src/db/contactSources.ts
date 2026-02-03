@@ -17,29 +17,14 @@ export async function createContactSource(data: {
       html_hash: data.html_hash.substring(0, 10) + '...'
     });
 
-    // Try with business_id first, fallback to without if column doesn't exist
-    let result;
-    try {
-      result = await pool.query<ContactSource>(
-        `INSERT INTO contact_sources (contact_id, business_id, source_url, page_type, html_hash, found_at)
-         VALUES ($1, $2, $3, $4, $5, NOW())
-         RETURNING *`,
-        [data.contact_id, data.business_id || null, data.source_url, data.page_type, data.html_hash]
-      );
-    } catch (error: any) {
-      // If business_id column doesn't exist, try without it
-      if (error.code === '42703') {
-        console.log(`[createContactSource] business_id column doesn't exist, inserting without it`);
-        result = await pool.query<ContactSource>(
-          `INSERT INTO contact_sources (contact_id, source_url, page_type, html_hash, found_at)
-           VALUES ($1, $2, $3, $4, NOW())
-           RETURNING *`,
-          [data.contact_id, data.source_url, data.page_type, data.html_hash]
-        );
-      } else {
-        throw error;
-      }
-    }
+    // Always try to insert with business_id - migration should add this column
+    // If column doesn't exist yet, the migration needs to be run first
+    const result = await pool.query<ContactSource>(
+      `INSERT INTO contact_sources (contact_id, business_id, source_url, page_type, html_hash, found_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       RETURNING *`,
+      [data.contact_id, data.business_id || null, data.source_url, data.page_type, data.html_hash]
+    );
 
     if (result.rows.length === 0) {
       throw new Error('INSERT returned no rows');
