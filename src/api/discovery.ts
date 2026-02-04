@@ -31,9 +31,26 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     const userId = req.userId;
     console.log('[discovery] user:', req.user.id);
     
+    // CRITICAL DEBUG: Log all body keys to see what was sent
+    console.log('[discovery] req.body keys:', Object.keys(req.body || {}));
+    console.log('[discovery] req.body values:', req.body);
+    
     // CRITICAL: Accept snake_case payload only (industry_id, city_id, dataset_id)
     // Do NOT accept camelCase silently
     const { industry_id, city_id, dataset_id } = req.body;
+    
+    // Check for camelCase (common mistake)
+    const hasCamelCase = req.body.industryId || req.body.cityId || req.body.datasetId;
+    if (hasCamelCase) {
+      const camelCaseFields = [];
+      if (req.body.industryId) camelCaseFields.push('industryId');
+      if (req.body.cityId) camelCaseFields.push('cityId');
+      if (req.body.datasetId) camelCaseFields.push('datasetId');
+      const errorMsg = `Invalid discovery request: received camelCase fields (${camelCaseFields.join(', ')}). Expected snake_case: industry_id, city_id, dataset_id`;
+      console.error('[API] Validation failed:', errorMsg);
+      console.error('[API] Received body:', JSON.stringify(req.body, null, 2));
+      throw new Error(errorMsg);
+    }
     
     console.log('[discovery] payload:', { industry_id, city_id, dataset_id });
     
@@ -44,8 +61,9 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       if (!city_id) missing.push('city_id');
       if (!dataset_id) missing.push('dataset_id');
       
-      const errorMsg = `Invalid discovery request: missing required fields: ${missing.join(', ')}. Expected snake_case: industry_id, city_id, dataset_id`;
+      const errorMsg = `Invalid discovery request: missing required fields: ${missing.join(', ')}. Expected snake_case: industry_id, city_id, dataset_id. Received body keys: ${Object.keys(req.body || {}).join(', ') || 'none'}`;
       console.error('[API] Validation failed:', errorMsg);
+      console.error('[API] Full req.body:', JSON.stringify(req.body, null, 2));
       throw new Error(errorMsg);
     }
 
