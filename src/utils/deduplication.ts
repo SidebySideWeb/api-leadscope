@@ -1,39 +1,7 @@
 // Deduplication utilities
 
-/**
- * Normalizes business name for deduplication
- * Uses deterministic normalization strategy:
- * - lowercase
- * - remove accents (Unicode NFD decomposition + remove combining marks)
- * - remove symbols
- * - replace spaces with hyphens
- * 
- * CRITICAL: Missing normalized_name causes silent rollbacks because
- * businesses.normalized_name column is NOT NULL.
- * 
- * @throws Error if normalization results in empty string
- */
-export function normalizeBusinessName(name: string): string {
-  if (!name || typeof name !== 'string') {
-    throw new Error('Business name is required and must be a non-empty string');
-  }
-
-  // Deterministic normalization strategy
-  let normalized = name
-    .toLowerCase()
-    .normalize('NFD') // Decompose Unicode characters (é -> e + ́)
-    .replace(/[\u0300-\u036f]/g, '') // Remove combining diacritical marks (accents)
-    .replace(/[^a-z0-9\s]/g, '') // Remove symbols, keep only letters, numbers, spaces
-    .trim()
-    .replace(/\s+/g, '-'); // Replace spaces with hyphens
-
-  // Validate: normalized name must not be empty
-  if (!normalized || normalized.length === 0) {
-    throw new Error(`Business name "${name}" normalizes to empty string, which is not allowed`);
-  }
-
-  return normalized;
-}
+// Re-export normalizeBusinessName from the single source of truth
+export { normalizeBusinessName } from './normalizeBusinessName.js';
 
 /**
  * Checks if two businesses are duplicates

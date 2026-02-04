@@ -336,9 +336,14 @@ export async function discoverBusinesses(
         
         businessesInserted++;
       } catch (error) {
+        // CRITICAL: Fail fast on insert/upsert errors - do not swallow database errors
+        // Discovery that inserts 0 rows is a failure, not success
         const errorMsg = error instanceof Error ? error.message : String(error);
-        result.errors.push(`Error processing place ${place.place_id || place.name}: ${errorMsg}`);
+        console.error('[discoverBusinesses] FATAL insert error', error);
         console.error(`[discoverBusinesses] Error processing place ${place.place_id || place.name}:`, error);
+        result.errors.push(`FATAL: Error processing place ${place.place_id || place.name}: ${errorMsg}`);
+        // Re-throw to fail fast - do not continue loop after fatal insert failure
+        throw error;
       }
     }
 

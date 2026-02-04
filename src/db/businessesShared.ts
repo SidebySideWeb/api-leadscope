@@ -8,7 +8,7 @@
 
 import { pool } from '../config/database.js';
 import type { Business } from '../types/index.js';
-import { computeNormalizedBusinessId } from '../utils/normalize.js';
+import { normalizeBusinessName } from '../utils/normalizeBusinessName.js';
 
 /**
  * Get business by Google Place ID (global lookup, not per-dataset)
@@ -42,6 +42,7 @@ export async function getBusinessByGooglePlaceIdGlobal(
  */
 export async function upsertBusinessGlobal(data: {
   name: string;
+  normalized_name?: string; // Optional - will be generated from name if missing
   address: string | null;
   postal_code: string | null;
   city_id: string; // UUID - REQUIRED (NOT NULL)
@@ -71,13 +72,21 @@ export async function upsertBusinessGlobal(data: {
   }
 
   // CRITICAL: normalized_name is NOT NULL in database - missing this causes silent rollbacks
-  // Always generate normalized_name from business name using deterministic normalization
-  const normalized_name = computeNormalizedBusinessId({
-    name: data.name,
-    googlePlaceId: data.google_place_id
-  });
+  // If normalized_name is provided → trust it
+  // If missing → generate it internally using name
+  // If both missing → throw a hard error
+  let normalized_name: string;
+  if (data.normalized_name) {
+    // Trust provided normalized_name
+    normalized_name = data.normalized_name;
+  } else {
+    if (!data.name) {
+      throw new Error('Cannot generate normalized_name without name');
+    }
+    normalized_name = normalizeBusinessName(data.name);
+  }
   
-  // Ensure normalized_name is never empty (fallback to google_place_id if normalization fails)
+  // Ensure normalized_name is never empty
   if (!normalized_name || normalized_name.trim().length === 0) {
     throw new Error(`Failed to generate normalized_name for business "${data.name}" - this will cause silent insert failures`);
   }

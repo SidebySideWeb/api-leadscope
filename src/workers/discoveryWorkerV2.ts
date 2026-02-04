@@ -306,6 +306,10 @@ export async function discoverBusinessesV2(
     console.log(`[discoverBusinessesV2] Total search tasks: ${limitedSearchTasks.length} (${gridPoints.length} points × ${industry.discovery_keywords.length} keywords, limited to ${maxSearches})`);
 
     // STEP 3: Execute searches with stop conditions
+    console.log(`[discoverBusinessesV2] ===== STARTING GOOGLE PLACES SEARCHES =====`);
+    console.log(`[discoverBusinessesV2] Total search tasks: ${limitedSearchTasks.length}`);
+    console.log(`[discoverBusinessesV2] Batch size: ${discoveryConfig.concurrency}`);
+    
     const allPlaces: GooglePlaceResult[] = [];
     const seenPlaceIds = new Set<string>();
     let consecutiveLowYieldBatches = 0;
@@ -418,7 +422,15 @@ export async function discoverBusinessesV2(
     }
 
     // CRITICAL DEBUG: Log before final deduplication
-    console.log(`[discoverBusinessesV2] BEFORE FINAL DEDUP: ${allPlaces.length} total places collected`);
+    console.log(`[discoverBusinessesV2] ===== BEFORE FINAL DEDUP =====`);
+    console.log(`[discoverBusinessesV2] Total places collected from Google: ${allPlaces.length}`);
+    if (allPlaces.length === 0) {
+      console.error(`[discoverBusinessesV2] ⚠️⚠️⚠️ ZERO PLACES FROM GOOGLE PLACES API ⚠️⚠️⚠️`);
+      console.error(`[discoverBusinessesV2] This means Google Places API returned no results`);
+      console.error(`[discoverBusinessesV2] Check: API key, search queries, location, radius`);
+    } else {
+      console.log(`[discoverBusinessesV2] Sample place IDs: ${allPlaces.slice(0, 5).map(p => p.place_id || 'NO_ID').join(', ')}`);
+    }
 
     // STEP 4: Final deduplication
     console.log(`[discoverBusinessesV2] Deduplicating ${allPlaces.length} places...`);
@@ -427,8 +439,14 @@ export async function discoverBusinessesV2(
     result.businessesFound = uniquePlaces.length;
     
     // CRITICAL DEBUG: Log after deduplication
-    console.log(`[discoverBusinessesV2] AFTER FINAL DEDUP: ${uniquePlaces.length} unique places`);
-    console.log(`[discoverBusinessesV2] DEDUP DROPPED: ${allPlaces.length - uniquePlaces.length} duplicate places`);
+    console.log(`[discoverBusinessesV2] ===== AFTER FINAL DEDUP =====`);
+    console.log(`[discoverBusinessesV2] Unique places: ${uniquePlaces.length}`);
+    console.log(`[discoverBusinessesV2] Duplicates dropped: ${allPlaces.length - uniquePlaces.length}`);
+    
+    if (uniquePlaces.length === 0) {
+      console.error(`[discoverBusinessesV2] ⚠️⚠️⚠️ ZERO UNIQUE PLACES AFTER DEDUP ⚠️⚠️⚠️`);
+      console.error(`[discoverBusinessesV2] This means all places were duplicates or invalid`);
+    }
 
     // Calculate coverage score
     result.coverageScore = result.gridPointsGenerated > 0
@@ -493,6 +511,11 @@ export async function discoverBusinessesV2(
       count: uniquePlaces.length,
       sample: uniquePlaces[0],
     });
+    
+    if (uniquePlaces.length === 0) {
+      console.error(`[discoverBusinessesV2] ⚠️⚠️⚠️ CANNOT INSERT - ZERO PLACES ⚠️⚠️⚠️`);
+      console.error(`[discoverBusinessesV2] No businesses to insert. Check Google Places API results above.`);
+    }
     
     let businessesInserted = 0;
     let businessesSkipped = 0;
@@ -562,9 +585,14 @@ export async function discoverBusinessesV2(
         await linkBusinessToDataset(business.id, dataset.id, dataset.user_id);
 
       } catch (error) {
+        // CRITICAL: Fail fast on insert/upsert errors - do not swallow database errors
+        // Discovery that inserts 0 rows is a failure, not success
         const errorMsg = error instanceof Error ? error.message : String(error);
-        result.errors.push(`Error processing place ${place.place_id || place.name}: ${errorMsg}`);
+        console.error('[discoverBusinessesV2] FATAL insert error', error);
         console.error(`[discoverBusinessesV2] Error processing place ${place.place_id || place.name}:`, error);
+        result.errors.push(`FATAL: Error processing place ${place.place_id || place.name}: ${errorMsg}`);
+        // Re-throw to fail fast - do not continue loop after fatal insert failure
+        throw error;
       }
     }
 

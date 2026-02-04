@@ -1,4 +1,4 @@
-import { normalizeBusinessName } from './deduplication.js';
+import { normalizeBusinessName } from './normalizeBusinessName.js';
 
 export interface BusinessIdentifierInput {
   name: string | null | undefined;
