@@ -79,7 +79,7 @@ async function queryDatasetContacts(
     JOIN industries i ON b.industry_id = i.id
     JOIN cities c ON b.city_id = c.id
     LEFT JOIN websites w ON w.business_id = b.id
-    LEFT JOIN contact_sources cs ON cs.source_url IS NOT NULL
+    LEFT JOIN contact_sources cs ON cs.business_id = b.id
     LEFT JOIN contacts ct ON ct.id = cs.contact_id
     WHERE b.dataset_id = $1
     ORDER BY b.name ASC, ct.last_verified_at DESC NULLS LAST
