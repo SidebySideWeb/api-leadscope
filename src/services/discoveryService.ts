@@ -78,10 +78,13 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         };
       }
 
+      // Resolve dataset - prefer IDs, fallback to names (must exist, won't create)
       const resolverResult = await resolveDataset({
         userId: input.userId,
-        cityName: input.city,
-        industryName: input.industry,
+        cityId: input.city_id, // Use city ID if available
+        cityName: input.city_id ? undefined : input.city, // Only use city name if city_id not provided
+        industryId: input.industry_id, // Use industry ID if available
+        industryName: input.industry_id ? undefined : input.industry, // Only use industry name if industry_id not provided
       });
 
       datasetId = resolverResult.dataset.id;

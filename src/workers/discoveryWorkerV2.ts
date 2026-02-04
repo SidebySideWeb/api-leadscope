@@ -12,8 +12,8 @@
 import type { DiscoveryInput, City } from '../types/index.js';
 import { googleMapsService } from '../services/googleMaps.js';
 import { getCountryByCode } from '../db/countries.js';
-import { getOrCreateIndustry, getIndustryById } from '../db/industries.js';
-import { getOrCreateCity, getCityByNormalizedName, updateCityCoordinates, getCityById } from '../db/cities.js';
+import { getIndustryByName, getIndustryById } from '../db/industries.js';
+import { getCityByNormalizedName, updateCityCoordinates, getCityById } from '../db/cities.js';
 import { getBusinessesWithCompleteData } from '../db/businesses.js';
 import { upsertBusinessGlobal, linkBusinessToDataset, getBusinessByGooglePlaceIdGlobal } from '../db/businessesShared.js';
 import { getDatasetById } from '../db/datasets.js';
@@ -179,7 +179,7 @@ export async function discoverBusinessesV2(
       throw new Error(`Country ${GREECE_COUNTRY_CODE} not found in database`);
     }
 
-    // Resolve industry
+    // Resolve industry - must exist, won't create
     let industry;
     if (input.industry_id) {
       industry = await getIndustryById(input.industry_id);
@@ -187,7 +187,11 @@ export async function discoverBusinessesV2(
         throw new Error(`Industry ${input.industry_id} not found`);
       }
     } else if (input.industry) {
-      industry = await getOrCreateIndustry(input.industry);
+      // Legacy support: look up industry by name, but don't create if not found
+      industry = await getIndustryByName(input.industry);
+      if (!industry) {
+        throw new Error(`Industry "${input.industry}" not found. Please use an existing industry ID instead.`);
+      }
     } else {
       throw new Error('Either industry_id or industry name is required');
     }
@@ -215,16 +219,23 @@ export async function discoverBusinessesV2(
       resolvedLongitude = city.longitude || undefined;
       resolvedRadiusKm = city.radius_km || undefined;
     } else if (input.city) {
+      // Legacy support: look up city by name, but don't create if not found
       const { normalizeCityName } = await import('../utils/cityNormalizer.js');
       const normalizedCityName = normalizeCityName(input.city);
       city = await getCityByNormalizedName(normalizedCityName);
       
-      if (city?.latitude && city?.longitude && city?.radius_km) {
+      if (!city) {
+        throw new Error(`City "${input.city}" not found. Please use an existing city ID instead.`);
+      }
+      
+      // Use city coordinates if available
+      if (city.latitude && city.longitude && city.radius_km) {
         resolvedLatitude = city.latitude;
         resolvedLongitude = city.longitude;
         resolvedRadiusKm = city.radius_km;
       } else {
-        console.log(`[discoverBusinessesV2] Resolving coordinates for city: ${input.city}`);
+        // City exists but missing coordinates - update them
+        console.log(`[discoverBusinessesV2] Resolving coordinates for existing city: ${input.city}`);
         const coordinates = await googleMapsService.getCityCoordinates(input.city);
         
         if (!coordinates) {
@@ -235,11 +246,8 @@ export async function discoverBusinessesV2(
         resolvedLongitude = coordinates.lng;
         resolvedRadiusKm = coordinates.radiusKm;
 
-        if (city) {
-          city = await updateCityCoordinates(city.id, coordinates);
-        } else {
-          city = await getOrCreateCity(input.city, country.id, coordinates);
-        }
+        // Update existing city with coordinates
+        city = await updateCityCoordinates(city.id, coordinates);
       }
     } else {
       resolvedLatitude = input.latitude;

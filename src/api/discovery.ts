@@ -128,8 +128,8 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       const { resolveDataset } = await import('../services/datasetResolver.js');
       const resolverResult = await resolveDataset({
         userId,
-        cityName: city.name,
-        industryName: industry.name,
+        cityId: city.id, // Use city ID instead of name to prevent city creation
+        industryId: industry.id, // Use industry ID instead of name to prevent industry creation
       });
       finalDatasetId = resolverResult.dataset.id;
       console.log('[API] Created dataset for discovery_run:', finalDatasetId);

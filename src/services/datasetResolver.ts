@@ -9,16 +9,16 @@
  */
 
 import { getOrCreateDataset, updateDatasetRefreshTime, type Dataset } from '../db/datasets.js';
-import { getOrCreateCity } from '../db/cities.js';
-import { getOrCreateIndustry } from '../db/industries.js';
-import { getCountryByCode } from '../db/countries.js';
-
-const GREECE_COUNTRY_CODE = 'GR';
+import { getCityById, getCityByNormalizedName } from '../db/cities.js';
+import { getIndustryById, getIndustryByName } from '../db/industries.js';
+import { normalizeCityName } from '../utils/cityNormalizer.js';
 
 export interface DatasetResolverInput {
   userId: string;
-  cityName: string;
-  industryName: string;
+  cityId?: string; // Preferred: use city ID
+  cityName?: string; // Fallback: use city name (must exist, won't create)
+  industryId?: string; // Preferred: use industry ID
+  industryName?: string; // Fallback: use industry name (must exist, won't create)
   datasetName?: string;
 }
 
@@ -35,24 +35,46 @@ export interface DatasetResolverResult {
  * - If dataset exists for city + industry and last_refreshed_at < 30 days, reuse it
  * - Otherwise create new dataset
  * 
- * @param input - User ID, city name, industry name, optional dataset name
+ * @param input - User ID, city ID (preferred) or city name (must exist), industry name, optional dataset name
  * @returns Dataset and whether it was reused
  */
 export async function resolveDataset(
   input: DatasetResolverInput
 ): Promise<DatasetResolverResult> {
-  const { userId, cityName, industryName, datasetName } = input;
+  const { userId, cityId, cityName, industryId, industryName, datasetName } = input;
 
-  // Get or create city
-  const country = await getCountryByCode(GREECE_COUNTRY_CODE);
-  if (!country) {
-    throw new Error(`Country ${GREECE_COUNTRY_CODE} not found`);
+  // Get city by ID (preferred) or by name (must exist, won't create)
+  let city;
+  if (cityId) {
+    city = await getCityById(cityId);
+    if (!city) {
+      throw new Error(`City with ID ${cityId} not found`);
+    }
+  } else if (cityName) {
+    const normalizedName = normalizeCityName(cityName);
+    city = await getCityByNormalizedName(normalizedName);
+    if (!city) {
+      throw new Error(`City "${cityName}" not found. Please use an existing city ID.`);
+    }
+  } else {
+    throw new Error('Either cityId or cityName is required');
   }
-
-  const city = await getOrCreateCity(cityName, country.id);
   
-  // Get or create industry
-  const industry = await getOrCreateIndustry(industryName);
+  // Get industry by ID (preferred) or by name (must exist, won't create)
+  let industry;
+  if (industryId) {
+    industry = await getIndustryById(industryId);
+    if (!industry) {
+      throw new Error(`Industry with ID ${industryId} not found`);
+    }
+  } else if (industryName) {
+    industry = await getIndustryByName(industryName);
+    if (!industry) {
+      throw new Error(`Industry "${industryName}" not found. Please use an existing industry ID.`);
+    }
+  } else {
+    throw new Error('Either industryId or industryName is required');
+  }
 
   // Get or create dataset (with reuse logic)
   const dataset = await getOrCreateDataset(
