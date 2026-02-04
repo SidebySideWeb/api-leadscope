@@ -1,7 +1,8 @@
 // Deduplication utilities
 
-// Re-export normalizeBusinessName from the single source of truth
-export { normalizeBusinessName } from './normalizeBusinessName.js';
+// Import and re-export normalizeBusinessName from the single source of truth
+import { normalizeBusinessName } from './normalizeBusinessName.js';
+export { normalizeBusinessName };
 
 /**
  * Checks if two businesses are duplicates
