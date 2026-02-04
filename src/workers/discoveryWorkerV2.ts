@@ -363,12 +363,17 @@ export async function discoverBusinessesV2(
       let batchSkippedNoPlaceId = 0;
       for (const places of batchResults) {
         for (const place of places) {
-          // TEMPORARY: Accept places even without place_id for debugging
-          // TODO: Re-enable this check after fixing the root cause
-          if (!place.place_id) {
+          // CRITICAL: Check for missing or empty place_id
+          // Empty strings are falsy, so we need to check explicitly
+          if (!place.place_id || place.place_id.trim() === '') {
             batchSkippedNoPlaceId++;
-            console.warn(`[discoverBusinessesV2] WARNING: Place without place_id: ${place.name || 'unnamed'}`);
-            // TEMPORARILY: Still add it with a generated ID for debugging
+            console.warn(`[discoverBusinessesV2] WARNING: Place without valid place_id:`, {
+              name: place.name || 'unnamed',
+              place_id: place.place_id,
+              formatted_address: place.formatted_address,
+              fullPlace: JSON.stringify(place, null, 2)
+            });
+            // Generate a temp ID so we can still track it
             const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             place.place_id = tempId;
             console.log(`[discoverBusinessesV2] TEMP: Generated temp ID ${tempId} for place: ${place.name}`);
@@ -488,14 +493,15 @@ export async function discoverBusinessesV2(
     for (const place of uniquePlaces) {
       try {
         // TEMPORARILY DISABLED: Accept places even without place_id for debugging
-        // Skip if no google_place_id (cannot deduplicate globally)
-        if (!place.place_id) {
+        // CRITICAL: Check for missing or empty place_id (empty strings are falsy)
+        if (!place.place_id || place.place_id.trim() === '') {
           businessesSkipped++;
-          console.warn(`[discoverBusinessesV2] WARNING: Skipping place without google_place_id: ${place.name}`);
-          console.warn(`[discoverBusinessesV2] Place details:`, {
+          console.warn(`[discoverBusinessesV2] WARNING: Skipping place without valid google_place_id:`, {
             name: place.name,
+            place_id: place.place_id,
             formatted_address: place.formatted_address,
-            hasLocation: !!(place.latitude && place.longitude)
+            hasLocation: !!(place.latitude && place.longitude),
+            fullPlace: JSON.stringify(place, null, 2)
           });
           continue;
         }

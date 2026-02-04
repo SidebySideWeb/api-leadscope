@@ -78,7 +78,9 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
 
       // CRITICAL DEBUG: Log raw Google response structure
       const rawPlaces = response.data?.places ?? [];
+      console.log('[GoogleMaps] ===== RAW GOOGLE RESPONSE =====');
       console.log('[GoogleMaps] RAW GOOGLE PLACES:', rawPlaces.length);
+      console.log('[GoogleMaps] Full response.data:', JSON.stringify(response.data, null, 2));
       console.log('[GoogleMaps] Response structure check:', {
         status: response.status,
         hasData: !!response.data,
@@ -90,9 +92,13 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
           idType: typeof rawPlaces[0]?.id,
           displayName: rawPlaces[0]?.displayName,
           displayNameType: typeof rawPlaces[0]?.displayName,
-          hasLocation: !!rawPlaces[0]?.location
+          displayNameValue: rawPlaces[0]?.displayName,
+          hasLocation: !!rawPlaces[0]?.location,
+          location: rawPlaces[0]?.location,
+          fullPlace: JSON.stringify(rawPlaces[0], null, 2)
         } : null
       });
+      console.log('[GoogleMaps] ===============================');
 
       if (!response.data || !response.data.places || response.data.places.length === 0) {
         console.log('[GoogleMaps] No places found for query:', query);
@@ -106,18 +112,36 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
       const results: GooglePlaceResult[] = [];
       for (const place of response.data.places) {
         // CRITICAL: Google Places API (New) returns:
-        // - id: "places/ChIJ..." (may include "places/" prefix)
+        // - id: "places/ChIJ..." (may include "places/" prefix) OR just "ChIJ..."
         // - displayName: { text: "Business Name" } (object with text property)
         // Extract place ID - strip "places/" prefix if present
         const rawId = place.id;
         let googlePlaceId: string;
-        if (!rawId) {
-          // Fallback: try to generate ID from other fields if available
-          console.warn('[GoogleMaps] Place missing id field:', {
+        
+        // DEBUG: Log raw place structure
+        if (results.length < 3) {
+          console.log('[GoogleMaps] Processing place:', {
+            rawId,
+            rawIdType: typeof rawId,
+            rawIdValue: rawId,
             displayName: place.displayName,
-            formattedAddress: place.formattedAddress
+            displayNameType: typeof place.displayName,
+            hasFormattedAddress: !!place.formattedAddress,
+            fullPlaceKeys: Object.keys(place)
           });
-          googlePlaceId = '';
+        }
+        
+        if (!rawId) {
+          // CRITICAL: Generate a fallback ID instead of empty string
+          // Empty strings cause places to be skipped in discovery worker
+          const fallbackId = `fallback_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          console.warn('[GoogleMaps] Place missing id field - using fallback ID:', {
+            fallbackId,
+            displayName: place.displayName,
+            formattedAddress: place.formattedAddress,
+            fullPlace: JSON.stringify(place, null, 2)
+          });
+          googlePlaceId = fallbackId;
         } else if (typeof rawId === 'string' && rawId.startsWith('places/')) {
           googlePlaceId = rawId.replace(/^places\//, '');
         } else {
@@ -126,11 +150,15 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
 
         // Extract display name - must use .text property
         const displayName = place.displayName?.text ?? (typeof place.displayName === 'string' ? place.displayName : 'Unknown');
+        
+        // CRITICAL: If we still don't have a name, use formatted address or generate one
+        const finalName = displayName || place.formattedAddress || `Unnamed Place ${results.length + 1}`;
 
         // Safe mapping baseline - ensure all places are mapped even with missing optional fields
+        // CRITICAL: Never use empty string for place_id - it causes places to be skipped
         const mappedPlace: GooglePlaceResult = {
-          place_id: googlePlaceId || '',
-          name: displayName,
+          place_id: googlePlaceId, // Already guaranteed to be non-empty (fallback ID if needed)
+          name: finalName,
           formatted_address: place.formattedAddress || '',
           // website and phone are NOT available from Text Search - will be fetched in extraction if needed
           website: undefined,
@@ -146,13 +174,14 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
 
         // DEBUG: Log mapping details for first few places
         if (results.length < 3) {
-          console.log('[GoogleMaps] Mapping place:', {
+          console.log('[GoogleMaps] Mapped place:', {
             rawId,
             googlePlaceId,
-            displayName,
+            finalName,
             hasLocation: !!place.location,
             latitude: place.location?.latitude,
-            longitude: place.location?.longitude
+            longitude: place.location?.longitude,
+            mappedPlace: JSON.stringify(mappedPlace, null, 2)
           });
         }
 
