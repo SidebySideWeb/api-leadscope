@@ -22,8 +22,8 @@ ADD COLUMN IF NOT EXISTS last_crawled_at TIMESTAMPTZ,
 ADD COLUMN IF NOT EXISTS crawl_status TEXT DEFAULT 'pending' CHECK (crawl_status IN ('pending', 'success', 'failed', 'skipped'));
 
 -- STEP 2: Make google_place_id unique globally (if not already unique)
--- Check if unique constraint already exists
-DO $$
+-- Check if unique constraint already exists and handle duplicates
+DO $unique_constraint$
 BEGIN
   -- Check if unique constraint exists
   IF NOT EXISTS (
@@ -48,7 +48,7 @@ BEGIN
   ELSE
     RAISE NOTICE 'Unique constraint on google_place_id already exists';
   END IF;
-END $$;
+END $unique_constraint$;
 
 -- Ensure index exists (unique constraint creates index, but explicit is clearer)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_businesses_google_place_id_unique 
@@ -65,7 +65,9 @@ CREATE INDEX IF NOT EXISTS idx_businesses_last_discovered_at ON businesses(last_
 -- STEP 4: Backfill existing data
 -- Extract location from address if available (heuristic - will be updated by discovery)
 -- Extract website from websites table
--- Extract phone from contacts table
+-- Extract phone and emails from contacts table
+-- Note: businesses.id is UUID, contact_sources.business_id is also UUID, so direct match
+
 UPDATE businesses b
 SET 
   website = (
@@ -79,7 +81,7 @@ SET
     SELECT c.phone 
     FROM contacts c
     JOIN contact_sources cs ON cs.contact_id = c.id
-    WHERE cs.business_id = b.id::text
+    WHERE cs.business_id = b.id
       AND c.phone IS NOT NULL
     ORDER BY cs.found_at DESC
     LIMIT 1
@@ -88,7 +90,7 @@ SET
     SELECT COALESCE(jsonb_agg(DISTINCT c.email), '[]'::jsonb)
     FROM contacts c
     JOIN contact_sources cs ON cs.contact_id = c.id
-    WHERE cs.business_id = b.id::text
+    WHERE cs.business_id = b.id
       AND c.email IS NOT NULL
   ),
   last_crawled_at = (
@@ -99,7 +101,8 @@ SET
 WHERE EXISTS (
   SELECT 1 FROM websites w WHERE w.business_id = b.id
 ) OR EXISTS (
-  SELECT 1 FROM contact_sources cs WHERE cs.business_id = b.id::text
+  SELECT 1 FROM contact_sources cs 
+  WHERE cs.business_id = b.id
 );
 
 -- STEP 5: Set initial crawl_status based on existing data

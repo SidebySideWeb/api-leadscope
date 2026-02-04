@@ -58,6 +58,14 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
         };
       }
 
+      // DEBUG: Log request details
+      console.log('[GoogleMaps] Search request:', {
+        query,
+        location: location ? { lat: location.lat, lng: location.lng, radiusMeters: radiusMeters || 1500 } : 'none',
+        url,
+        requestBody: JSON.stringify(requestBody, null, 2)
+      });
+
       const response = await axios.post(url, requestBody, {
         headers: {
           'Content-Type': 'application/json',
@@ -68,7 +76,16 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
         }
       });
 
+      // DEBUG: Log response details
+      console.log('[GoogleMaps] Search response:', {
+        status: response.status,
+        placesCount: response.data?.places?.length || 0,
+        hasPlaces: !!response.data?.places,
+        responseData: response.data ? JSON.stringify(response.data, null, 2).substring(0, 500) : 'no data'
+      });
+
       if (!response.data.places || response.data.places.length === 0) {
+        console.log('[GoogleMaps] No places found for query:', query);
         return [];
       }
 

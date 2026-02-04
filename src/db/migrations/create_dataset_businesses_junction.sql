@@ -11,7 +11,7 @@
 CREATE TABLE IF NOT EXISTS dataset_businesses (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   dataset_id UUID NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
-  business_id INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  business_id UUID NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
   
   -- Manual control flags
   manually_included BOOLEAN DEFAULT false,

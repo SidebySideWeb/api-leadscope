@@ -308,6 +308,8 @@ export async function discoverBusinessesV2(
           const searchQuery = task.keyword; // Just keyword, no city name (location bias handles it)
           const radiusMeters = discoveryConfig.gridRadiusKm * 1000; // Convert km to meters
           
+          console.log(`[discoverBusinessesV2] Searching: "${searchQuery}" at (${task.gridPoint.lat}, ${task.gridPoint.lng}) radius ${radiusMeters}m`);
+          
           const places = await searchWithRetry(
             searchQuery,
             task.gridPoint,
@@ -315,10 +317,16 @@ export async function discoverBusinessesV2(
             discoveryConfig
           );
 
+          console.log(`[discoverBusinessesV2] Search "${searchQuery}" returned ${places.length} places`);
+          if (places.length > 0) {
+            console.log(`[discoverBusinessesV2] Sample place IDs: ${places.slice(0, 3).map(p => p.place_id || 'NO_ID').join(', ')}`);
+          }
+
           result.searchesExecuted++;
           return places;
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : String(error);
+          console.error(`[discoverBusinessesV2] Search failed for "${task.keyword}" at (${task.gridPoint.lat}, ${task.gridPoint.lng}): ${errorMsg}`);
           result.errors.push(`Grid point (${task.gridPoint.lat}, ${task.gridPoint.lng}) keyword "${task.keyword}": ${errorMsg}`);
           return [];
         }
@@ -328,9 +336,15 @@ export async function discoverBusinessesV2(
       
       // Deduplicate batch results
       let batchNewCount = 0;
+      let batchSkippedNoPlaceId = 0;
       for (const places of batchResults) {
         for (const place of places) {
-          if (place.place_id && !seenPlaceIds.has(place.place_id)) {
+          if (!place.place_id) {
+            batchSkippedNoPlaceId++;
+            console.warn(`[discoverBusinessesV2] Skipping place without place_id: ${place.name || 'unnamed'}`);
+            continue;
+          }
+          if (!seenPlaceIds.has(place.place_id)) {
             seenPlaceIds.add(place.place_id);
             allPlaces.push(place);
             batchNewCount++;
@@ -342,7 +356,7 @@ export async function discoverBusinessesV2(
       const batchTotalFound = batchResults.reduce((sum, places) => sum + places.length, 0);
       const batchNewPercent = batchTotalFound > 0 ? (batchNewCount / batchTotalFound) * 100 : 0;
 
-      console.log(`[discoverBusinessesV2] Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${batchNewCount} new, ${batchTotalFound} total, ${batchNewPercent.toFixed(1)}% new`);
+      console.log(`[discoverBusinessesV2] Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${batchNewCount} new, ${batchTotalFound} total, ${batchSkippedNoPlaceId} skipped (no place_id), ${batchNewPercent.toFixed(1)}% new`);
 
       // Stop condition: If new businesses < threshold, stop expanding
       if (batchNewPercent < MIN_NEW_PERCENT && batchTotalFound > 0) {
