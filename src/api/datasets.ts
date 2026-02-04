@@ -13,14 +13,33 @@ const router = express.Router();
  * GET /datasets
  * Get all datasets for the authenticated user
  */
-router.get('/', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/', authMiddleware, async (req: AuthRequest, res): Promise<void> => {
   try {
     const userId = req.userId!;
     console.log('[datasets] Fetching datasets for user:', userId);
+    console.log('[datasets] User ID type:', typeof userId);
+    console.log('[datasets] User ID length:', userId?.length);
+    console.log('[datasets] User object:', req.user);
     console.log('[datasets] Request headers:', {
       cookie: req.headers.cookie ? 'present' : 'missing',
       authorization: req.headers.authorization ? 'present' : 'missing',
     });
+    
+    // Verify user ID is valid
+    if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+      console.error('[datasets] Invalid user ID:', userId);
+      res.status(401).json({
+        data: null,
+        meta: {
+          plan_id: 'demo',
+          gated: false,
+          total_available: 0,
+          total_returned: 0,
+          gate_reason: 'Invalid user ID',
+        },
+      });
+      return;
+    }
 
     // Get datasets with industry and city names
     // Note: city_id and industry_id might be INTEGER or UUID depending on schema
@@ -58,6 +77,14 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     );
 
     console.log('[datasets] Query returned', result.rows.length, 'rows');
+    if (result.rows.length > 0) {
+      console.log('[datasets] Sample row:', {
+        id: result.rows[0].id,
+        user_id: result.rows[0].user_id,
+        user_id_type: typeof result.rows[0].user_id,
+        name: result.rows[0].name,
+      });
+    }
 
     // Get industries and cities for name mapping
     const [industries, cities] = await Promise.all([
@@ -138,10 +165,18 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     console.log('[datasets] Found', datasets.length, 'datasets for user', userId);
     console.log('[datasets] Dataset IDs:', datasets.map(d => d.id));
 
+    // Get user's plan from database
+    const userResult = await pool.query<{ plan: string }>(
+      'SELECT plan FROM users WHERE id = $1',
+      [userId]
+    );
+    const userPlan = (userResult.rows[0]?.plan || 'demo') as string;
+    console.log('[datasets] User plan:', userPlan);
+
     res.json({
       data: datasets,
       meta: {
-        plan_id: 'demo', // Will be set from user's plan
+        plan_id: userPlan,
         gated: false,
         total_available: datasets.length,
         total_returned: datasets.length,
