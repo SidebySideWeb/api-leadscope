@@ -77,15 +77,26 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
       });
 
       // CRITICAL DEBUG: Log raw Google response structure
-      const rawPlaces = response.data?.places ?? [];
       console.log('[GoogleMaps] ===== RAW GOOGLE RESPONSE =====');
+      console.log('[GoogleMaps] Response status:', response.status);
+      console.log('[GoogleMaps] Response headers:', response.headers);
+      console.log('[GoogleMaps] Has response.data:', !!response.data);
+      console.log('[GoogleMaps] response.data type:', typeof response.data);
+      console.log('[GoogleMaps] response.data keys:', response.data ? Object.keys(response.data) : 'no data');
+      
+      // Try multiple possible response structures
+      const placesArray = response.data?.places ?? response.data?.results ?? [];
+      const rawPlaces = Array.isArray(placesArray) ? placesArray : [];
+      
       console.log('[GoogleMaps] RAW GOOGLE PLACES:', rawPlaces.length);
       console.log('[GoogleMaps] Full response.data:', JSON.stringify(response.data, null, 2));
       console.log('[GoogleMaps] Response structure check:', {
         status: response.status,
         hasData: !!response.data,
         hasPlaces: !!response.data?.places,
+        hasResults: !!response.data?.results,
         placesType: Array.isArray(response.data?.places) ? 'array' : typeof response.data?.places,
+        resultsType: Array.isArray(response.data?.results) ? 'array' : typeof response.data?.results,
         placesCount: rawPlaces.length,
         samplePlace: rawPlaces.length > 0 ? {
           id: rawPlaces[0]?.id,
@@ -100,17 +111,30 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
       });
       console.log('[GoogleMaps] ===============================');
 
-      if (!response.data || !response.data.places || response.data.places.length === 0) {
-        console.log('[GoogleMaps] No places found for query:', query);
-        console.log('[GoogleMaps] Response data:', JSON.stringify(response.data, null, 2).substring(0, 1000));
+      // CRITICAL: Check for places in multiple possible locations
+      if (!response.data) {
+        console.error('[GoogleMaps] ERROR: No response.data at all!');
         return [];
       }
+
+      // Try both places and results arrays
+      const places = response.data.places ?? response.data.results ?? [];
+      if (!Array.isArray(places) || places.length === 0) {
+        console.warn('[GoogleMaps] No places found for query:', query);
+        console.warn('[GoogleMaps] Places array:', places);
+        console.warn('[GoogleMaps] Response data keys:', Object.keys(response.data));
+        console.warn('[GoogleMaps] Response data:', JSON.stringify(response.data, null, 2).substring(0, 2000));
+        return [];
+      }
+      
+      console.log('[GoogleMaps] Found', places.length, 'places in response');
 
       // CRITICAL: Discovery phase MUST NOT call Place Details API
       // Return only data from Text Search API (no Place Details calls)
       // Place Details will be fetched later in extraction phase if needed
       const results: GooglePlaceResult[] = [];
-      for (const place of response.data.places) {
+      console.log('[GoogleMaps] Processing', places.length, 'places from response');
+      for (const place of places) {
         // CRITICAL: Google Places API (New) returns:
         // - id: "places/ChIJ..." (may include "places/" prefix) OR just "ChIJ..."
         // - displayName: { text: "Business Name" } (object with text property)
@@ -188,7 +212,20 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
         results.push(mappedPlace);
       }
 
+      console.log('[GoogleMaps] ===== MAPPING COMPLETE =====');
       console.log('[GoogleMaps] Mapped results count:', results.length);
+      console.log('[GoogleMaps] Sample mapped results:', results.slice(0, 3).map(r => ({
+        place_id: r.place_id,
+        name: r.name,
+        hasLocation: !!(r.latitude && r.longitude)
+      })));
+      console.log('[GoogleMaps] ===============================');
+      
+      if (results.length === 0) {
+        console.error('[GoogleMaps] CRITICAL: Mapped 0 results but had', places.length, 'places in response!');
+        console.error('[GoogleMaps] This means places are being dropped during mapping!');
+      }
+      
       return results;
     } catch (error: any) {
       console.error('Error searching Google Maps:', error.response?.data || error.message);
