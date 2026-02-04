@@ -74,6 +74,12 @@ export async function upsertBusinessGlobal(data: {
     throw new Error(`Failed to generate normalized_name for business "${data.name}" - this will cause silent insert failures`);
   }
 
+  // DEBUG: Log database info before insert
+  const dbInfo = await pool.query<{ db: string; user: string }>(
+    `SELECT current_database() as db, current_user as user`
+  );
+  console.log('DB INFO FROM APP', dbInfo.rows[0]);
+
   // Try to insert, handling conflict on google_place_id
   const result = await pool.query<Business>(
     `INSERT INTO businesses (

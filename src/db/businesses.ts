@@ -72,6 +72,12 @@ export async function upsertBusiness(data: {
     throw new Error(`Failed to generate normalized_name for business "${data.name}" - this will cause silent insert failures`);
   }
 
+  // DEBUG: Log database info before insert
+  const dbInfo = await pool.query<{ db: string; user: string }>(
+    `SELECT current_database() as db, current_user as user`
+  );
+  console.log('DB INFO FROM APP', dbInfo.rows[0]);
+
   // Try to insert, handling conflicts on (dataset_id, normalized_name)
   // On conflict: UPDATE existing business with fresh data
   // CRITICAL: discovery_run_id must be set if provided (never use COALESCE to keep old NULL)
