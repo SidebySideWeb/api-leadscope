@@ -78,45 +78,103 @@ export async function upsertBusiness(data: {
   );
   console.log('DB INFO FROM APP', dbInfo.rows[0]);
 
-  // Try to insert, handling conflicts on (dataset_id, normalized_name)
-  // On conflict: UPDATE existing business with fresh data
-  // CRITICAL: discovery_run_id must be set if provided (never use COALESCE to keep old NULL)
-  const result = await pool.query<Business>(
-    `INSERT INTO businesses (
-      name, normalized_name, address, postal_code, city_id, 
-      industry_id, google_place_id, dataset_id, owner_user_id, discovery_run_id,
-      created_at, updated_at
-    )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
-     ON CONFLICT (dataset_id, normalized_name) 
-     DO UPDATE SET
-       name = EXCLUDED.name,
-       address = EXCLUDED.address,
-       postal_code = EXCLUDED.postal_code,
-       city_id = EXCLUDED.city_id,
-       industry_id = EXCLUDED.industry_id,
-       google_place_id = COALESCE(EXCLUDED.google_place_id, businesses.google_place_id),
-       -- CRITICAL: Always set discovery_run_id if provided (EXCLUDED.discovery_run_id is not null)
-       -- If EXCLUDED.discovery_run_id is NULL, keep existing value (for non-discovery updates)
-       discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id),
-       updated_at = NOW()
-     RETURNING *`,
-    [
-      data.name,
-      normalized_name,
-      data.address,
-      data.postal_code,
-      data.city_id,
-      data.industry_id,
-      data.google_place_id,
-      data.dataset_id,
-      data.owner_user_id,
-      data.discovery_run_id || null
-    ]
-  );
+  // CRITICAL DEBUG: Log all values BEFORE INSERT to identify NOT NULL violations
+  console.log('[upsertBusiness] ===== BEFORE INSERT =====');
+  console.log('[upsertBusiness] Function: upsertBusiness');
+  console.log('[upsertBusiness] File: src/db/businesses.ts');
+  console.log('[upsertBusiness] name:', data.name);
+  console.log('[upsertBusiness] normalized_name:', normalized_name);
+  console.log('[upsertBusiness] city_id:', data.city_id);
+  console.log('[upsertBusiness] google_place_id:', data.google_place_id);
+  console.log('[upsertBusiness] dataset_id:', data.dataset_id);
+  console.log('[upsertBusiness] owner_user_id:', data.owner_user_id);
+  console.log('[upsertBusiness] discovery_run_id:', data.discovery_run_id);
+  console.log('[upsertBusiness] Full data object:', JSON.stringify({
+    name: data.name,
+    normalized_name,
+    city_id: data.city_id,
+    google_place_id: data.google_place_id,
+    dataset_id: data.dataset_id,
+    owner_user_id: data.owner_user_id,
+    discovery_run_id: data.discovery_run_id,
+    address: data.address,
+    postal_code: data.postal_code,
+    industry_id: data.industry_id
+  }, null, 2));
+  console.log('[upsertBusiness] =========================');
 
-  if (result.rows.length === 0) {
-    throw new Error(`Failed to upsert business with normalized_name: ${normalized_name}`);
+  // Prepare parameter values for INSERT
+  const insertValues = [
+    data.name,
+    normalized_name,
+    data.address,
+    data.postal_code,
+    data.city_id,
+    data.industry_id,
+    data.google_place_id,
+    data.dataset_id,
+    data.owner_user_id,
+    data.discovery_run_id || null
+  ];
+
+  // CRITICAL DEBUG: Log actual parameter values being passed to INSERT
+  console.log('[upsertBusiness] INSERT VALUES ARRAY:');
+  console.log('[upsertBusiness]   $1 (name):', insertValues[0], typeof insertValues[0]);
+  console.log('[upsertBusiness]   $2 (normalized_name):', insertValues[1], typeof insertValues[1], insertValues[1] === null ? '⚠️ NULL!' : '', insertValues[1] === undefined ? '⚠️ UNDEFINED!' : '');
+  console.log('[upsertBusiness]   $3 (address):', insertValues[2], typeof insertValues[2]);
+  console.log('[upsertBusiness]   $4 (postal_code):', insertValues[3], typeof insertValues[3]);
+  console.log('[upsertBusiness]   $5 (city_id):', insertValues[4], typeof insertValues[4], insertValues[4] === null ? '⚠️ NULL!' : '', insertValues[4] === undefined ? '⚠️ UNDEFINED!' : '');
+  console.log('[upsertBusiness]   $6 (industry_id):', insertValues[5], typeof insertValues[5]);
+  console.log('[upsertBusiness]   $7 (google_place_id):', insertValues[6], typeof insertValues[6]);
+  console.log('[upsertBusiness]   $8 (dataset_id):', insertValues[7], typeof insertValues[7]);
+  console.log('[upsertBusiness]   $9 (owner_user_id):', insertValues[8], typeof insertValues[8]);
+  console.log('[upsertBusiness]   $10 (discovery_run_id):', insertValues[9], typeof insertValues[9]);
+
+  try {
+    // Try to insert, handling conflicts on (dataset_id, normalized_name)
+    // On conflict: UPDATE existing business with fresh data
+    // CRITICAL: discovery_run_id must be set if provided (never use COALESCE to keep old NULL)
+    const result = await pool.query<Business>(
+      `INSERT INTO businesses (
+        name, normalized_name, address, postal_code, city_id, 
+        industry_id, google_place_id, dataset_id, owner_user_id, discovery_run_id,
+        created_at, updated_at
+      )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+       ON CONFLICT (dataset_id, normalized_name) 
+       DO UPDATE SET
+         name = EXCLUDED.name,
+         normalized_name = EXCLUDED.normalized_name, -- CRITICAL: Update normalized_name on conflict
+         address = EXCLUDED.address,
+         postal_code = EXCLUDED.postal_code,
+         city_id = EXCLUDED.city_id, -- CRITICAL: Update city_id on conflict (must not be NULL)
+         industry_id = EXCLUDED.industry_id,
+         google_place_id = COALESCE(EXCLUDED.google_place_id, businesses.google_place_id),
+         -- CRITICAL: Always set discovery_run_id if provided (EXCLUDED.discovery_run_id is not null)
+         -- If EXCLUDED.discovery_run_id is NULL, keep existing value (for non-discovery updates)
+         discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id),
+         updated_at = NOW()
+       RETURNING *`,
+      insertValues
+    );
+
+    if (result.rows.length === 0) {
+      throw new Error(`Failed to upsert business with normalized_name: ${normalized_name}`);
+    }
+
+    return { business: result.rows[0], wasUpdated: false };
+  } catch (error: any) {
+    // CRITICAL: Catch NOT NULL violations and log exact values that caused failure
+    if (error.code === '23502') { // NOT NULL violation
+      console.error('[upsertBusiness] ===== NOT NULL VIOLATION =====');
+      console.error('[upsertBusiness] Error code:', error.code);
+      console.error('[upsertBusiness] Error message:', error.message);
+      console.error('[upsertBusiness] Error detail:', error.detail);
+      console.error('[upsertBusiness] Error constraint:', error.constraint);
+      console.error('[upsertBusiness] Failed INSERT VALUES:', insertValues);
+      console.error('[upsertBusiness] ===============================');
+    }
+    throw error;
   }
 
   const business = result.rows[0];

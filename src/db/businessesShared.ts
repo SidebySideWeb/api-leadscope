@@ -80,56 +80,109 @@ export async function upsertBusinessGlobal(data: {
   );
   console.log('DB INFO FROM APP', dbInfo.rows[0]);
 
-  // Try to insert, handling conflict on google_place_id
-  const result = await pool.query<Business>(
-    `INSERT INTO businesses (
-      name, normalized_name, address, postal_code, city_id, 
-      industry_id, google_place_id, latitude, longitude,
-      last_discovered_at, crawl_status, created_at, updated_at
-    )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), 'pending', NOW(), NOW())
-     ON CONFLICT (google_place_id) 
-     DO UPDATE SET
-       name = EXCLUDED.name,
-       normalized_name = EXCLUDED.normalized_name,
-       address = COALESCE(EXCLUDED.address, businesses.address),
-       postal_code = COALESCE(EXCLUDED.address, businesses.postal_code),
-       city_id = COALESCE(EXCLUDED.city_id, businesses.city_id),
-       industry_id = COALESCE(EXCLUDED.industry_id, businesses.industry_id),
-       latitude = COALESCE(EXCLUDED.latitude, businesses.latitude),
-       longitude = COALESCE(EXCLUDED.longitude, businesses.longitude),
-       last_discovered_at = NOW(), -- Always update discovery timestamp
-       updated_at = NOW()
-     RETURNING *`,
-    [
-      data.name,
-      normalized_name,
-      data.address,
-      data.postal_code,
-      data.city_id,
-      data.industry_id,
-      data.google_place_id,
-      data.latitude || null,
-      data.longitude || null
-    ]
-  );
+  // CRITICAL DEBUG: Log all values BEFORE INSERT to identify NOT NULL violations
+  console.log('[upsertBusinessGlobal] ===== BEFORE INSERT =====');
+  console.log('[upsertBusinessGlobal] Function: upsertBusinessGlobal');
+  console.log('[upsertBusinessGlobal] File: src/db/businessesShared.ts');
+  console.log('[upsertBusinessGlobal] name:', data.name);
+  console.log('[upsertBusinessGlobal] normalized_name:', normalized_name);
+  console.log('[upsertBusinessGlobal] city_id:', data.city_id);
+  console.log('[upsertBusinessGlobal] google_place_id:', data.google_place_id);
+  console.log('[upsertBusinessGlobal] address:', data.address);
+  console.log('[upsertBusinessGlobal] postal_code:', data.postal_code);
+  console.log('[upsertBusinessGlobal] industry_id:', data.industry_id);
+  console.log('[upsertBusinessGlobal] Full data object:', JSON.stringify({
+    name: data.name,
+    normalized_name,
+    city_id: data.city_id,
+    google_place_id: data.google_place_id,
+    address: data.address,
+    postal_code: data.postal_code,
+    industry_id: data.industry_id,
+    latitude: data.latitude,
+    longitude: data.longitude
+  }, null, 2));
+  console.log('[upsertBusinessGlobal] =========================');
 
-  if (result.rows.length === 0) {
-    throw new Error(`Failed to upsert business with google_place_id: ${data.google_place_id}`);
+  // Prepare parameter values for INSERT
+  const insertValues = [
+    data.name,
+    normalized_name,
+    data.address,
+    data.postal_code,
+    data.city_id,
+    data.industry_id,
+    data.google_place_id,
+    data.latitude || null,
+    data.longitude || null
+  ];
+
+  // CRITICAL DEBUG: Log actual parameter values being passed to INSERT
+  console.log('[upsertBusinessGlobal] INSERT VALUES ARRAY:');
+  console.log('[upsertBusinessGlobal]   $1 (name):', insertValues[0], typeof insertValues[0]);
+  console.log('[upsertBusinessGlobal]   $2 (normalized_name):', insertValues[1], typeof insertValues[1], insertValues[1] === null ? '⚠️ NULL!' : '', insertValues[1] === undefined ? '⚠️ UNDEFINED!' : '');
+  console.log('[upsertBusinessGlobal]   $3 (address):', insertValues[2], typeof insertValues[2]);
+  console.log('[upsertBusinessGlobal]   $4 (postal_code):', insertValues[3], typeof insertValues[3]);
+  console.log('[upsertBusinessGlobal]   $5 (city_id):', insertValues[4], typeof insertValues[4], insertValues[4] === null ? '⚠️ NULL!' : '', insertValues[4] === undefined ? '⚠️ UNDEFINED!' : '');
+  console.log('[upsertBusinessGlobal]   $6 (industry_id):', insertValues[5], typeof insertValues[5]);
+  console.log('[upsertBusinessGlobal]   $7 (google_place_id):', insertValues[6], typeof insertValues[6]);
+  console.log('[upsertBusinessGlobal]   $8 (latitude):', insertValues[7], typeof insertValues[7]);
+  console.log('[upsertBusinessGlobal]   $9 (longitude):', insertValues[8], typeof insertValues[8]);
+
+  try {
+    // Try to insert, handling conflict on google_place_id
+    const result = await pool.query<Business>(
+      `INSERT INTO businesses (
+        name, normalized_name, address, postal_code, city_id, 
+        industry_id, google_place_id, latitude, longitude,
+        last_discovered_at, crawl_status, created_at, updated_at
+      )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), 'pending', NOW(), NOW())
+       ON CONFLICT (google_place_id) 
+       DO UPDATE SET
+         name = EXCLUDED.name,
+         normalized_name = EXCLUDED.normalized_name,
+         address = COALESCE(EXCLUDED.address, businesses.address),
+         postal_code = COALESCE(EXCLUDED.address, businesses.postal_code),
+         city_id = COALESCE(EXCLUDED.city_id, businesses.city_id),
+         industry_id = COALESCE(EXCLUDED.industry_id, businesses.industry_id),
+         latitude = COALESCE(EXCLUDED.latitude, businesses.latitude),
+         longitude = COALESCE(EXCLUDED.longitude, businesses.longitude),
+         last_discovered_at = NOW(), -- Always update discovery timestamp
+         updated_at = NOW()
+       RETURNING *`,
+      insertValues
+    );
+
+    if (result.rows.length === 0) {
+      throw new Error(`Failed to upsert business with google_place_id: ${data.google_place_id}`);
+    }
+
+    const business = result.rows[0];
+    
+    // Check if this was an update or insert
+    const createdAt = new Date(business.created_at).getTime();
+    const updatedAt = new Date(business.updated_at).getTime();
+    const wasUpdated = (updatedAt - createdAt) > 1000; // More than 1 second difference
+    const wasNew = !wasUpdated;
+
+    // Recalculate data completeness score after upsert
+    await recalculateDataCompletenessScore(business.id);
+
+    return { business, wasUpdated, wasNew };
+  } catch (error: any) {
+    // CRITICAL: Catch NOT NULL violations and log exact values that caused failure
+    if (error.code === '23502') { // NOT NULL violation
+      console.error('[upsertBusinessGlobal] ===== NOT NULL VIOLATION =====');
+      console.error('[upsertBusinessGlobal] Error code:', error.code);
+      console.error('[upsertBusinessGlobal] Error message:', error.message);
+      console.error('[upsertBusinessGlobal] Error detail:', error.detail);
+      console.error('[upsertBusinessGlobal] Error constraint:', error.constraint);
+      console.error('[upsertBusinessGlobal] Failed INSERT VALUES:', insertValues);
+      console.error('[upsertBusinessGlobal] ===============================');
+    }
+    throw error;
   }
-
-  const business = result.rows[0];
-  
-  // Check if this was an update or insert
-  const createdAt = new Date(business.created_at).getTime();
-  const updatedAt = new Date(business.updated_at).getTime();
-  const wasUpdated = (updatedAt - createdAt) > 1000; // More than 1 second difference
-  const wasNew = !wasUpdated;
-
-  // Recalculate data completeness score after upsert
-  await recalculateDataCompletenessScore(business.id);
-
-  return { business, wasUpdated, wasNew };
 }
 
 /**
