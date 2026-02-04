@@ -76,16 +76,27 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
         }
       });
 
-      // DEBUG: Log response details
-      console.log('[GoogleMaps] Search response:', {
+      // CRITICAL DEBUG: Log raw Google response structure
+      const rawPlaces = response.data?.places ?? [];
+      console.log('[GoogleMaps] RAW GOOGLE PLACES:', rawPlaces.length);
+      console.log('[GoogleMaps] Response structure check:', {
         status: response.status,
-        placesCount: response.data?.places?.length || 0,
+        hasData: !!response.data,
         hasPlaces: !!response.data?.places,
-        responseData: response.data ? JSON.stringify(response.data, null, 2).substring(0, 500) : 'no data'
+        placesType: Array.isArray(response.data?.places) ? 'array' : typeof response.data?.places,
+        placesCount: rawPlaces.length,
+        samplePlace: rawPlaces.length > 0 ? {
+          id: rawPlaces[0]?.id,
+          idType: typeof rawPlaces[0]?.id,
+          displayName: rawPlaces[0]?.displayName,
+          displayNameType: typeof rawPlaces[0]?.displayName,
+          hasLocation: !!rawPlaces[0]?.location
+        } : null
       });
 
-      if (!response.data.places || response.data.places.length === 0) {
+      if (!response.data || !response.data.places || response.data.places.length === 0) {
         console.log('[GoogleMaps] No places found for query:', query);
+        console.log('[GoogleMaps] Response data:', JSON.stringify(response.data, null, 2).substring(0, 1000));
         return [];
       }
 
@@ -94,12 +105,32 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
       // Place Details will be fetched later in extraction phase if needed
       const results: GooglePlaceResult[] = [];
       for (const place of response.data.places) {
-        // Map Text Search response directly (no Place Details call)
-        // Text Search provides: id, name, address, location, rating, types, addressComponents
-        // Text Search does NOT provide: website, phone (these require Place Details API)
-        results.push({
-          place_id: place.id,
-          name: place.displayName?.text || '',
+        // CRITICAL: Google Places API (New) returns:
+        // - id: "places/ChIJ..." (may include "places/" prefix)
+        // - displayName: { text: "Business Name" } (object with text property)
+        // Extract place ID - strip "places/" prefix if present
+        const rawId = place.id;
+        let googlePlaceId: string;
+        if (!rawId) {
+          // Fallback: try to generate ID from other fields if available
+          console.warn('[GoogleMaps] Place missing id field:', {
+            displayName: place.displayName,
+            formattedAddress: place.formattedAddress
+          });
+          googlePlaceId = '';
+        } else if (typeof rawId === 'string' && rawId.startsWith('places/')) {
+          googlePlaceId = rawId.replace(/^places\//, '');
+        } else {
+          googlePlaceId = String(rawId);
+        }
+
+        // Extract display name - must use .text property
+        const displayName = place.displayName?.text ?? (typeof place.displayName === 'string' ? place.displayName : 'Unknown');
+
+        // Safe mapping baseline - ensure all places are mapped even with missing optional fields
+        const mappedPlace: GooglePlaceResult = {
+          place_id: googlePlaceId || '',
+          name: displayName,
           formatted_address: place.formattedAddress || '',
           // website and phone are NOT available from Text Search - will be fetched in extraction if needed
           website: undefined,
@@ -111,9 +142,24 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
           // Location is available from Text Search API
           latitude: place.location?.latitude || undefined,
           longitude: place.location?.longitude || undefined
-        });
+        };
+
+        // DEBUG: Log mapping details for first few places
+        if (results.length < 3) {
+          console.log('[GoogleMaps] Mapping place:', {
+            rawId,
+            googlePlaceId,
+            displayName,
+            hasLocation: !!place.location,
+            latitude: place.location?.latitude,
+            longitude: place.location?.longitude
+          });
+        }
+
+        results.push(mappedPlace);
       }
 
+      console.log('[GoogleMaps] Mapped results count:', results.length);
       return results;
     } catch (error: any) {
       console.error('Error searching Google Maps:', error.response?.data || error.message);
@@ -142,9 +188,22 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
 
       const place = response.data;
 
+      // CRITICAL: Handle Google Places API (New) ID format
+      // ID may be "places/ChIJ..." - strip prefix if present
+      const rawId = place.id;
+      let googlePlaceId: string;
+      if (!rawId) {
+        console.warn('[GoogleMaps] Place Details missing id field');
+        googlePlaceId = '';
+      } else if (typeof rawId === 'string' && rawId.startsWith('places/')) {
+        googlePlaceId = rawId.replace(/^places\//, '');
+      } else {
+        googlePlaceId = String(rawId);
+      }
+
       // Map new API response format to our GooglePlaceResult format
       return {
-        place_id: place.id,
+        place_id: googlePlaceId,
         name: place.displayName?.text || '',
         formatted_address: place.formattedAddress || '',
         website: place.websiteUri || undefined,

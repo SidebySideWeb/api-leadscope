@@ -238,7 +238,15 @@ export async function discoverBusinesses(
 
           const places = await googleMapsService.searchPlaces(searchQuery, location);
           keywordResults.set(keyword, places.length);
-          console.log(`[discoverBusinesses] Keyword "${keyword}": found ${places.length} places`);
+          
+          // CRITICAL DEBUG: Log raw Google results
+          console.log(`[discoverBusinesses] RAW GOOGLE PLACES for "${keyword}": ${places.length}`);
+          if (places.length > 0) {
+            console.log(`[discoverBusinesses] Sample place IDs: ${places.slice(0, 3).map(p => p.place_id || 'NO_ID').join(', ')}`);
+            console.log(`[discoverBusinesses] Sample place names: ${places.slice(0, 3).map(p => p.name || 'NO_NAME').join(', ')}`);
+          } else {
+            console.warn(`[discoverBusinesses] WARNING: Keyword "${keyword}" returned ZERO places`);
+          }
           
           return places;
         } catch (error) {
@@ -267,10 +275,16 @@ export async function discoverBusinesses(
       console.log(`  "${keyword}": ${count} places`);
     }
 
+    // CRITICAL DEBUG: Log before deduplication
+    console.log(`[discoverBusinesses] BEFORE FILTER: ${allPlaces.length} total places collected`);
+
     // Deduplicate places BEFORE inserting
     console.log(`[discoverBusinesses] Deduplicating ${allPlaces.length} places...`);
     const uniquePlaces = deduplicatePlaces(allPlaces);
-    console.log(`[discoverBusinesses] After deduplication: ${uniquePlaces.length} unique places`);
+    
+    // CRITICAL DEBUG: Log after deduplication
+    console.log(`[discoverBusinesses] AFTER FILTER: ${uniquePlaces.length} unique places`);
+    console.log(`[discoverBusinesses] DEDUP DROPPED: ${allPlaces.length - uniquePlaces.length} duplicate places`);
 
     result.businessesFound = uniquePlaces.length;
 
@@ -294,9 +308,30 @@ export async function discoverBusinesses(
 
     // finalCityId is already defined above (for cache check)
 
+    // CRITICAL DEBUG: Log businesses to insert
+    console.log(`[discoverBusinesses] BUSINESSES TO INSERT: ${uniquePlaces.length}`);
+
     // Process all places and insert businesses
+    let businessesInserted = 0;
+    let businessesSkipped = 0;
+    
     for (const place of uniquePlaces) {
       try {
+        // TEMPORARILY DISABLED: Accept places even without place_id for debugging
+        if (!place.place_id) {
+          businessesSkipped++;
+          console.warn(`[discoverBusinesses] WARNING: Place without place_id: ${place.name}`);
+          console.warn(`[discoverBusinesses] Place details:`, {
+            name: place.name,
+            formatted_address: place.formatted_address,
+            hasLocation: !!(place.latitude && place.longitude)
+          });
+          // TEMPORARILY: Still process it with a temp ID
+          const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          place.place_id = tempId;
+          console.log(`[discoverBusinesses] TEMP: Generated temp ID ${tempId} for place: ${place.name}`);
+        }
+
         const hasCompleteData = place.place_id ? businessesWithCompleteData.has(place.place_id) : false;
         
         await processPlace(
@@ -310,12 +345,21 @@ export async function discoverBusinesses(
           result,
           hasCompleteData
         );
+        
+        businessesInserted++;
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         result.errors.push(`Error processing place ${place.place_id || place.name}: ${errorMsg}`);
         console.error(`[discoverBusinesses] Error processing place ${place.place_id || place.name}:`, error);
       }
     }
+
+    // CRITICAL DEBUG: Final insertion summary
+    console.log(`\n[discoverBusinesses] ===== INSERTION SUMMARY =====`);
+    console.log(`[discoverBusinesses] Businesses inserted: ${businessesInserted}`);
+    console.log(`[discoverBusinesses] Businesses skipped: ${businessesSkipped}`);
+    console.log(`[discoverBusinesses] Total unique places: ${uniquePlaces.length}`);
+    console.log(`[discoverBusinesses] ==============================`);
 
     // CRITICAL: Create extraction_jobs AFTER all businesses are processed
     // Enqueue extraction jobs ONLY for businesses that don't have complete data

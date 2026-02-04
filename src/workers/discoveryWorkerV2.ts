@@ -332,9 +332,13 @@ export async function discoverBusinessesV2(
             discoveryConfig
           );
 
-          console.log(`[discoverBusinessesV2] Search "${searchQuery}" returned ${places.length} places`);
+          // CRITICAL DEBUG: Log raw Google results
+          console.log(`[discoverBusinessesV2] RAW GOOGLE PLACES for "${searchQuery}": ${places.length}`);
           if (places.length > 0) {
             console.log(`[discoverBusinessesV2] Sample place IDs: ${places.slice(0, 3).map(p => p.place_id || 'NO_ID').join(', ')}`);
+            console.log(`[discoverBusinessesV2] Sample place names: ${places.slice(0, 3).map(p => p.name || 'NO_NAME').join(', ')}`);
+          } else {
+            console.warn(`[discoverBusinessesV2] WARNING: Search "${searchQuery}" returned ZERO places`);
           }
 
           result.searchesExecuted++;
@@ -349,23 +353,37 @@ export async function discoverBusinessesV2(
 
       const batchResults = await Promise.all(batchPromises);
       
+      // CRITICAL DEBUG: Log total places before filtering
+      const totalPlacesBeforeFilter = batchResults.reduce((sum, places) => sum + places.length, 0);
+      console.log(`[discoverBusinessesV2] BEFORE FILTER: ${totalPlacesBeforeFilter} total places from batch`);
+
       // Deduplicate batch results
+      // TEMPORARILY DISABLED FILTERING FOR DEBUGGING: Accept all places even without place_id
       let batchNewCount = 0;
       let batchSkippedNoPlaceId = 0;
       for (const places of batchResults) {
         for (const place of places) {
+          // TEMPORARY: Accept places even without place_id for debugging
+          // TODO: Re-enable this check after fixing the root cause
           if (!place.place_id) {
             batchSkippedNoPlaceId++;
-            console.warn(`[discoverBusinessesV2] Skipping place without place_id: ${place.name || 'unnamed'}`);
-            continue;
+            console.warn(`[discoverBusinessesV2] WARNING: Place without place_id: ${place.name || 'unnamed'}`);
+            // TEMPORARILY: Still add it with a generated ID for debugging
+            const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            place.place_id = tempId;
+            console.log(`[discoverBusinessesV2] TEMP: Generated temp ID ${tempId} for place: ${place.name}`);
           }
-          if (!seenPlaceIds.has(place.place_id)) {
-            seenPlaceIds.add(place.place_id);
+          
+          if (!seenPlaceIds.has(place.place_id!)) {
+            seenPlaceIds.add(place.place_id!);
             allPlaces.push(place);
             batchNewCount++;
           }
         }
       }
+
+      // CRITICAL DEBUG: Log after filtering
+      console.log(`[discoverBusinessesV2] AFTER FILTER: ${batchNewCount} new places added (${batchSkippedNoPlaceId} skipped due to no place_id)`);
 
       const batchEndUniqueCount = seenPlaceIds.size;
       const batchTotalFound = batchResults.reduce((sum, places) => sum + places.length, 0);
@@ -392,12 +410,18 @@ export async function discoverBusinessesV2(
       }
     }
 
+    // CRITICAL DEBUG: Log before final deduplication
+    console.log(`[discoverBusinessesV2] BEFORE FINAL DEDUP: ${allPlaces.length} total places collected`);
+
     // STEP 4: Final deduplication
     console.log(`[discoverBusinessesV2] Deduplicating ${allPlaces.length} places...`);
     const uniquePlaces = deduplicatePlaces(allPlaces);
     result.uniqueBusinessesDiscovered = uniquePlaces.length;
     result.businessesFound = uniquePlaces.length;
-    console.log(`[discoverBusinessesV2] After deduplication: ${uniquePlaces.length} unique places`);
+    
+    // CRITICAL DEBUG: Log after deduplication
+    console.log(`[discoverBusinessesV2] AFTER FINAL DEDUP: ${uniquePlaces.length} unique places`);
+    console.log(`[discoverBusinessesV2] DEDUP DROPPED: ${allPlaces.length - uniquePlaces.length} duplicate places`);
 
     // Calculate coverage score
     result.coverageScore = result.gridPointsGenerated > 0
@@ -455,11 +479,24 @@ export async function discoverBusinessesV2(
     console.log(`\n[discoverBusinessesV2] Persisting ${uniquePlaces.length} businesses globally...`);
     console.log(`[discoverBusinessesV2] CRITICAL: Discovery is enrichment-only - no crawling triggered`);
     
+    // CRITICAL DEBUG: Log businesses to insert
+    console.log(`[discoverBusinessesV2] BUSINESSES TO INSERT: ${uniquePlaces.length}`);
+    
+    let businessesInserted = 0;
+    let businessesSkipped = 0;
+    
     for (const place of uniquePlaces) {
       try {
+        // TEMPORARILY DISABLED: Accept places even without place_id for debugging
         // Skip if no google_place_id (cannot deduplicate globally)
         if (!place.place_id) {
-          console.warn(`[discoverBusinessesV2] Skipping place without google_place_id: ${place.name}`);
+          businessesSkipped++;
+          console.warn(`[discoverBusinessesV2] WARNING: Skipping place without google_place_id: ${place.name}`);
+          console.warn(`[discoverBusinessesV2] Place details:`, {
+            name: place.name,
+            formatted_address: place.formatted_address,
+            hasLocation: !!(place.latitude && place.longitude)
+          });
           continue;
         }
 
@@ -492,10 +529,12 @@ export async function discoverBusinessesV2(
 
         if (wasNew) {
           result.businessesCreated++;
-          console.log(`[discoverBusinessesV2] Created new business: ${business.id} (${place.name})`);
+          businessesInserted++;
+          console.log(`[discoverBusinessesV2] ✓ Created new business: ${business.id} (${place.name})`);
         } else if (wasUpdated) {
           result.businessesUpdated++;
-          console.log(`[discoverBusinessesV2] Updated existing business: ${business.id} (${place.name})`);
+          businessesInserted++;
+          console.log(`[discoverBusinessesV2] ✓ Updated existing business: ${business.id} (${place.name})`);
         }
 
         // Link business to dataset via junction table
@@ -508,6 +547,13 @@ export async function discoverBusinessesV2(
         console.error(`[discoverBusinessesV2] Error processing place ${place.place_id || place.name}:`, error);
       }
     }
+
+    // CRITICAL DEBUG: Final insertion summary
+    console.log(`\n[discoverBusinessesV2] ===== INSERTION SUMMARY =====`);
+    console.log(`[discoverBusinessesV2] Businesses inserted: ${businessesInserted}`);
+    console.log(`[discoverBusinessesV2] Businesses skipped: ${businessesSkipped}`);
+    console.log(`[discoverBusinessesV2] Total unique places: ${uniquePlaces.length}`);
+    console.log(`[discoverBusinessesV2] ==============================`);
 
     // STEP 6: Discovery does NOT create extraction jobs automatically
     // Extraction jobs are created:
