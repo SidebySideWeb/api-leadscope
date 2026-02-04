@@ -44,37 +44,86 @@ router.get('/', authMiddleware, async (req: AuthRequest, res): Promise<void> => 
     // Get datasets with industry and city names
     // Note: city_id and industry_id might be INTEGER or UUID depending on schema
     // Cast to text to handle both cases
-    const result = await pool.query<{
-      id: string;
-      user_id: string;
-      name: string;
-      city_id: string | number | null;
-      industry_id: string | number | null;
-      last_refreshed_at: Date | null;
-      created_at: Date;
-      businesses_count: number;
-      contacts_count: number;
-    }>(
-      `
-      SELECT 
-        d.id,
-        d.user_id,
-        d.name,
-        d.city_id::text as city_id,
-        d.industry_id::text as industry_id,
-        d.last_refreshed_at,
-        d.created_at,
-        COUNT(DISTINCT b.id) as businesses_count,
-        COUNT(DISTINCT c.id) as contacts_count
-      FROM datasets d
-      LEFT JOIN businesses b ON b.dataset_id = d.id
-      LEFT JOIN contacts c ON c.business_id = b.id
-      WHERE d.user_id = $1
-      GROUP BY d.id, d.user_id, d.name, d.city_id, d.industry_id, d.last_refreshed_at, d.created_at
-      ORDER BY d.created_at DESC
-      `,
-      [userId]
-    );
+    console.log('[datasets] Executing query with userId:', userId);
+    
+    // First, check if contacts table exists
+    let contactsTableExists = false;
+    try {
+      const tableCheck = await pool.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = 'contacts'
+        )
+      `);
+      contactsTableExists = tableCheck.rows[0]?.exists || false;
+      console.log('[datasets] Contacts table exists:', contactsTableExists);
+    } catch (checkError: any) {
+      console.warn('[datasets] Could not check if contacts table exists:', checkError.message);
+    }
+
+    let result;
+    try {
+      // Use a simpler query if contacts table doesn't exist
+      const query = contactsTableExists
+        ? `
+          SELECT 
+            d.id,
+            d.user_id,
+            d.name,
+            d.city_id::text as city_id,
+            d.industry_id::text as industry_id,
+            d.last_refreshed_at,
+            d.created_at,
+            COUNT(DISTINCT b.id) as businesses_count,
+            COUNT(DISTINCT c.id) as contacts_count
+          FROM datasets d
+          LEFT JOIN businesses b ON b.dataset_id = d.id
+          LEFT JOIN contacts c ON c.business_id = b.id
+          WHERE d.user_id = $1
+          GROUP BY d.id, d.user_id, d.name, d.city_id, d.industry_id, d.last_refreshed_at, d.created_at
+          ORDER BY d.created_at DESC
+        `
+        : `
+          SELECT 
+            d.id,
+            d.user_id,
+            d.name,
+            d.city_id::text as city_id,
+            d.industry_id::text as industry_id,
+            d.last_refreshed_at,
+            d.created_at,
+            COUNT(DISTINCT b.id) as businesses_count,
+            0 as contacts_count
+          FROM datasets d
+          LEFT JOIN businesses b ON b.dataset_id = d.id
+          WHERE d.user_id = $1
+          GROUP BY d.id, d.user_id, d.name, d.city_id, d.industry_id, d.last_refreshed_at, d.created_at
+          ORDER BY d.created_at DESC
+        `;
+
+      result = await pool.query<{
+        id: string;
+        user_id: string;
+        name: string;
+        city_id: string | number | null;
+        industry_id: string | number | null;
+        last_refreshed_at: Date | null;
+        created_at: Date;
+        businesses_count: number;
+        contacts_count: number;
+      }>(query, [userId]);
+    } catch (queryError: any) {
+      console.error('[datasets] Query error:', {
+        message: queryError.message,
+        code: queryError.code,
+        detail: queryError.detail,
+        hint: queryError.hint,
+        position: queryError.position,
+        stack: queryError.stack,
+      });
+      throw queryError; // Re-throw to be caught by outer catch
+    }
 
     console.log('[datasets] Query returned', result.rows.length, 'rows');
     if (result.rows.length > 0) {
@@ -87,10 +136,22 @@ router.get('/', authMiddleware, async (req: AuthRequest, res): Promise<void> => 
     }
 
     // Get industries and cities for name mapping
-    const [industries, cities] = await Promise.all([
-      getIndustries(),
-      getCities(),
-    ]);
+    let industries: Industry[] = [];
+    let cities: City[] = [];
+    try {
+      [industries, cities] = await Promise.all([
+        getIndustries(),
+        getCities(),
+      ]);
+      console.log('[datasets] Loaded', industries.length, 'industries and', cities.length, 'cities');
+    } catch (lookupError: any) {
+      console.error('[datasets] Error fetching industries/cities:', {
+        message: lookupError.message,
+        code: lookupError.code,
+        detail: lookupError.detail,
+      });
+      // Continue with empty arrays - datasets will show 'Unknown' for industry/city
+    }
 
     const industryMap = new Map(industries.map((i: Industry) => [i.id, i.name]));
     const cityMap = new Map(cities.map((c: City) => [c.id, c.name]));
@@ -166,12 +227,23 @@ router.get('/', authMiddleware, async (req: AuthRequest, res): Promise<void> => 
     console.log('[datasets] Dataset IDs:', datasets.map(d => d.id));
 
     // Get user's plan from database
-    const userResult = await pool.query<{ plan: string }>(
-      'SELECT plan FROM users WHERE id = $1',
-      [userId]
-    );
-    const userPlan = (userResult.rows[0]?.plan || 'demo') as string;
-    console.log('[datasets] User plan:', userPlan);
+    let userPlan = 'demo';
+    try {
+      const userResult = await pool.query<{ plan: string }>(
+        'SELECT plan FROM users WHERE id = $1',
+        [userId]
+      );
+      userPlan = (userResult.rows[0]?.plan || 'demo') as string;
+      console.log('[datasets] User plan:', userPlan);
+    } catch (planError: any) {
+      console.error('[datasets] Error fetching user plan:', {
+        message: planError.message,
+        code: planError.code,
+        detail: planError.detail,
+      });
+      // Continue with default 'demo' plan if lookup fails
+      console.log('[datasets] Using default plan: demo');
+    }
 
     res.json({
       data: datasets,
