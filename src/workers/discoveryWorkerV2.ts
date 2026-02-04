@@ -490,6 +490,11 @@ export async function discoverBusinessesV2(
     // CRITICAL DEBUG: Log businesses to insert
     console.log(`[discoverBusinessesV2] BUSINESSES TO INSERT: ${uniquePlaces.length}`);
     
+    console.log('🚨 ABOUT TO INSERT BUSINESSES', {
+      count: uniquePlaces.length,
+      sample: uniquePlaces[0],
+    });
+    
     let businessesInserted = 0;
     let businessesSkipped = 0;
     
@@ -563,6 +568,8 @@ export async function discoverBusinessesV2(
         console.error(`[discoverBusinessesV2] Error processing place ${place.place_id || place.name}:`, error);
       }
     }
+
+    console.log('✅ INSERT ATTEMPT FINISHED');
 
     // CRITICAL DEBUG: Final insertion summary
     console.log(`\n[discoverBusinessesV2] ===== INSERTION SUMMARY =====`);
