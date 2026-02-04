@@ -520,6 +520,12 @@ export async function discoverBusinessesV2(
           }
         }
 
+        // CRITICAL: city_id is NOT NULL in database - must be provided from discovery context
+        // Fail fast if city_id is missing instead of causing silent rollback
+        if (!finalCityId || finalCityId.trim().length === 0) {
+          throw new Error(`city_id missing in discovery insert for business "${place.name}" - City ID must be provided from discovery context`);
+        }
+
         // UPSERT business globally by google_place_id
         // This ensures businesses are never duplicated
         // Discovery only enriches metadata - does NOT fetch website/phone (Place Details API)
@@ -527,7 +533,7 @@ export async function discoverBusinessesV2(
           name: place.name,
           address: place.formatted_address || null,
           postal_code: postalCode,
-          city_id: finalCityId,
+          city_id: finalCityId, // CRITICAL: Required - businesses.city_id is NOT NULL
           industry_id: industry.id,
           google_place_id: place.place_id,
           latitude: place.latitude || resolvedLatitude || null, // Use place location or city center as fallback

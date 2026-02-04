@@ -54,6 +54,12 @@ export async function upsertBusiness(data: {
   owner_user_id: string;
   discovery_run_id?: string | null; // UUID
 }): Promise<{ business: Business; wasUpdated: boolean }> {
+  // CRITICAL: city_id is NOT NULL in database - missing this causes silent rollbacks
+  // Always validate city_id is provided from discovery context
+  if (!data.city_id || data.city_id.trim().length === 0) {
+    throw new Error(`city_id missing in discovery insert for business "${data.name}" - this will cause silent insert failures. City ID must be provided from discovery context.`);
+  }
+
   // CRITICAL: normalized_name is NOT NULL in database - missing this causes silent rollbacks
   // Always generate normalized_name from business name using deterministic normalization
   const normalized_name = computeNormalizedBusinessId({

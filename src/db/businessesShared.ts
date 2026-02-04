@@ -52,6 +52,12 @@ export async function upsertBusinessGlobal(data: {
   rating?: number | null;
   user_rating_count?: number | null;
 }): Promise<{ business: Business; wasUpdated: boolean; wasNew: boolean }> {
+  // CRITICAL: city_id is NOT NULL in database - missing this causes silent rollbacks
+  // Always validate city_id is provided from discovery context
+  if (!data.city_id || data.city_id.trim().length === 0) {
+    throw new Error(`city_id missing in discovery insert for business "${data.name}" - this will cause silent insert failures. City ID must be provided from discovery context.`);
+  }
+
   if (!data.google_place_id) {
     throw new Error('google_place_id is required for global business upsert');
   }

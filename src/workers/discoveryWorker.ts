@@ -523,6 +523,12 @@ async function processPlace(
     throw new Error(`[processPlace] discovery_run_id is required but was not provided. Cannot create business ${place.name} without linking it to a discovery_run.`);
   }
 
+  // CRITICAL: city_id is NOT NULL in database - must be provided from discovery context
+  // Fail fast if city_id is missing instead of causing silent rollback
+  if (!cityId || cityId.trim().length === 0) {
+    throw new Error(`city_id missing in discovery insert for business "${place.name}" - City ID must be provided from discovery context`);
+  }
+
   // Upsert business: Insert if new, Update if exists
   // Deduplication by: (dataset_id, normalized_name) or google_place_id
   // ALWAYS include discovery_run_id - this is mandatory for discovery-created businesses
@@ -530,7 +536,7 @@ async function processPlace(
     name: place.name,
     address: place.formatted_address || null,
     postal_code: postalCode,
-    city_id: cityId,
+    city_id: cityId, // CRITICAL: Required - businesses.city_id is NOT NULL
     industry_id: industryId,
     google_place_id: place.place_id || null,
     dataset_id: datasetId,
