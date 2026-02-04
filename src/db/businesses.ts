@@ -211,15 +211,17 @@ export async function upsertBusiness(data: {
 /**
  * Legacy createBusiness function - now uses upsertBusiness internally
  * Maintained for backward compatibility
+ * 
+ * NOTE: industry_id is now required (NOT NULL in database)
  */
 export async function createBusiness(data: {
   name: string;
   address: string | null;
   postal_code: string | null;
-  city_id: string; // UUID
-  industry_id: string | null; // UUID
+  city_id: string; // UUID - REQUIRED (NOT NULL)
+  industry_id: string; // UUID - REQUIRED (NOT NULL)
   google_place_id: string | null;
-  dataset_id: string; // UUID
+  dataset_id: string; // UUID - REQUIRED (NOT NULL)
   owner_user_id: string;
 }): Promise<Business> {
   const { business } = await upsertBusiness(data);

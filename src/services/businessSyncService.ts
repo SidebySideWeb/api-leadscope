@@ -82,13 +82,18 @@ async function syncBusiness(business: Business): Promise<{ updated: boolean; err
       return { updated: false, error: 'Business is a shared asset without dataset_id' };
     }
 
+    // Skip if business has no industry_id (should not happen if database constraint is enforced)
+    if (!business.industry_id) {
+      return { updated: false, error: 'Business is missing industry_id (required NOT NULL)' };
+    }
+
     // Upsert business with fresh data
     const { wasUpdated } = await upsertBusiness({
       name: placeDetails.name || business.name,
       address: placeDetails.formatted_address || business.address,
       postal_code: postalCode || business.postal_code,
       city_id: city.id,
-      industry_id: business.industry_id,
+      industry_id: business.industry_id, // Type guard ensures this is not null
       google_place_id: business.google_place_id,
       dataset_id: business.dataset_id,
       owner_user_id: business.owner_user_id,
