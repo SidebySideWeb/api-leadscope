@@ -74,28 +74,29 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     
     console.log('[discovery] payload:', { industry_id, city_id, dataset_id });
     
-    // CRITICAL: Explicit validation - fail fast with clear error
-    if (!industry_id || !city_id || !dataset_id) {
+    // CRITICAL: Explicit validation - industry_id and city_id are required
+    // dataset_id is optional and will be auto-resolved if missing
+    if (!industry_id || !city_id) {
       const missing = [];
-      if (!industry_id) missing.push('industry_id');
-      if (!city_id) missing.push('city_id');
-      if (!dataset_id) missing.push('dataset_id');
+      if (!industry_id) missing.push('industry_id (or industryId)');
+      if (!city_id) missing.push('city_id (or cityId)');
       
-      const errorMsg = `Invalid discovery request: missing required fields: ${missing.join(', ')}. Expected snake_case: industry_id, city_id, dataset_id. Received body keys: ${Object.keys(req.body || {}).join(', ') || 'none'}`;
+      const errorMsg = `Invalid discovery request: missing required fields: ${missing.join(', ')}. Expected: industry_id, city_id (dataset_id is optional). Received body keys: ${Object.keys(req.body || {}).join(', ') || 'none'}`;
       console.error('[API] Validation failed:', errorMsg);
       console.error('[API] Full req.body:', JSON.stringify(req.body, null, 2));
       throw new Error(errorMsg);
     }
 
-    // Validate UUID format for all IDs
+    // Validate UUID format for required IDs (industry_id and city_id)
     const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    if (!uuidRegex.test(industry_id)) {
+    if (!uuidRegex.test(industry_id!)) {
       throw new Error(`Invalid discovery request: industry_id must be a valid UUID, got: ${industry_id}`);
     }
-    if (!uuidRegex.test(city_id)) {
+    if (!uuidRegex.test(city_id!)) {
       throw new Error(`Invalid discovery request: city_id must be a valid UUID, got: ${city_id}`);
     }
-    if (!uuidRegex.test(dataset_id)) {
+    // dataset_id is optional, but if provided, must be valid UUID
+    if (dataset_id && !uuidRegex.test(dataset_id)) {
       throw new Error(`Invalid discovery request: dataset_id must be a valid UUID, got: ${dataset_id}`);
     }
     
@@ -116,8 +117,9 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     console.log('[API] Available cities:', cities.map(c => ({ id: c.id, name: c.name })).slice(0, 10)); // Log first 10
 
     // Both industries and cities use UUIDs (strings), so compare as strings
-    const industry = industries.find((i) => String(i.id) === String(industry_id));
-    const city = cities.find((c) => String(c.id) === String(city_id));
+    // TypeScript: industry_id and city_id are guaranteed to be strings here due to validation above
+    const industry = industries.find((i) => String(i.id) === String(industry_id!));
+    const city = cities.find((c) => String(c.id) === String(city_id!));
 
     if (!industry) {
       const availableIds = industries.map(i => i.id).join(', ');
@@ -134,8 +136,42 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
 
     console.log('[API] Starting discovery job for:', { industry: industry.name, city: city.name });
 
-    // Use provided dataset_id (required field, already validated)
-    const finalDatasetId = dataset_id;
+    // Find or resolve dataset ID FIRST (before creating discovery_run)
+    // dataset_id is optional - if not provided, find or create one
+    let finalDatasetId = dataset_id;
+    if (!finalDatasetId) {
+      console.log('[API] dataset_id not provided, attempting to find existing dataset...');
+      // Try to find existing dataset first
+      const existingDataset = await pool.query<{ id: string }>(
+        `
+        SELECT id FROM datasets
+        WHERE user_id = $1
+          AND city_id = $2
+          AND industry_id = $3
+        ORDER BY created_at DESC
+        LIMIT 1
+        `,
+        [userId, city_id!, industry_id!]
+      );
+      finalDatasetId = existingDataset.rows[0]?.id;
+      
+      if (finalDatasetId) {
+        console.log('[API] Found existing dataset:', finalDatasetId);
+      }
+    }
+
+    // If dataset doesn't exist yet, create it synchronously so we can link discovery_run to it
+    if (!finalDatasetId) {
+      console.log('[API] Creating new dataset...');
+      const { resolveDataset } = await import('../services/datasetResolver.js');
+      const resolverResult = await resolveDataset({
+        userId,
+        cityId: city.id, // Use city ID instead of name to prevent city creation
+        industryId: industry.id, // Use industry ID instead of name to prevent industry creation
+      });
+      finalDatasetId = resolverResult.dataset.id;
+      console.log('[API] Created dataset for discovery_run:', finalDatasetId);
+    }
     
     // Verify dataset exists and user owns it
     const dataset = await getDatasetById(finalDatasetId);
