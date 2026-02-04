@@ -367,9 +367,9 @@ export async function getBusinessesWithCompleteData(
   }
 
   const result = await pool.query<{ google_place_id: string }>(
-    `SELECT DISTINCT b.google_place_id
+    `SELECT DISTINCT b.google_place_id::text as google_place_id
      FROM businesses b
-     WHERE b.google_place_id = ANY($1)
+     WHERE b.google_place_id::text = ANY($1::text[])
        AND EXISTS (SELECT 1 FROM websites w WHERE w.business_id = b.id)
        AND EXISTS (
          SELECT 1 
