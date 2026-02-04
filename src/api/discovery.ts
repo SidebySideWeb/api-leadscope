@@ -144,6 +144,17 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     // Uses V2 grid-based discovery (always uses grid + keyword expansion)
     // Extraction will happen in the background via extraction worker
     console.log('[API] Starting discovery job asynchronously...');
+    console.log('[API] Discovery job params:', {
+      userId,
+      industry_id: industry.id,
+      city_id: city.id,
+      latitude: city.latitude,
+      longitude: city.longitude,
+      cityRadiusKm: city.radius_km,
+      datasetId: finalDatasetId,
+      discoveryRunId: discoveryRun.id
+    });
+    
     runDiscoveryJob({
       userId,
       industry_id: industry.id, // Use industry_id for keyword-based discovery
@@ -156,6 +167,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     }).catch((error) => {
       // Log errors but don't block the response
       console.error('[API] Discovery job error:', error);
+      console.error('[API] Discovery job error stack:', error instanceof Error ? error.stack : 'No stack trace');
     });
 
     // Return discovery_run immediately - frontend can poll for results

@@ -183,6 +183,16 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
 
     // Run discovery using grid-based V2 worker (always uses grid + keyword expansion)
     // If gated, discovery will still run but we'll mark it in the result
+    console.log(`[runDiscoveryJob] Calling discoverBusinessesV2 with:`, {
+      industry_id: input.industry_id,
+      city_id: input.city_id,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      cityRadiusKm: input.cityRadiusKm,
+      datasetId: datasetId,
+      discoveryRunId: discoveryRun.id
+    });
+    
     const discoveryResult = await discoverBusinessesV2({
       industry: input.industry, // Legacy support
       industry_id: input.industry_id, // Preferred
@@ -193,6 +203,13 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       cityRadiusKm: input.cityRadiusKm,
       datasetId: datasetId
     }, discoveryRun.id);
+    
+    console.log(`[runDiscoveryJob] discoverBusinessesV2 completed:`, {
+      businessesFound: discoveryResult.businessesFound,
+      businessesCreated: discoveryResult.businessesCreated,
+      searchesExecuted: discoveryResult.searchesExecuted,
+      errors: discoveryResult.errors.length
+    });
 
     // Mark dataset as refreshed after successful discovery
     if (!isReused || discoveryResult.businessesCreated > 0) {
@@ -302,7 +319,13 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
   } catch (error) {
     const endTime = new Date();
     const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : 'No stack trace';
     errors.push(`Discovery job failed: ${errorMsg}`);
+    
+    console.error('[runDiscoveryJob] ===== DISCOVERY JOB ERROR =====');
+    console.error('[runDiscoveryJob] Error message:', errorMsg);
+    console.error('[runDiscoveryJob] Error stack:', errorStack);
+    console.error('[runDiscoveryJob] Full error object:', error);
     
     // Mark discovery_run as failed if it was created
     // Ensure it always ends in completed or failed, never stuck in running

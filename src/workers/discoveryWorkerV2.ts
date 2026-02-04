@@ -125,7 +125,22 @@ export async function discoverBusinessesV2(
   discoveryRunId?: string | null,
   config?: Partial<DiscoveryConfig>
 ): Promise<DiscoveryResult> {
+  console.log(`\n[discoverBusinessesV2] ===== DISCOVERY STARTED =====`);
+  console.log(`[discoverBusinessesV2] Input:`, JSON.stringify({
+    industry_id: input.industry_id,
+    industry: input.industry,
+    city_id: input.city_id,
+    city: input.city,
+    latitude: input.latitude,
+    longitude: input.longitude,
+    cityRadiusKm: input.cityRadiusKm,
+    datasetId: input.datasetId
+  }, null, 2));
+  console.log(`[discoverBusinessesV2] Discovery Run ID:`, discoveryRunId);
+  
   const discoveryConfig = { ...getDiscoveryConfig(), ...config };
+  console.log(`[discoverBusinessesV2] Config:`, JSON.stringify(discoveryConfig, null, 2));
+  
   const result: DiscoveryResult = {
     businessesFound: 0,
     businessesCreated: 0,
@@ -538,8 +553,12 @@ export async function discoverBusinessesV2(
 
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : 'No stack trace';
     result.errors.push(`Discovery error: ${errorMsg}`);
-    console.error('[discoverBusinessesV2] Discovery error:', error);
+    console.error('[discoverBusinessesV2] ===== DISCOVERY ERROR =====');
+    console.error('[discoverBusinessesV2] Error message:', errorMsg);
+    console.error('[discoverBusinessesV2] Error stack:', errorStack);
+    console.error('[discoverBusinessesV2] Full error object:', error);
     
     if (discoveryRunId) {
       try {
