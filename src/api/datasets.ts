@@ -64,8 +64,25 @@ router.get('/', authMiddleware, async (req: AuthRequest, res): Promise<void> => 
 
     let result;
     try {
-      // Use a simpler query if contacts table doesn't exist
-      const query = contactsTableExists
+      // Contacts are linked to businesses through contact_sources table, not directly
+      // Check if contact_sources table exists
+      let contactSourcesTableExists = false;
+      try {
+        const csTableCheck = await pool.query(`
+          SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name = 'contact_sources'
+          )
+        `);
+        contactSourcesTableExists = csTableCheck.rows[0]?.exists || false;
+        console.log('[datasets] Contact_sources table exists:', contactSourcesTableExists);
+      } catch (checkError: any) {
+        console.warn('[datasets] Could not check if contact_sources table exists:', checkError.message);
+      }
+
+      // Use correct join through contact_sources if both tables exist
+      const query = (contactsTableExists && contactSourcesTableExists)
         ? `
           SELECT 
             d.id,
@@ -79,7 +96,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res): Promise<void> => 
             COUNT(DISTINCT c.id) as contacts_count
           FROM datasets d
           LEFT JOIN businesses b ON b.dataset_id = d.id
-          LEFT JOIN contacts c ON c.business_id = b.id
+          LEFT JOIN contact_sources cs ON cs.business_id = b.id
+          LEFT JOIN contacts c ON c.id = cs.contact_id
           WHERE d.user_id = $1
           GROUP BY d.id, d.user_id, d.name, d.city_id, d.industry_id, d.last_refreshed_at, d.created_at
           ORDER BY d.created_at DESC
@@ -321,6 +339,7 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res): Promise<void> 
     }
 
     // Get counts
+    // Contacts are linked through contact_sources, not directly
     const countsResult = await pool.query<{
       businesses_count: number;
       contacts_count: number;
@@ -330,7 +349,8 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res): Promise<void> 
         COUNT(DISTINCT b.id) as businesses_count,
         COUNT(DISTINCT c.id) as contacts_count
       FROM businesses b
-      LEFT JOIN contacts c ON c.business_id = b.id
+      LEFT JOIN contact_sources cs ON cs.business_id = b.id
+      LEFT JOIN contacts c ON c.id = cs.contact_id
       WHERE b.dataset_id = $1
       `,
       [datasetId]
