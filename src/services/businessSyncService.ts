@@ -77,6 +77,11 @@ async function syncBusiness(business: Business): Promise<{ updated: boolean; err
     // Get or create city
     const city = await getOrCreateCity(cityName, country.id);
 
+    // Skip if business has no dataset_id (shared asset)
+    if (!business.dataset_id) {
+      return { updated: false, error: 'Business is a shared asset without dataset_id' };
+    }
+
     // Upsert business with fresh data
     const { wasUpdated } = await upsertBusiness({
       name: placeDetails.name || business.name,

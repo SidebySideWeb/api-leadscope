@@ -20,7 +20,7 @@ import type { Business } from '../types/index.js';
 export async function aggregateBusinessData(
   _store: Store,
   businesses: Business[],
-  _datasetId: string
+  datasetId: string
 ): Promise<BusinessExportData[]> {
   console.log(`[aggregateBusinessData] Aggregating data for ${businesses.length} businesses`);
   console.warn('[aggregateBusinessData] This is a placeholder - implement based on your store');
@@ -38,7 +38,7 @@ export async function aggregateBusinessData(
           normalized_name: business.normalized_name,
           address: business.address,
           postal_code: business.postal_code,
-          dataset_id: business.dataset_id,
+          dataset_id: datasetId, // Use provided dataset_id
           created_at: business.created_at,
           google_place_id: business.google_place_id
         },
@@ -86,7 +86,8 @@ export function createBusinessExportData(
     status: string;
     depth: number | null;
     pages_crawled: number | null;
-  } | null
+  } | null,
+  datasetId: string // Required: dataset_id for the export
 ): BusinessExportData {
   return {
     business: {
@@ -95,7 +96,7 @@ export function createBusinessExportData(
       normalized_name: business.normalized_name,
       address: business.address,
       postal_code: business.postal_code,
-      dataset_id: business.dataset_id,
+      dataset_id: datasetId, // Use provided dataset_id
       created_at: business.created_at,
       google_place_id: business.google_place_id
     },

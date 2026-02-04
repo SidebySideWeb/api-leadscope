@@ -105,7 +105,8 @@ export interface BusinessExportInput {
  * @returns ExportRowV1 ready for export
  */
 export function mapBusinessAndCrawlResultToExportRow(
-  input: BusinessExportInput
+  input: BusinessExportInput,
+  datasetId: string // Required: dataset_id for the export
 ): ExportRowV1 {
   const { business, industry, city, crawlResult } = input;
   
@@ -152,7 +153,7 @@ export function mapBusinessAndCrawlResultToExportRow(
   const websiteUrl = crawlResult?.website_url || null;
   
   return {
-    dataset_id: business.dataset_id,
+    dataset_id: datasetId, // Use provided dataset_id
     business_id: String(business.id), // Convert to string for consistency
     business_name: business.name,
     business_address: business.address,

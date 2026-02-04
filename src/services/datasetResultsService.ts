@@ -127,29 +127,32 @@ export async function getDatasetResults(
   }
 
   // 6. Combine businesses with crawl results
-  return businessesResult.rows.map((business) => {
-    const businessIdUuid = integerToUuid(business.id);
-    const crawlResult = crawlResultMap.get(businessIdUuid);
-    
-    const crawlStatus = crawlResult?.crawl_status || 'not_crawled';
-    const emails = crawlResult?.emails || [];
-    const phones = crawlResult?.phones || [];
-    const social = crawlResult?.social || {};
-    
-    return {
-      business: {
-        id: business.id,
-        name: business.name,
-        address: business.address,
-        postal_code: business.postal_code,
-        city_id: business.city_id,
-        industry_id: business.industry_id,
-        google_place_id: business.google_place_id,
-        dataset_id: business.dataset_id,
-        owner_user_id: business.owner_user_id,
-        created_at: business.created_at,
-        updated_at: business.updated_at,
-      },
+  // Filter out businesses without dataset_id (shouldn't happen due to query, but TypeScript safety)
+  return businessesResult.rows
+    .filter((business) => business.dataset_id !== null)
+    .map((business) => {
+      const businessIdUuid = integerToUuid(business.id);
+      const crawlResult = crawlResultMap.get(businessIdUuid);
+      
+      const crawlStatus = crawlResult?.crawl_status || 'not_crawled';
+      const emails = crawlResult?.emails || [];
+      const phones = crawlResult?.phones || [];
+      const social = crawlResult?.social || {};
+      
+      return {
+        business: {
+          id: business.id,
+          name: business.name,
+          address: business.address,
+          postal_code: business.postal_code,
+          city_id: business.city_id,
+          industry_id: business.industry_id,
+          google_place_id: business.google_place_id,
+          dataset_id: business.dataset_id!, // Non-null assertion: filtered above
+          owner_user_id: business.owner_user_id,
+          created_at: business.created_at,
+          updated_at: business.updated_at,
+        },
       crawl: {
         status: crawlStatus,
         emailsCount: emails.length,

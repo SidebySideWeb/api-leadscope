@@ -65,7 +65,7 @@ function exampleWithCrawlResult() {
     crawlResult,
   };
 
-  const exportRow: ExportRowV1 = mapBusinessAndCrawlResultToExportRow(input);
+  const exportRow: ExportRowV1 = mapBusinessAndCrawlResultToExportRow(input, business.dataset_id!);
 
   // Type check
   assertExportRowV1(exportRow);
@@ -107,7 +107,7 @@ function exampleWithoutCrawlResult() {
     crawlResult: null, // No crawl result
   };
 
-  const exportRow: ExportRowV1 = mapBusinessAndCrawlResultToExportRow(input);
+  const exportRow: ExportRowV1 = mapBusinessAndCrawlResultToExportRow(input, business.dataset_id!);
 
   // Type check
   assertExportRowV1(exportRow);

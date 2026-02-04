@@ -15,7 +15,8 @@ export function crawlResultToExportData(
   business: Business,
   industry: { name: string } | null,
   city: { name: string; latitude: number | null; longitude: number | null },
-  country: { name: string; code: string } | null
+  country: { name: string; code: string } | null,
+  datasetId: string // Required: dataset_id for the export
 ): Partial<BusinessExportData> {
   // Determine crawl status
   let crawlStatus = 'not_crawled';
@@ -54,7 +55,7 @@ export function crawlResultToExportData(
       normalized_name: business.normalized_name,
       address: business.address,
       postal_code: business.postal_code,
-      dataset_id: business.dataset_id,
+      dataset_id: datasetId, // Use provided dataset_id
       created_at: business.created_at,
       google_place_id: business.google_place_id
     },

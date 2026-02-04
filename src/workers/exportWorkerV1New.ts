@@ -289,7 +289,7 @@ export async function exportWorkerV1New(
         city: item.city,
         crawlResult: item.crawlResult,
       };
-      return mapBusinessAndCrawlResultToExportRow(input);
+      return mapBusinessAndCrawlResultToExportRow(input, datasetId);
     });
 
     // 5. Apply pricing gates

@@ -214,7 +214,20 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
 router.get('/runs/:runId/results', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.userId!;
-    const runId = req.params.runId;
+    const runId = Array.isArray(req.params.runId) ? req.params.runId[0] : req.params.runId;
+
+    if (!runId) {
+      return res.status(400).json({
+        data: null,
+        meta: {
+          plan_id: 'demo',
+          gated: false,
+          total_available: 0,
+          total_returned: 0,
+          gate_reason: 'runId is required',
+        },
+      });
+    }
 
     // Get discovery run
     const discoveryRun = await getDiscoveryRunById(runId);
