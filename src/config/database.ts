@@ -70,12 +70,24 @@ export async function testConnection(): Promise<boolean> {
       now: Date;
       current_user: string;
       current_database: string;
-    }>('SELECT NOW() as now, current_user, current_database() as current_database');
+      is_superuser: boolean;
+    }>(`
+      SELECT 
+        NOW() as now, 
+        current_user, 
+        current_database() as current_database,
+        EXISTS (
+          SELECT 1 FROM pg_roles 
+          WHERE rolname = current_user 
+          AND rolsuper = true
+        ) as is_superuser
+    `);
     
     console.log('[DATABASE] Connection successful:', {
       timestamp: result.rows[0].now,
       user: result.rows[0].current_user,
-      database: result.rows[0].current_database
+      database: result.rows[0].current_database,
+      is_superuser: result.rows[0].is_superuser
     });
     
     // Test RLS is enabled on key tables
@@ -84,7 +96,7 @@ export async function testConnection(): Promise<boolean> {
         SELECT tablename, rowsecurity 
         FROM pg_tables 
         WHERE schemaname = 'public' 
-        AND tablename IN ('contacts', 'contact_sources', 'websites', 'businesses', 'extraction_jobs')
+        AND tablename IN ('contacts', 'contact_sources', 'websites', 'businesses', 'extraction_jobs', 'datasets')
         ORDER BY tablename
       `);
       
@@ -95,6 +107,21 @@ export async function testConnection(): Promise<boolean> {
     } catch (rlsError: any) {
       // RLS check is optional - don't fail connection test if it fails
       console.log('[DATABASE] Could not check RLS status (non-critical):', rlsError.message);
+    }
+    
+    // Test if we can query datasets without RLS blocking (superuser should bypass)
+    try {
+      const testQuery = await pool.query('SELECT COUNT(*) as total FROM datasets');
+      console.log('[DATABASE] RLS Bypass Test: Can query all datasets (total:', testQuery.rows[0].total, ')');
+      console.log('[DATABASE] ✅ RLS is being bypassed (superuser access confirmed)');
+    } catch (testError: any) {
+      console.error('[DATABASE] ⚠️ RLS Bypass Test FAILED:', {
+        message: testError.message,
+        code: testError.code,
+        detail: testError.detail,
+        hint: testError.hint
+      });
+      console.error('[DATABASE] ⚠️ RLS might not be bypassed. Check DATABASE_URL uses postgres superuser.');
     }
     
     return true;
