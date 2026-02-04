@@ -56,10 +56,17 @@ export async function upsertBusinessGlobal(data: {
     throw new Error('google_place_id is required for global business upsert');
   }
 
+  // CRITICAL: normalized_name is NOT NULL in database - missing this causes silent rollbacks
+  // Always generate normalized_name from business name using deterministic normalization
   const normalized_name = computeNormalizedBusinessId({
     name: data.name,
     googlePlaceId: data.google_place_id
   });
+  
+  // Ensure normalized_name is never empty (fallback to google_place_id if normalization fails)
+  if (!normalized_name || normalized_name.trim().length === 0) {
+    throw new Error(`Failed to generate normalized_name for business "${data.name}" - this will cause silent insert failures`);
+  }
 
   // Try to insert, handling conflict on google_place_id
   const result = await pool.query<Business>(

@@ -2,10 +2,14 @@
 
 /**
  * Normalizes business name for deduplication
+ * Uses deterministic normalization strategy:
  * - lowercase
- * - remove accents
- * - replace symbols with dash
- * - trim dashes
+ * - remove accents (Unicode NFD decomposition + remove combining marks)
+ * - remove symbols
+ * - replace spaces with hyphens
+ * 
+ * CRITICAL: Missing normalized_name causes silent rollbacks because
+ * businesses.normalized_name column is NOT NULL.
  * 
  * @throws Error if normalization results in empty string
  */
@@ -14,44 +18,14 @@ export function normalizeBusinessName(name: string): string {
     throw new Error('Business name is required and must be a non-empty string');
   }
 
+  // Deterministic normalization strategy
   let normalized = name
     .toLowerCase()
-    .trim();
-
-  // Remove Greek accents (similar to cityNormalizer)
-  normalized = normalized
-    .replace(/ά/g, 'α')
-    .replace(/έ/g, 'ε')
-    .replace(/ή/g, 'η')
-    .replace(/ί/g, 'ι')
-    .replace(/ό/g, 'ο')
-    .replace(/ύ/g, 'υ')
-    .replace(/ώ/g, 'ω')
-    .replace(/Ά/g, 'α')
-    .replace(/Έ/g, 'ε')
-    .replace(/Ή/g, 'η')
-    .replace(/Ί/g, 'ι')
-    .replace(/Ό/g, 'ο')
-    .replace(/Ύ/g, 'υ')
-    .replace(/Ώ/g, 'ω');
-
-  // Replace symbols and special characters with dash
-  normalized = normalized.replace(/[^\w\s-]/g, '-');
-
-  // Normalize whitespace to single spaces
-  normalized = normalized.replace(/\s+/g, ' ');
-
-  // Replace spaces with dashes
-  normalized = normalized.replace(/\s/g, '-');
-
-  // Remove multiple consecutive dashes
-  normalized = normalized.replace(/-+/g, '-');
-
-  // Trim dashes from start and end
-  normalized = normalized.replace(/^-+|-+$/g, '');
-
-  // Final trim
-  normalized = normalized.trim();
+    .normalize('NFD') // Decompose Unicode characters (é -> e + ́)
+    .replace(/[\u0300-\u036f]/g, '') // Remove combining diacritical marks (accents)
+    .replace(/[^a-z0-9\s]/g, '') // Remove symbols, keep only letters, numbers, spaces
+    .trim()
+    .replace(/\s+/g, '-'); // Replace spaces with hyphens
 
   // Validate: normalized name must not be empty
   if (!normalized || normalized.length === 0) {

@@ -54,11 +54,17 @@ export async function upsertBusiness(data: {
   owner_user_id: string;
   discovery_run_id?: string | null; // UUID
 }): Promise<{ business: Business; wasUpdated: boolean }> {
-  // Compute normalized name BEFORE insert/update
+  // CRITICAL: normalized_name is NOT NULL in database - missing this causes silent rollbacks
+  // Always generate normalized_name from business name using deterministic normalization
   const normalized_name = computeNormalizedBusinessId({
     name: data.name,
     googlePlaceId: data.google_place_id
   });
+  
+  // Ensure normalized_name is never empty (fallback to google_place_id if normalization fails)
+  if (!normalized_name || normalized_name.trim().length === 0) {
+    throw new Error(`Failed to generate normalized_name for business "${data.name}" - this will cause silent insert failures`);
+  }
 
   // Try to insert, handling conflicts on (dataset_id, normalized_name)
   // On conflict: UPDATE existing business with fresh data
