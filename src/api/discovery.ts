@@ -31,6 +31,15 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     const userId = req.userId;
     console.log('[discovery] user:', req.user.id);
     
+    // CRITICAL: Check if body exists
+    if (!req.body || typeof req.body !== 'object' || Object.keys(req.body).length === 0) {
+      const errorMsg = 'Invalid discovery request: request body is missing or empty. Expected JSON body with industry_id, city_id, dataset_id';
+      console.error('[API] Validation failed:', errorMsg);
+      console.error('[API] req.body type:', typeof req.body);
+      console.error('[API] req.body:', req.body);
+      throw new Error(errorMsg);
+    }
+    
     // CRITICAL DEBUG: Log all body keys to see what was sent
     console.log('[discovery] req.body keys:', Object.keys(req.body || {}));
     console.log('[discovery] req.body values:', req.body);
