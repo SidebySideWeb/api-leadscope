@@ -19,13 +19,47 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
   console.log('[API] Request method:', req.method);
   console.log('[API] Request path:', req.path);
   console.log('[API] Request body:', JSON.stringify(req.body, null, 2));
-  console.log('[API] User ID:', req.userId);
+  console.log('[API] Authorization header:', req.headers.authorization ? 'present' : 'missing');
   
   try {
-    const userId = req.userId!;
-    const { industryId: rawIndustryId, cityId: rawCityId, datasetId } = req.body;
+    // CRITICAL: Fail-fast if user is missing (auth middleware should have set this)
+    if (!req.user || !req.userId) {
+      console.error('[API] ERROR: req.user or req.userId is missing after auth middleware');
+      throw new Error('Unauthorized: missing or invalid token');
+    }
+
+    const userId = req.userId;
+    console.log('[discovery] user:', req.user.id);
     
-    console.log('[API] Extracted params:', { rawIndustryId, rawCityId, datasetId });
+    // CRITICAL: Accept snake_case payload only (industry_id, city_id, dataset_id)
+    // Do NOT accept camelCase silently
+    const { industry_id, city_id, dataset_id } = req.body;
+    
+    console.log('[discovery] payload:', { industry_id, city_id, dataset_id });
+    
+    // CRITICAL: Explicit validation - fail fast with clear error
+    if (!industry_id || !city_id || !dataset_id) {
+      const missing = [];
+      if (!industry_id) missing.push('industry_id');
+      if (!city_id) missing.push('city_id');
+      if (!dataset_id) missing.push('dataset_id');
+      
+      const errorMsg = `Invalid discovery request: missing required fields: ${missing.join(', ')}. Expected snake_case: industry_id, city_id, dataset_id`;
+      console.error('[API] Validation failed:', errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    // Validate UUID format for all IDs
+    const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+    if (!uuidRegex.test(industry_id)) {
+      throw new Error(`Invalid discovery request: industry_id must be a valid UUID, got: ${industry_id}`);
+    }
+    if (!uuidRegex.test(city_id)) {
+      throw new Error(`Invalid discovery request: city_id must be a valid UUID, got: ${city_id}`);
+    }
+    if (!uuidRegex.test(dataset_id)) {
+      throw new Error(`Invalid discovery request: dataset_id must be a valid UUID, got: ${dataset_id}`);
+    }
     
     // Get user's plan from database
     const userResult = await pool.query<{ plan: string }>(
@@ -33,42 +67,6 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       [userId]
     );
     const userPlan = (userResult.rows[0]?.plan || 'demo') as string;
-
-    console.log('[API] Discovery request body:', JSON.stringify(req.body));
-    console.log('[API] Discovery request:', { rawIndustryId, rawCityId, datasetId, userId, types: { industryId: typeof rawIndustryId, cityId: typeof rawCityId } });
-
-    // Both industries and cities use UUIDs (strings)
-    const industryId = rawIndustryId; // UUID string
-    const cityId = rawCityId; // UUID string
-
-    // Validate required fields
-    if (!industryId || industryId === null || industryId === undefined) {
-      console.log('[API] Validation failed: missing industryId', { industryId });
-      return res.status(400).json({
-        data: null,
-        meta: {
-          plan_id: userPlan,
-          gated: false,
-          total_available: 0,
-          total_returned: 0,
-          gate_reason: 'Missing or invalid industryId',
-        },
-      });
-    }
-
-    if (!cityId || cityId === null || cityId === undefined) {
-      console.log('[API] Validation failed: missing or invalid cityId', { cityId });
-      return res.status(400).json({
-        data: null,
-        meta: {
-          plan_id: userPlan,
-          gated: false,
-          total_available: 0,
-          total_returned: 0,
-          gate_reason: 'Missing or invalid cityId',
-        },
-      });
-    }
 
     // Get industry and city names from IDs
     const [industries, cities] = await Promise.all([
@@ -80,67 +78,41 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     console.log('[API] Available cities:', cities.map(c => ({ id: c.id, name: c.name })).slice(0, 10)); // Log first 10
 
     // Both industries and cities use UUIDs (strings), so compare as strings
-    const industry = industries.find((i) => String(i.id) === String(industryId));
-    const city = cities.find((c) => String(c.id) === String(cityId));
+    const industry = industries.find((i) => String(i.id) === String(industry_id));
+    const city = cities.find((c) => String(c.id) === String(city_id));
 
     if (!industry) {
       const availableIds = industries.map(i => i.id).join(', ');
-      console.log(`[API] Industry ID ${industryId} not found. Available IDs: ${availableIds}`);
-      return res.status(400).json({
-        data: null,
-        meta: {
-          plan_id: userPlan,
-          gated: false,
-          total_available: 0,
-          total_returned: 0,
-          gate_reason: `Industry with ID ${industryId} not found. Available industry IDs: ${availableIds || 'none'}`,
-        },
-      });
+      const errorMsg = `Industry with ID ${industry_id} not found. Available industry IDs: ${availableIds || 'none'}`;
+      console.error(`[API] ${errorMsg}`);
+      throw new Error(errorMsg);
     }
 
     if (!city) {
-      return res.status(400).json({
-        data: null,
-        meta: {
-          plan_id: userPlan,
-          gated: false,
-          total_available: 0,
-          total_returned: 0,
-          gate_reason: `City with ID ${cityId} not found`,
-        },
-      });
+      const errorMsg = `City with ID ${city_id} not found`;
+      console.error(`[API] ${errorMsg}`);
+      throw new Error(errorMsg);
     }
 
     console.log('[API] Starting discovery job for:', { industry: industry.name, city: city.name });
 
-    // Find or resolve dataset ID FIRST (before creating discovery_run)
-    let finalDatasetId = datasetId;
-    if (!finalDatasetId) {
-      // Try to find existing dataset first
-      const existingDataset = await pool.query<{ id: string }>(
-        `
-        SELECT id FROM datasets
-        WHERE user_id = $1
-          AND city_id = $2
-          AND industry_id = $3
-        ORDER BY created_at DESC
-        LIMIT 1
-        `,
-        [userId, cityId, industryId]
-      );
-      finalDatasetId = existingDataset.rows[0]?.id;
+    // Use provided dataset_id (required field, already validated)
+    const finalDatasetId = dataset_id;
+    
+    // Verify dataset exists and user owns it
+    const dataset = await getDatasetById(finalDatasetId);
+    if (!dataset) {
+      const errorMsg = `Dataset with ID ${finalDatasetId} not found`;
+      console.error(`[API] ${errorMsg}`);
+      throw new Error(errorMsg);
     }
-
-    // If dataset doesn't exist yet, create it synchronously so we can link discovery_run to it
-    if (!finalDatasetId) {
-      const { resolveDataset } = await import('../services/datasetResolver.js');
-      const resolverResult = await resolveDataset({
-        userId,
-        cityId: city.id, // Use city ID instead of name to prevent city creation
-        industryId: industry.id, // Use industry ID instead of name to prevent industry creation
-      });
-      finalDatasetId = resolverResult.dataset.id;
-      console.log('[API] Created dataset for discovery_run:', finalDatasetId);
+    
+    // Verify ownership
+    const isOwner = await verifyDatasetOwnership(finalDatasetId, userId);
+    if (!isOwner) {
+      const errorMsg = `Access denied: You do not own dataset ${finalDatasetId}`;
+      console.error(`[API] ${errorMsg}`);
+      throw new Error(errorMsg);
     }
 
     // CRITICAL: Create discovery_run at the VERY START (synchronously, before returning)
@@ -170,6 +142,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     });
     
     console.log('[API] About to call runDiscoveryJob...');
+    console.log('🚨 ABOUT TO INSERT BUSINESSES - Discovery job starting');
     
     const jobPromise = runDiscoveryJob({
       userId,
@@ -178,7 +151,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       latitude: city.latitude || undefined,
       longitude: city.longitude || undefined,
       cityRadiusKm: city.radius_km || undefined,
-      datasetId: finalDatasetId, // Use resolved dataset ID
+      datasetId: finalDatasetId, // Use provided dataset ID
       discoveryRunId: discoveryRun.id, // Pass discovery_run_id to link businesses
     });
     

@@ -37,9 +37,27 @@ export function verifyToken(token: string): JWTPayload | null {
 }
 
 /**
+ * Get JWT from Authorization Bearer header
+ * Expected format: Authorization: Bearer <token>
+ */
+export function getTokenFromAuthorizationHeader(authHeader?: string | undefined): string | null {
+  if (!authHeader) {
+    return null;
+  }
+
+  // Check for Bearer token format
+  if (authHeader.startsWith('Bearer ')) {
+    return authHeader.substring(7).trim();
+  }
+
+  return null;
+}
+
+/**
  * Get JWT from cookie
  * Can be used with cookie-parser (req.cookies) or raw cookie header
  * Checks for 'token' cookie name (matches frontend middleware)
+ * NOTE: This is for backward compatibility - prefer Authorization header for API requests
  */
 export function getTokenFromCookie(
   cookies: { [key: string]: string } | undefined,

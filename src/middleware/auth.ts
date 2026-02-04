@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { verifyToken, getTokenFromCookie } from '../utils/jwt.js';
+import { verifyToken, getTokenFromAuthorizationHeader, getTokenFromCookie } from '../utils/jwt.js';
 import { getUserById } from '../db/users.js';
 
 export interface AuthRequest extends Request {
@@ -12,7 +12,8 @@ export interface AuthRequest extends Request {
 
 /**
  * Authentication middleware
- * Verifies JWT token from cookie and attaches user to request
+ * Verifies JWT token from Authorization Bearer header (preferred) or cookie (fallback)
+ * For API requests, use: Authorization: Bearer <token>
  */
 export async function authMiddleware(
   req: AuthRequest,
@@ -20,11 +21,18 @@ export async function authMiddleware(
   next: NextFunction
 ) {
   try {
-    // Get token from cookie (using cookie-parser)
-    const token = getTokenFromCookie(req.cookies, req.headers.cookie);
+    // CRITICAL: Prefer Authorization Bearer header for API requests
+    // Fallback to cookie for backward compatibility (web requests)
+    const authHeader = req.headers.authorization;
+    let token = getTokenFromAuthorizationHeader(authHeader);
+    
+    // Fallback to cookie if no Authorization header
+    if (!token) {
+      token = getTokenFromCookie(req.cookies, req.headers.cookie);
+    }
 
     if (!token) {
-      res.status(401).json({ error: 'Unauthorized: No token provided' });
+      res.status(401).json({ error: 'Unauthorized: No token provided. Use Authorization: Bearer <token> header or token cookie' });
       return;
     }
 
