@@ -23,12 +23,14 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     });
 
     // Get datasets with industry and city names
+    // Note: city_id and industry_id might be INTEGER or UUID depending on schema
+    // Cast to text to handle both cases
     const result = await pool.query<{
       id: string;
       user_id: string;
       name: string;
-      city_id: string | null; // UUID
-      industry_id: string | null; // UUID
+      city_id: string | number | null;
+      industry_id: string | number | null;
       last_refreshed_at: Date | null;
       created_at: Date;
       businesses_count: number;
@@ -39,8 +41,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         d.id,
         d.user_id,
         d.name,
-        d.city_id,
-        d.industry_id,
+        d.city_id::text as city_id,
+        d.industry_id::text as industry_id,
         d.last_refreshed_at,
         d.created_at,
         COUNT(DISTINCT b.id) as businesses_count,
@@ -49,7 +51,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       LEFT JOIN businesses b ON b.dataset_id = d.id
       LEFT JOIN contacts c ON c.business_id = b.id
       WHERE d.user_id = $1
-      GROUP BY d.id
+      GROUP BY d.id, d.user_id, d.name, d.city_id, d.industry_id, d.last_refreshed_at, d.created_at
       ORDER BY d.created_at DESC
       `,
       [userId]
@@ -83,11 +85,48 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         }
       }
 
+      // Handle type mismatch: datasets.city_id/industry_id might be INTEGER or UUID
+      // Try to find by converting to string for comparison
+      let industryName = 'Unknown';
+      let cityName = 'Unknown';
+      
+      if (row.industry_id) {
+        // Try both as string and as number (in case it's stored as INTEGER)
+        const industryIdStr = String(row.industry_id);
+        industryName = industryMap.get(industryIdStr) || 'Unknown';
+        
+        // If not found, try finding by numeric ID (if industries.id is numeric)
+        if (industryName === 'Unknown' && !isNaN(Number(row.industry_id))) {
+          const numericId = Number(row.industry_id);
+          const found = industries.find((i: Industry) => {
+            const iId = typeof i.id === 'string' ? parseInt(i.id, 10) : i.id;
+            return iId === numericId;
+          });
+          industryName = found?.name || 'Unknown';
+        }
+      }
+      
+      if (row.city_id) {
+        // Try both as string and as number (in case it's stored as INTEGER)
+        const cityIdStr = String(row.city_id);
+        cityName = cityMap.get(cityIdStr) || 'Unknown';
+        
+        // If not found, try finding by numeric ID (if cities.id is numeric)
+        if (cityName === 'Unknown' && !isNaN(Number(row.city_id))) {
+          const numericId = Number(row.city_id);
+          const found = cities.find((c: City) => {
+            const cId = typeof c.id === 'string' ? parseInt(c.id, 10) : c.id;
+            return cId === numericId;
+          });
+          cityName = found?.name || 'Unknown';
+        }
+      }
+
       return {
         id: row.id,
         name: row.name,
-        industry: row.industry_id ? industryMap.get(String(row.industry_id)) || 'Unknown' : 'Unknown',
-        city: row.city_id ? cityMap.get(String(row.city_id)) || 'Unknown' : 'Unknown',
+        industry: industryName,
+        city: cityName,
         businesses: parseInt(row.businesses_count.toString()) || 0,
         contacts: parseInt(row.contacts_count.toString()) || 0,
         createdAt: row.created_at.toISOString(),
@@ -110,7 +149,17 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     });
   } catch (error: any) {
     console.error('[API] Error fetching datasets:', error);
+    console.error('[API] Error message:', error.message);
+    console.error('[API] Error code:', error.code);
+    console.error('[API] Error detail:', error.detail);
+    console.error('[API] Error hint:', error.hint);
     console.error('[API] Error stack:', error.stack);
+    
+    // Return detailed error in development, generic in production
+    const errorMessage = process.env.NODE_ENV === 'production' 
+      ? 'Failed to fetch datasets'
+      : `${error.message || 'Unknown error'}${error.detail ? `: ${error.detail}` : ''}${error.hint ? ` (${error.hint})` : ''}`;
+    
     res.status(500).json({
       data: null,
       meta: {
@@ -118,7 +167,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         gated: false,
         total_available: 0,
         total_returned: 0,
-        gate_reason: error.message || 'Failed to fetch datasets',
+        gate_reason: errorMessage,
       },
     });
   }
