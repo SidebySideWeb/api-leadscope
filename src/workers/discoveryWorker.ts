@@ -3,7 +3,7 @@ import { googleMapsService } from '../services/googleMaps.js';
 import { getCountryByCode } from '../db/countries.js';
 import { getOrCreateIndustry, getIndustryById } from '../db/industries.js';
 import { getOrCreateCity, getCityByNormalizedName, updateCityCoordinates, getCityById } from '../db/cities.js';
-import { getBusinessByGooglePlaceId, upsertBusiness } from '../db/businesses.js';
+import { getBusinessByGooglePlaceId, upsertBusiness, getBusinessesWithCompleteData } from '../db/businesses.js';
 import { getDatasetById } from '../db/datasets.js';
 import { updateDiscoveryRun } from '../db/discoveryRuns.js';
 import type { GooglePlaceResult } from '../types/index.js';
@@ -199,6 +199,16 @@ export async function discoverBusinesses(
 
     console.log(`[discoverBusinesses] Using city: ${city?.name || 'coordinates'} (${resolvedLatitude}, ${resolvedLongitude}, radius: ${resolvedRadiusKm}km)`);
 
+    // Ensure we have city_id
+    const finalCityId = city?.id;
+    if (!finalCityId) {
+      throw new Error('City ID is required but could not be resolved');
+    }
+
+    // Always run Google Maps API search to get fresh results (new businesses may have been added)
+    // But we'll skip extraction for businesses that already have complete data
+    console.log(`[discoverBusinesses] Starting Google Maps API search (always runs to catch new businesses)...`);
+
     // Fan-out: Search for each keyword
     const allPlaces: GooglePlaceResult[] = [];
     const keywordResults = new Map<string, number>();
@@ -260,6 +270,16 @@ export async function discoverBusinesses(
 
     result.businessesFound = uniquePlaces.length;
 
+    // Check which businesses already have complete data (website + contacts)
+    // We'll skip extraction for these businesses
+    const placeIdsWithData = uniquePlaces
+      .map(p => p.place_id)
+      .filter((id): id is string => id !== undefined && id !== null);
+    
+    console.log(`[discoverBusinesses] Checking ${placeIdsWithData.length} businesses for existing complete data...`);
+    const businessesWithCompleteData = await getBusinessesWithCompleteData(placeIdsWithData);
+    console.log(`[discoverBusinesses] Found ${businessesWithCompleteData.size} businesses with complete data (will skip extraction)`);
+
     // Process each unique place
     console.log(`\n[discoverBusinesses] Persisting ${uniquePlaces.length} businesses to database...`);
     console.log(`  Dataset ID: ${dataset.id}`);
@@ -268,15 +288,13 @@ export async function discoverBusinesses(
       console.log(`  Discovery Run ID: ${discoveryRunId}`);
     }
 
-    // Ensure we have city_id for all businesses
-    const finalCityId = city?.id;
-    if (!finalCityId) {
-      throw new Error('City ID is required but could not be resolved');
-    }
+    // finalCityId is already defined above (for cache check)
 
     // Process all places and insert businesses
     for (const place of uniquePlaces) {
       try {
+        const hasCompleteData = place.place_id ? businessesWithCompleteData.has(place.place_id) : false;
+        
         await processPlace(
           place,
           country.id,
@@ -285,7 +303,8 @@ export async function discoverBusinesses(
           dataset.id,
           dataset.user_id,
           discoveryRunId,
-          result
+          result,
+          hasCompleteData
         );
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
@@ -295,18 +314,31 @@ export async function discoverBusinesses(
     }
 
     // CRITICAL: Create extraction_jobs AFTER all businesses are processed
-    // Enqueue extraction jobs for ALL businesses created in THIS discovery_run
+    // Enqueue extraction jobs ONLY for businesses that don't have complete data
     // NOTE: extraction_jobs does NOT have discovery_run_id - use businesses.discovery_run_id to link
     if (discoveryRunId) {
       console.log(`\n[discoverBusinesses] Enqueuing extraction_jobs for businesses in discovery_run: ${discoveryRunId}...`);
+      console.log(`[discoverBusinesses] Skipping businesses that already have complete data (website + contacts)...`);
       
       try {
         const { pool } = await import('../config/database.js');
+        // Only create extraction jobs for businesses that don't have complete data
         const insertResult = await pool.query<{ id: string }>(
           `INSERT INTO extraction_jobs (business_id, status, created_at)
            SELECT b.id, 'pending', NOW()
            FROM businesses b
            WHERE b.discovery_run_id = $1
+             -- Skip businesses that already have website + contacts
+             AND NOT (
+               EXISTS (SELECT 1 FROM websites w WHERE w.business_id = b.id)
+               AND EXISTS (
+                 SELECT 1 
+                 FROM contact_sources cs
+                 JOIN contacts c ON c.id = cs.contact_id
+                 WHERE cs.business_id = b.id::text
+                   AND (c.email IS NOT NULL OR c.phone IS NOT NULL)
+               )
+             )
            ON CONFLICT (business_id) DO NOTHING
            RETURNING id`,
           [discoveryRunId]
@@ -315,16 +347,24 @@ export async function discoverBusinesses(
         const extractionJobsCreated = insertResult.rows.length;
         console.log(`[discoverBusinesses] Enqueued ${extractionJobsCreated} extraction_jobs for discovery_run: ${discoveryRunId}`);
         
-        if (extractionJobsCreated === 0) {
-          // Check if businesses exist but extraction jobs already exist
-          const businessesCount = await pool.query<{ count: string }>(
-            `SELECT COUNT(*) as count FROM businesses WHERE discovery_run_id = $1`,
-            [discoveryRunId]
-          );
-          const businessesInRun = parseInt(businessesCount.rows[0]?.count || '0', 10);
-          if (businessesInRun > 0) {
-            console.log(`[discoverBusinesses] Note: ${businessesInRun} businesses found in discovery_run, but extraction jobs already exist (idempotent)`);
-          }
+        // Count how many businesses were skipped due to complete data
+        const skippedCount = await pool.query<{ count: string }>(
+          `SELECT COUNT(*) as count 
+           FROM businesses b
+           WHERE b.discovery_run_id = $1
+             AND EXISTS (SELECT 1 FROM websites w WHERE w.business_id = b.id)
+             AND EXISTS (
+               SELECT 1 
+               FROM contact_sources cs
+               JOIN contacts c ON c.id = cs.contact_id
+               WHERE cs.business_id = b.id::text
+                 AND (c.email IS NOT NULL OR c.phone IS NOT NULL)
+             )`,
+          [discoveryRunId]
+        );
+        const skipped = parseInt(skippedCount.rows[0]?.count || '0', 10);
+        if (skipped > 0) {
+          console.log(`[discoverBusinesses] Skipped ${skipped} businesses with complete data (no extraction needed)`);
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
@@ -414,7 +454,8 @@ async function processPlace(
   datasetId: string, // UUID
   ownerUserId: string,
   discoveryRunId: string | null | undefined,
-  result: DiscoveryResult
+  result: DiscoveryResult,
+  hasCompleteData: boolean = false
 ): Promise<void> {
   // Extract postal code from address components
   let postalCode: string | null = null;
@@ -455,6 +496,15 @@ async function processPlace(
   } else {
     // Business was inserted (new record)
     result.businessesCreated++;
+  }
+
+  // CRITICAL: If business already has complete data (website + contacts), skip extraction
+  // We still add the business to the dataset, but don't create extraction job
+  // This avoids redundant crawling/extraction work
+  if (hasCompleteData && place.place_id) {
+    console.log(`[processPlace] Skipping extraction for business ${business.id} (${place.name}) - already has complete data`);
+    // Don't create extraction job - business already has website + contacts
+    return;
   }
 
   // CRITICAL: Discovery phase does NOT have website/phone data

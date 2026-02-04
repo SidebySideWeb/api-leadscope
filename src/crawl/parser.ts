@@ -20,22 +20,49 @@ const CONTACT_PATTERNS = [
   '/contact',
   '/contact-us',
   '/contactus',
+  '/contact-form',
+  '/contact-form',
+  '/get-in-touch',
+  '/reach-us',
+  '/reach-out',
+  '/connect',
+  '/connect-with-us',
+  '/forms', // User requested
+  '/form',
+  '/inquiry',
+  '/inquiries',
+  '/message',
+  '/send-message',
   '/about',
   '/about-us',
+  '/aboutus',
   '/team',
   '/staff',
+  '/our-team',
   '/support',
   '/help',
+  '/help-center',
   '/impressum',
   '/privacy',
+  '/legal',
+  '/terms',
   // Greek
   '/επικοινωνια',
   '/επικοινωνία',
+  '/epikoinonia', // Transliteration - user requested
+  '/epikoinonia',
   '/συνεργασία',
+  '/συνεργασια',
   '/εταιρεία',
+  '/εταιρεια',
+  '/ποιοι-ειμαστε',
   '/ποιοι-ειμαστε',
   '/σχετικα',
-  '/ομαδα'
+  '/σχετικά',
+  '/ομαδα',
+  '/ομάδα',
+  '/ομάδα-μας',
+  '/ομαδα-μας'
 ];
 
 /**
@@ -55,7 +82,9 @@ export function isContactPage(url: string, anchorText?: string): boolean {
   // Check anchor text
   const contactKeywords = [
     'contact', 'about', 'team', 'staff', 'support', 'help',
-    'επικοινωνία', 'συνεργασία', 'εταιρεία', 'σχετικά'
+    'connect', 'reach', 'inquiry', 'message', 'form',
+    'επικοινωνία', 'επικοινωνια', 'συνεργασία', 'συνεργασια', 
+    'εταιρεία', 'εταιρεια', 'σχετικά', 'σχετικα', 'ομάδα', 'ομαδα'
   ];
 
   for (const keyword of contactKeywords) {

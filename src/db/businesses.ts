@@ -239,3 +239,63 @@ export async function getBusinessesNeedingRefresh(
   const result = await pool.query<Business>(query, params);
   return result.rows;
 }
+
+/**
+ * Check if a business already has complete data (website + contacts)
+ * Used to skip extraction for businesses we already have full information for
+ * 
+ * @param googlePlaceId - Google Place ID to check
+ * @returns true if business exists with website and at least one contact, false otherwise
+ */
+export async function hasCompleteBusinessData(googlePlaceId: string): Promise<boolean> {
+  const result = await pool.query<{ has_complete_data: boolean }>(
+    `SELECT EXISTS(
+      SELECT 1
+      FROM businesses b
+      WHERE b.google_place_id = $1
+        AND EXISTS (SELECT 1 FROM websites w WHERE w.business_id = b.id)
+        AND EXISTS (
+          SELECT 1 
+          FROM contact_sources cs
+          JOIN contacts c ON c.id = cs.contact_id
+          WHERE cs.business_id = b.id::text
+            AND (c.email IS NOT NULL OR c.phone IS NOT NULL)
+        )
+    ) as has_complete_data`,
+    [googlePlaceId]
+  );
+
+  return result.rows[0]?.has_complete_data || false;
+}
+
+/**
+ * Get map of Google Place IDs that already have complete data
+ * Used to filter out businesses that don't need extraction
+ * 
+ * @param googlePlaceIds - Array of Google Place IDs to check
+ * @returns Set of Google Place IDs that have complete data
+ */
+export async function getBusinessesWithCompleteData(
+  googlePlaceIds: string[]
+): Promise<Set<string>> {
+  if (googlePlaceIds.length === 0) {
+    return new Set();
+  }
+
+  const result = await pool.query<{ google_place_id: string }>(
+    `SELECT DISTINCT b.google_place_id
+     FROM businesses b
+     WHERE b.google_place_id = ANY($1)
+       AND EXISTS (SELECT 1 FROM websites w WHERE w.business_id = b.id)
+       AND EXISTS (
+         SELECT 1 
+         FROM contact_sources cs
+         JOIN contacts c ON c.id = cs.contact_id
+         WHERE cs.business_id = b.id::text
+           AND (c.email IS NOT NULL OR c.phone IS NOT NULL)
+       )`,
+    [googlePlaceIds]
+  );
+
+  return new Set(result.rows.map(row => row.google_place_id));
+}

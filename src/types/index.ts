@@ -32,9 +32,21 @@ export interface Business {
   city_id: string; // UUID
   industry_id: string | null; // UUID
   google_place_id: string | null;
-  dataset_id: string; // UUID
-  owner_user_id: string;
+  // Legacy fields (deprecated - datasets now reference businesses via dataset_businesses)
+  dataset_id: string | null; // UUID - DEPRECATED: Use dataset_businesses junction table
+  owner_user_id: string; // DEPRECATED: Businesses are global assets
   discovery_run_id: string | null; // UUID - links business to discovery run
+  // New enrichment fields
+  latitude: number | null;
+  longitude: number | null;
+  website: string | null;
+  phone: string | null;
+  emails: any; // JSONB array
+  social_links: any; // JSONB object
+  data_completeness_score: number; // 0-100
+  last_discovered_at: Date | null;
+  last_crawled_at: Date | null;
+  crawl_status: 'pending' | 'success' | 'failed' | 'skipped';
   created_at: Date;
   updated_at: Date;
 }
@@ -99,6 +111,8 @@ export interface GooglePlaceResult {
   }>;
   rating?: number;
   user_rating_count?: number;
+  latitude?: number; // From Google Places location
+  longitude?: number; // From Google Places location
 }
 
 export interface DiscoveryInput {

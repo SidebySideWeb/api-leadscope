@@ -66,12 +66,13 @@ function normalizeEmail(email: string): string {
 
 /**
  * Extract emails from HTML
+ * Checks specific sections: top bar, header, nav, body, footer
  */
 export function extractEmails(html: string, url: string, text?: string): ExtractedEmail[] {
   const emails = new Map<string, ExtractedEmail>();
   const $ = cheerio.load(html);
 
-  // Extract from mailto links
+  // Extract from mailto links (check all sections)
   $('a[href^="mailto:"]').each((_, element) => {
     const href = $(element).attr('href');
     if (!href) return;
@@ -90,21 +91,204 @@ export function extractEmails(html: string, url: string, text?: string): Extract
     }
   });
 
-  // Extract from text using regex patterns
-  const content = text || $('body').text();
-  
-  for (const pattern of EMAIL_PATTERNS) {
-    const matches = content.matchAll(pattern);
-    for (const match of matches) {
-      const email = normalizeEmail(match[0]);
-      if (email && !emails.has(email)) {
-        // Extract context (surrounding text)
-        const context = extractContext(content, match[0], 30);
-        emails.set(email, {
-          value: email,
-          source_url: url,
-          context: context || undefined
-        });
+  // Extract from specific HTML sections (top bar, header, nav, body, footer)
+  const sections = [
+    { selector: 'header, .header, #header, [role="banner"]', name: 'header' },
+    { selector: 'nav, .nav, .navbar, .navigation, [role="navigation"]', name: 'nav' },
+    { selector: '.top-bar, .topbar, #topbar, .top-bar, [class*="top"]', name: 'top-bar' },
+    { selector: 'body', name: 'body' },
+    { selector: 'footer, .footer, #footer, [role="contentinfo"]', name: 'footer' },
+    { selector: '.contact-form, form[action*="contact"], form[action*="mail"]', name: 'contact-form' },
+  ];
+
+  for (const section of sections) {
+    const sectionHtml = $(section.selector).html() || '';
+    const sectionText = $(section.selector).text() || '';
+    
+    // Extract from mailto links in this section
+    $(section.selector).find('a[href^="mailto:"]').each((_, element) => {
+      const href = $(element).attr('href');
+      if (!href) return;
+
+      const emailMatch = href.match(/mailto:([^\?&]+)/i);
+      if (emailMatch) {
+        const email = normalizeEmail(emailMatch[1]);
+        if (email && !emails.has(email)) {
+          const anchorText = $(element).text().trim();
+          emails.set(email, {
+            value: email,
+            source_url: url,
+            context: `${section.name}: ${anchorText || 'mailto link'}`
+          });
+        }
+      }
+    });
+
+    // Extract from text in this section using regex patterns
+    for (const pattern of EMAIL_PATTERNS) {
+      const matches = sectionText.matchAll(pattern);
+      for (const match of matches) {
+        const email = normalizeEmail(match[0]);
+        if (email && !emails.has(email)) {
+          const context = extractContext(sectionText, match[0], 30);
+          emails.set(email, {
+            value: email,
+            source_url: url,
+            context: `${section.name}: ${context || match[0]}`
+          });
+        }
+      }
+    }
+  }
+
+  // Also check form action URLs, hidden inputs, and data attributes for emails
+  $('form').each((_, form) => {
+    const action = $(form).attr('action') || '';
+    const method = $(form).attr('method') || 'get';
+    
+    // Check form action URL for email patterns
+    for (const pattern of EMAIL_PATTERNS) {
+      const matches = action.matchAll(pattern);
+      for (const match of matches) {
+        const email = normalizeEmail(match[0]);
+        if (email && !emails.has(email)) {
+          emails.set(email, {
+            value: email,
+            source_url: url,
+            context: `form action: ${action}`
+          });
+        }
+      }
+    }
+
+    // Check hidden inputs for email values
+    $(form).find('input[type="hidden"]').each((_, input) => {
+      const value = $(input).attr('value') || '';
+      const dataEmail = $(input).attr('data-email') || '';
+      const name = $(input).attr('name') || '';
+      
+      // Check value attribute
+      for (const pattern of EMAIL_PATTERNS) {
+        const matches = value.matchAll(pattern);
+        for (const match of matches) {
+          const email = normalizeEmail(match[0]);
+          if (email && !emails.has(email)) {
+            emails.set(email, {
+              value: email,
+              source_url: url,
+              context: `hidden form input${name ? ` (${name})` : ''}`
+            });
+          }
+        }
+      }
+
+      // Check data-email attribute
+      for (const pattern of EMAIL_PATTERNS) {
+        const matches = dataEmail.matchAll(pattern);
+        for (const match of matches) {
+          const email = normalizeEmail(match[0]);
+          if (email && !emails.has(email)) {
+            emails.set(email, {
+              value: email,
+              source_url: url,
+              context: `form data-email attribute${name ? ` (${name})` : ''}`
+            });
+          }
+        }
+      }
+    });
+
+    // Check all form inputs (including text, email types) for email patterns
+    $(form).find('input[type="email"], input[name*="email" i], input[id*="email" i]').each((_, input) => {
+      const value = $(input).attr('value') || '';
+      const placeholder = $(input).attr('placeholder') || '';
+      const name = $(input).attr('name') || '';
+      
+      // Check value and placeholder
+      for (const pattern of EMAIL_PATTERNS) {
+        const valueMatches = value.matchAll(pattern);
+        for (const match of valueMatches) {
+          const email = normalizeEmail(match[0]);
+          if (email && !emails.has(email)) {
+            emails.set(email, {
+              value: email,
+              source_url: url,
+              context: `form input value${name ? ` (${name})` : ''}`
+            });
+          }
+        }
+
+        const placeholderMatches = placeholder.matchAll(pattern);
+        for (const match of placeholderMatches) {
+          const email = normalizeEmail(match[0]);
+          if (email && !emails.has(email)) {
+            emails.set(email, {
+              value: email,
+              source_url: url,
+              context: `form input placeholder${name ? ` (${name})` : ''}`
+            });
+          }
+        }
+      }
+    });
+  });
+
+  // Check meta tags for emails (some sites put contact email in meta)
+  $('meta[name*="contact" i], meta[property*="contact" i], meta[name*="email" i]').each((_, meta) => {
+    const content = $(meta).attr('content') || '';
+    for (const pattern of EMAIL_PATTERNS) {
+      const matches = content.matchAll(pattern);
+      for (const match of matches) {
+        const email = normalizeEmail(match[0]);
+        if (email && !emails.has(email)) {
+          emails.set(email, {
+            value: email,
+            source_url: url,
+            context: 'meta tag'
+          });
+        }
+      }
+    }
+  });
+
+  // Check data attributes on common contact elements
+  $('[data-email], [data-contact-email], [data-contact]').each((_, element) => {
+    const dataEmail = $(element).attr('data-email') || '';
+    const dataContactEmail = $(element).attr('data-contact-email') || '';
+    const dataContact = $(element).attr('data-contact') || '';
+    
+    for (const pattern of EMAIL_PATTERNS) {
+      const email1 = dataEmail.match(pattern)?.[0];
+      const email2 = dataContactEmail.match(pattern)?.[0];
+      const email3 = dataContact.match(pattern)?.[0];
+      
+      for (const emailStr of [email1, email2, email3].filter(Boolean)) {
+        const email = normalizeEmail(emailStr!);
+        if (email && !emails.has(email)) {
+          emails.set(email, {
+            value: email,
+            source_url: url,
+            context: 'data attribute'
+          });
+        }
+      }
+    }
+  });
+
+  // Fallback: Extract from full body text if provided (for backwards compatibility)
+  if (text) {
+    for (const pattern of EMAIL_PATTERNS) {
+      const matches = text.matchAll(pattern);
+      for (const match of matches) {
+        const email = normalizeEmail(match[0]);
+        if (email && !emails.has(email)) {
+          const context = extractContext(text, match[0], 30);
+          emails.set(email, {
+            value: email,
+            source_url: url,
+            context: context || undefined
+          });
+        }
       }
     }
   }
@@ -158,12 +342,13 @@ function normalizePhone(phone: string): string {
 
 /**
  * Extract phones from HTML
+ * Checks specific sections: top bar, header, nav, body, footer
  */
 export function extractPhones(html: string, url: string): ExtractedPhone[] {
   const phones = new Map<string, ExtractedPhone>();
   const $ = cheerio.load(html);
 
-  // Extract from tel links
+  // Extract from tel links (check all sections)
   $('a[href^="tel:"]').each((_, element) => {
     const href = $(element).attr('href');
     if (!href) return;
@@ -180,21 +365,89 @@ export function extractPhones(html: string, url: string): ExtractedPhone[] {
     }
   });
 
-  // Extract from text using regex patterns
-  const text = $('body').text();
-  
-  for (const pattern of PHONE_PATTERNS) {
-    const matches = text.matchAll(pattern);
-    for (const match of matches) {
-      const phone = normalizePhone(match[0]);
-      if (phone && !phones.has(phone)) {
-        phones.set(phone, {
-          value: phone,
-          source_url: url
-        });
+  // Extract from specific HTML sections (top bar, header, nav, body, footer)
+  const sections = [
+    { selector: 'header, .header, #header, [role="banner"]', name: 'header' },
+    { selector: 'nav, .nav, .navbar, .navigation, [role="navigation"]', name: 'nav' },
+    { selector: '.top-bar, .topbar, #topbar, .top-bar, [class*="top"]', name: 'top-bar' },
+    { selector: 'body', name: 'body' },
+    { selector: 'footer, .footer, #footer, [role="contentinfo"]', name: 'footer' },
+    { selector: '.contact-form, form[action*="contact"]', name: 'contact-form' },
+  ];
+
+  for (const section of sections) {
+    const sectionText = $(section.selector).text() || '';
+    
+    // Extract from tel links in this section
+    $(section.selector).find('a[href^="tel:"]').each((_, element) => {
+      const href = $(element).attr('href');
+      if (!href) return;
+
+      const phoneMatch = href.match(/tel:([^\?&]+)/i);
+      if (phoneMatch) {
+        const phone = normalizePhone(phoneMatch[1]);
+        if (phone && !phones.has(phone)) {
+          phones.set(phone, {
+            value: phone,
+            source_url: url
+          });
+        }
+      }
+    });
+
+    // Extract from text in this section using regex patterns
+    for (const pattern of PHONE_PATTERNS) {
+      const matches = sectionText.matchAll(pattern);
+      for (const match of matches) {
+        const phone = normalizePhone(match[0]);
+        if (phone && !phones.has(phone)) {
+          phones.set(phone, {
+            value: phone,
+            source_url: url
+          });
+        }
       }
     }
   }
+
+  // Check meta tags for phones (some sites put contact phone in meta)
+  $('meta[name*="contact" i], meta[property*="contact" i], meta[name*="phone" i], meta[name*="tel" i]').each((_, meta) => {
+    const content = $(meta).attr('content') || '';
+    for (const pattern of PHONE_PATTERNS) {
+      const matches = content.matchAll(pattern);
+      for (const match of matches) {
+        const phone = normalizePhone(match[0]);
+        if (phone && !phones.has(phone)) {
+          phones.set(phone, {
+            value: phone,
+            source_url: url
+          });
+        }
+      }
+    }
+  });
+
+  // Check data attributes on common contact elements
+  $('[data-phone], [data-tel], [data-contact-phone], [data-contact]').each((_, element) => {
+    const dataPhone = $(element).attr('data-phone') || '';
+    const dataTel = $(element).attr('data-tel') || '';
+    const dataContactPhone = $(element).attr('data-contact-phone') || '';
+    const dataContact = $(element).attr('data-contact') || '';
+    
+    const allData = [dataPhone, dataTel, dataContactPhone, dataContact].join(' ');
+    for (const pattern of PHONE_PATTERNS) {
+      const matches = allData.matchAll(pattern);
+      for (const match of matches) {
+        const phone = normalizePhone(match[0]);
+        if (phone && !phones.has(phone)) {
+          phones.set(phone, {
+            value: phone,
+            source_url: url
+          });
+        }
+      }
+    }
+  });
 
   return Array.from(phones.values());
 }

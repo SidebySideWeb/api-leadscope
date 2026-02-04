@@ -11,6 +11,29 @@ export interface DiscoveryRun {
   started_at: Date | null; // When execution actually began
   completed_at: Date | null;
   error_message: string | null;
+  // Cost estimation data (stored as JSON, optional)
+  cost_estimates?: {
+    estimatedBusinesses: number;
+    completenessStats: {
+      withWebsitePercent: number;
+      withEmailPercent: number;
+      withPhonePercent: number;
+    };
+    exportEstimates: Array<{
+      size: number;
+      priceEUR: number;
+    }>;
+    refreshEstimates: {
+      incompleteOnly: {
+        pricePerBusinessEUR: number;
+        estimatedTotalEUR: number;
+      };
+      fullRefresh: {
+        pricePerBusinessEUR: number;
+        estimatedTotalEUR: number;
+      };
+    };
+  } | null;
 }
 
 /**
@@ -30,7 +53,15 @@ export async function createDiscoveryRun(
          RETURNING *`,
         [datasetId, userId]
       );
-      return result.rows[0];
+      const row = result.rows[0];
+      return {
+        ...row,
+        cost_estimates: row.cost_estimates 
+          ? (typeof row.cost_estimates === 'string' 
+              ? JSON.parse(row.cost_estimates) 
+              : row.cost_estimates)
+          : null,
+      };
     } catch (error: any) {
       // If user_id column doesn't exist (PostgreSQL error code 42703), fall back
       if (error.code === '42703' || error.message?.includes('column "user_id"')) {
@@ -41,7 +72,15 @@ export async function createDiscoveryRun(
            RETURNING *`,
           [datasetId]
         );
-        return result.rows[0];
+        const row = result.rows[0];
+        return {
+          ...row,
+          cost_estimates: row.cost_estimates 
+            ? (typeof row.cost_estimates === 'string' 
+                ? JSON.parse(row.cost_estimates) 
+                : row.cost_estimates)
+            : null,
+        };
       }
       // Re-throw other errors
       throw error;
@@ -54,7 +93,15 @@ export async function createDiscoveryRun(
        RETURNING *`,
       [datasetId]
     );
-    return result.rows[0];
+    const row = result.rows[0];
+    return {
+      ...row,
+      cost_estimates: row.cost_estimates 
+        ? (typeof row.cost_estimates === 'string' 
+            ? JSON.parse(row.cost_estimates) 
+            : row.cost_estimates)
+        : null,
+    };
   }
 }
 
@@ -68,6 +115,7 @@ export async function updateDiscoveryRun(
     started_at?: Date | null;
     completed_at?: Date | null;
     error_message?: string | null;
+    cost_estimates?: DiscoveryRun['cost_estimates'];
   }
 ): Promise<DiscoveryRun> {
   const updates: string[] = [];
@@ -90,6 +138,10 @@ export async function updateDiscoveryRun(
     updates.push(`error_message = $${index++}`);
     values.push(data.error_message);
   }
+  if (data.cost_estimates !== undefined) {
+    updates.push(`cost_estimates = $${index++}`);
+    values.push(JSON.stringify(data.cost_estimates));
+  }
 
   if (updates.length === 0) {
     const result = await pool.query<DiscoveryRun>(
@@ -101,13 +153,40 @@ export async function updateDiscoveryRun(
 
   values.push(id);
 
-  const result = await pool.query<DiscoveryRun>(
-    `UPDATE discovery_runs
-     SET ${updates.join(', ')}
-     WHERE id = $${index}
-     RETURNING *`,
-    values
-  );
+  let result;
+  try {
+    result = await pool.query<DiscoveryRun>(
+      `UPDATE discovery_runs
+       SET ${updates.join(', ')}
+       WHERE id = $${index}
+       RETURNING *`,
+      values
+    );
+  } catch (error: any) {
+    // If cost_estimates column doesn't exist, retry without it
+    if (error.code === '42703' && updates.some(u => u.includes('cost_estimates'))) {
+      console.warn('[updateDiscoveryRun] cost_estimates column not found, retrying without it');
+      const filteredUpdates = updates.filter(u => !u.includes('cost_estimates'));
+      const filteredValues = values.filter((_, i) => !updates[i]?.includes('cost_estimates'));
+      if (filteredUpdates.length > 0) {
+        result = await pool.query<DiscoveryRun>(
+          `UPDATE discovery_runs
+           SET ${filteredUpdates.join(', ')}
+           WHERE id = $${filteredValues.length + 1}
+           RETURNING *`,
+          [...filteredValues, id]
+        );
+      } else {
+        // No updates to make, just fetch the row
+        result = await pool.query<DiscoveryRun>(
+          'SELECT * FROM discovery_runs WHERE id = $1',
+          [id]
+        );
+      }
+    } else {
+      throw error;
+    }
+  }
 
   return result.rows[0];
 }
@@ -119,14 +198,22 @@ export async function getDiscoveryRunsByDatasetId(
   datasetId: string
 ): Promise<DiscoveryRun[]> {
   const result = await pool.query<DiscoveryRun>(
-    `SELECT id, status, created_at, started_at, completed_at, error_message
+    `SELECT id, status, created_at, started_at, completed_at, error_message, cost_estimates
      FROM discovery_runs
      WHERE dataset_id = $1
      ORDER BY created_at DESC`,
     [datasetId]
   );
 
-  return result.rows;
+  // Parse cost_estimates JSON if present
+  return result.rows.map(row => ({
+    ...row,
+    cost_estimates: row.cost_estimates 
+      ? (typeof row.cost_estimates === 'string' 
+          ? JSON.parse(row.cost_estimates) 
+          : row.cost_estimates)
+      : null,
+  }));
 }
 
 /**
@@ -140,7 +227,20 @@ export async function getDiscoveryRunById(
     [id]
   );
 
-  return result.rows[0] || null;
+  if (!result.rows[0]) {
+    return null;
+  }
+
+  // Parse cost_estimates JSON if present
+  const row = result.rows[0];
+  return {
+    ...row,
+    cost_estimates: row.cost_estimates 
+      ? (typeof row.cost_estimates === 'string' 
+          ? JSON.parse(row.cost_estimates) 
+          : row.cost_estimates)
+      : null,
+  };
 }
 
 /**

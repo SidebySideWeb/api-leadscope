@@ -4,8 +4,8 @@ import { runDiscoveryJob } from '../services/discoveryService.js';
 import { getIndustries } from '../db/industries.js';
 import { getCities } from '../db/cities.js';
 import { pool } from '../config/database.js';
-import { createDiscoveryRun } from '../db/discoveryRuns.js';
-import { getDatasetById } from '../db/datasets.js';
+import { createDiscoveryRun, getDiscoveryRunById } from '../db/discoveryRuns.js';
+import { getDatasetById, verifyDatasetOwnership } from '../db/datasets.js';
 
 const router = express.Router();
 
@@ -141,6 +141,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     console.log('[API] Created discovery_run:', discoveryRun.id);
 
     // Run discovery job asynchronously (don't wait for completion)
+    // Uses V2 grid-based discovery (always uses grid + keyword expansion)
     // Extraction will happen in the background via extraction worker
     console.log('[API] Starting discovery job asynchronously...');
     runDiscoveryJob({
@@ -149,7 +150,6 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       city_id: city.id, // Use city_id for coordinate-based discovery
       latitude: city.latitude || undefined,
       longitude: city.longitude || undefined,
-      useGeoGrid: false, // Don't use geo-grid - use keyword fan-out instead
       cityRadiusKm: city.radius_km || undefined,
       datasetId: finalDatasetId, // Use resolved dataset ID
       discoveryRunId: discoveryRun.id, // Pass discovery_run_id to link businesses
@@ -201,6 +201,107 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
         total_available: 0,
         total_returned: 0,
         gate_reason: error.message || 'Failed to discover businesses',
+      },
+    });
+  }
+});
+
+/**
+ * GET /discovery/runs/:runId/results
+ * Get discovery results with cost estimates for a specific discovery run
+ * Requires authentication and dataset ownership
+ */
+router.get('/runs/:runId/results', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId!;
+    const runId = req.params.runId;
+
+    // Get discovery run
+    const discoveryRun = await getDiscoveryRunById(runId);
+    if (!discoveryRun) {
+      return res.status(404).json({
+        data: null,
+        meta: {
+          plan_id: 'demo',
+          gated: false,
+          total_available: 0,
+          total_returned: 0,
+          gate_reason: 'Discovery run not found',
+        },
+      });
+    }
+
+    // Verify dataset ownership
+    const dataset = await getDatasetById(discoveryRun.dataset_id);
+    if (!dataset) {
+      return res.status(404).json({
+        data: null,
+        meta: {
+          plan_id: 'demo',
+          gated: false,
+          total_available: 0,
+          total_returned: 0,
+          gate_reason: 'Dataset not found',
+        },
+      });
+    }
+
+    const isOwner = await verifyDatasetOwnership(discoveryRun.dataset_id, userId);
+    if (!isOwner) {
+      return res.status(403).json({
+        data: null,
+        meta: {
+          plan_id: 'demo',
+          gated: false,
+          total_available: 0,
+          total_returned: 0,
+          gate_reason: 'Access denied: You do not own this dataset',
+        },
+      });
+    }
+
+    // Get user's plan
+    const userResult = await pool.query<{ plan: string }>(
+      'SELECT plan FROM users WHERE id = $1',
+      [userId]
+    );
+    const userPlan = (userResult.rows[0]?.plan || 'demo') as string;
+
+    // Return discovery results with cost estimates
+    // IMPORTANT: These are ESTIMATES ONLY - no billing occurs
+    return res.json({
+      data: {
+        id: discoveryRun.id,
+        status: discoveryRun.status,
+        created_at: discoveryRun.created_at instanceof Date 
+          ? discoveryRun.created_at.toISOString() 
+          : discoveryRun.created_at,
+        completed_at: discoveryRun.completed_at instanceof Date 
+          ? discoveryRun.completed_at.toISOString() 
+          : discoveryRun.completed_at,
+        // Cost estimation data (ESTIMATES ONLY - no billing occurs)
+        cost_estimates: discoveryRun.cost_estimates || null,
+      },
+      meta: {
+        plan_id: userPlan,
+        gated: false,
+        total_available: 1,
+        total_returned: 1,
+        message: discoveryRun.cost_estimates 
+          ? 'Cost estimates are available. These are estimates only, not guarantees.'
+          : 'Discovery is still running or estimates are not yet available.',
+      },
+    });
+  } catch (error: any) {
+    console.error('[API] Error getting discovery results:', error);
+    return res.status(500).json({
+      data: null,
+      meta: {
+        plan_id: 'demo',
+        gated: false,
+        total_available: 0,
+        total_returned: 0,
+        gate_reason: error.message || 'Failed to get discovery results',
       },
     });
   }

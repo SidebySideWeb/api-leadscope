@@ -17,7 +17,7 @@ export interface CityCoordinates {
 }
 
 export interface GoogleMapsProvider {
-  searchPlaces(query: string, location?: { lat: number; lng: number }): Promise<GooglePlaceResult[]>;
+  searchPlaces(query: string, location?: { lat: number; lng: number }, radiusMeters?: number): Promise<GooglePlaceResult[]>;
   getPlaceDetails(placeId: string): Promise<GooglePlaceResult | null>;
   getCityCoordinates(cityName: string): Promise<CityCoordinates | null>;
 }
@@ -33,7 +33,7 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
     this.apiKey = apiKey;
   }
 
-  async searchPlaces(query: string, location?: { lat: number; lng: number }): Promise<GooglePlaceResult[]> {
+  async searchPlaces(query: string, location?: { lat: number; lng: number }, radiusMeters?: number): Promise<GooglePlaceResult[]> {
     try {
       const url = `${this.baseUrl}/places:searchText`;
       
@@ -45,13 +45,15 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
 
       // Add location bias if provided
       if (location) {
+        // Use provided radius or default to 1.5km (1500m) for grid-based discovery
+        const searchRadius = radiusMeters || 1500;
         requestBody.locationBias = {
           circle: {
             center: {
               latitude: location.lat,
               longitude: location.lng
             },
-            radius: 50000.0 // 50km in meters
+            radius: searchRadius
           }
         };
       }
@@ -88,7 +90,10 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
           address_components: this.mapAddressComponents(place.addressComponents),
           // rating and user_rating_count may be available from Text Search
           rating: place.rating || undefined,
-          user_rating_count: place.userRatingCount || undefined
+          user_rating_count: place.userRatingCount || undefined,
+          // Location is available from Text Search API
+          latitude: place.location?.latitude || undefined,
+          longitude: place.location?.longitude || undefined
         });
       }
 

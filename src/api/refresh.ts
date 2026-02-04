@@ -74,6 +74,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         status: run.status,
         created_at: run.created_at instanceof Date ? run.created_at.toISOString() : run.created_at,
         completed_at: run.completed_at instanceof Date ? run.completed_at.toISOString() : run.completed_at,
+        // Include cost estimates if available (ESTIMATES ONLY - no billing occurs)
+        cost_estimates: run.cost_estimates || null,
       })),
       meta: {
         plan_id: userPlan,

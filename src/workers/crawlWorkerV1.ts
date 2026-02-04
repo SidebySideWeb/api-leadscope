@@ -177,7 +177,8 @@ export async function crawlWorkerV1(
 
     const baseDomain = extractDomain(normalized) || '';
     const visited = new Set<string>();
-    const queue: Array<{ url: string; depth: number }> = [{ url: normalized, depth: 0 }];
+    const queue: Array<{ url: string; depth: number; isContact?: boolean }> = [{ url: normalized, depth: 0 }];
+    const contactPagesToCrawl = new Set<string>(); // Track discovered contact pages
     
     const allEmails = new Map<string, { value: string; source_url: string; context?: string }>();
     const allPhones = new Map<string, { value: string; source_url: string }>();
@@ -188,6 +189,7 @@ export async function crawlWorkerV1(
     let safetyLimitReason: string | undefined;
 
     // 3. BFS crawl with depth, page limits, and timeout
+    // Strategy: Always crawl homepage first, then prioritize contact pages
     while (queue.length > 0 && visited.size < maxPages) {
       // Check total crawl timeout (hard limit)
       const elapsed = Date.now() - crawlStartTime;
@@ -197,22 +199,35 @@ export async function crawlWorkerV1(
         console.warn(`[crawlWorkerV1] ${safetyLimitReason} for ${websiteUrl}`);
         break; // Stop gracefully
       }
-      const { url, depth } = queue.shift()!;
 
-      // Skip if already visited, too deep, or should be skipped
+      // Prioritize contact pages: find first contact page in queue, otherwise take first item
+      let queueIndex = 0;
+      for (let i = 0; i < queue.length; i++) {
+        if (queue[i].isContact) {
+          queueIndex = i;
+          break;
+        }
+      }
+      const { url, depth, isContact } = queue.splice(queueIndex, 1)[0];
+
+      // Skip if already visited or should be skipped
       const canonical = canonicalize(url);
       if (visited.has(canonical)) {
         continue;
       }
 
-      // Check depth limit (max depth 2 to avoid infinite links)
-      const maxDepth = 2;
-      if (depth > maxDepth) {
+      // Skip blog posts, SEO pages, etc.
+      if (shouldSkipUrl(canonical)) {
         continue;
       }
 
-      // Skip blog posts, SEO pages, etc.
-      if (shouldSkipUrl(canonical)) {
+      // Check depth limit (max depth 2 for regular pages, but allow contact pages even deeper)
+      const maxDepth = 2;
+      if (!isContact && depth > maxDepth) {
+        continue;
+      }
+      // Allow contact pages up to depth 4 (but still respect page limit)
+      if (isContact && depth > 4) {
         continue;
       }
 
@@ -263,9 +278,15 @@ export async function crawlWorkerV1(
         // Add contact page URLs from parsed links
         for (const contactUrl of parsed.contactPageUrls) {
           contactPages.add(contactUrl);
+          const contactCanonical = canonicalize(contactUrl);
+          // Add to special queue for contact pages if not already visited
+          if (!visited.has(contactCanonical) && sameRegistrableDomain(contactUrl, baseDomain)) {
+            contactPagesToCrawl.add(contactUrl);
+          }
         }
 
         // Add new links to queue (only same domain, not too deep, not skipped)
+        // Prioritize contact pages by marking them
         for (const link of parsed.links) {
           if (visited.size >= maxPages) {
             break; // Stop if we've hit the page limit
@@ -276,12 +297,77 @@ export async function crawlWorkerV1(
           }
 
           if (sameRegistrableDomain(link, baseDomain) && !visited.has(canonicalize(link))) {
-            queue.push({ url: link, depth: depth + 1 });
+            const linkCanonical = canonicalize(link);
+            const isLinkContact = isContactPage(linkCanonical);
+            queue.push({ url: link, depth: depth + 1, isContact: isLinkContact });
           }
         }
       } catch (error: any) {
         errors.push({ url, message: error.message || 'Fetch failed' });
         continue;
+      }
+    }
+
+    // 4. After main crawl, ensure we've crawled all discovered contact pages (if within page limit)
+    // This ensures contact pages are always crawled even if discovered late
+    for (const contactUrl of contactPagesToCrawl) {
+      if (visited.size >= maxPages) {
+        break;
+      }
+
+      const contactCanonical = canonicalize(contactUrl);
+      if (visited.has(contactCanonical)) {
+        continue;
+      }
+
+      if (shouldSkipUrl(contactCanonical)) {
+        continue;
+      }
+
+      if (!sameRegistrableDomain(contactUrl, baseDomain)) {
+        continue;
+      }
+
+      // Check timeout again
+      const elapsed = Date.now() - crawlStartTime;
+      if (elapsed >= CRAWL_TIMEOUT_MS) {
+        break;
+      }
+
+      // Rate limiting
+      if (visited.size > 0) {
+        await new Promise(resolve => setTimeout(resolve, 400));
+      }
+
+      try {
+        const fetchResult = await fetchUrl(contactUrl, { timeout: perPageTimeout });
+        
+        if (fetchResult.status !== 200) {
+          errors.push({ url: contactUrl, message: `HTTP ${fetchResult.status}` });
+          continue;
+        }
+
+        visited.add(contactCanonical);
+        const parsed = parseHtml(fetchResult.content, fetchResult.finalUrl, baseDomain);
+
+        // Extract contacts from contact page
+        const emails = extractEmails(fetchResult.content, fetchResult.finalUrl, parsed.text);
+        for (const email of emails) {
+          if (!allEmails.has(email.value)) {
+            allEmails.set(email.value, email);
+          }
+        }
+
+        const phones = extractPhones(fetchResult.content, fetchResult.finalUrl);
+        for (const phone of phones) {
+          if (!allPhones.has(phone.value)) {
+            allPhones.set(phone.value, phone);
+          }
+        }
+
+        contactPages.add(fetchResult.finalUrl);
+      } catch (error: any) {
+        errors.push({ url: contactUrl, message: error.message || 'Fetch failed' });
       }
     }
 

@@ -1,5 +1,5 @@
 import type { DiscoveryJobInput, JobResult } from '../types/jobs.js';
-import { discoverBusinesses } from '../workers/discoveryWorker.js';
+import { discoverBusinessesV2 } from '../workers/discoveryWorkerV2.js';
 import { createCrawlJob } from '../db/crawlJobs.js';
 import { pool } from '../config/database.js';
 import type { Website } from '../types/index.js';
@@ -24,7 +24,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
   console.log(`\n🔍 Starting DISCOVERY job: ${jobId}`);
   console.log(`   Industry: ${input.industry}`);
   console.log(`   City: ${input.city}`);
-  console.log(`   Use Geo-Grid: ${input.useGeoGrid || false}`);
+  console.log(`   Discovery method: V2 Grid-Based (always uses grid + keyword expansion)`);
 
   let discoveryRun: Awaited<ReturnType<typeof createDiscoveryRun>> | undefined;
   
@@ -178,16 +178,15 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     });
     console.log(`[runDiscoveryJob] Marked discovery_run as started: ${discoveryRun.id}`);
 
-    // Run discovery (this creates businesses and websites)
+    // Run discovery using grid-based V2 worker (always uses grid + keyword expansion)
     // If gated, discovery will still run but we'll mark it in the result
-    const discoveryResult = await discoverBusinesses({
+    const discoveryResult = await discoverBusinessesV2({
       industry: input.industry, // Legacy support
       industry_id: input.industry_id, // Preferred
       city: input.city, // Legacy support
       city_id: input.city_id, // Preferred
       latitude: input.latitude,
       longitude: input.longitude,
-      useGeoGrid: input.useGeoGrid || false, // Don't use geo-grid by default - use keyword fan-out
       cityRadiusKm: input.cityRadiusKm,
       datasetId: datasetId
     }, discoveryRun.id);
@@ -277,6 +276,10 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         city: input.city,
         businesses_found: discoveryResult.businessesFound,
         businesses_created: discoveryResult.businessesCreated,
+        grid_points_generated: discoveryResult.gridPointsGenerated,
+        searches_executed: discoveryResult.searchesExecuted,
+        coverage_score: discoveryResult.coverageScore,
+        stopped_early: discoveryResult.stoppedEarly,
         // Note: websites_created removed - websites are created in extraction phase
         crawl_jobs_created: crawlJobsCreated,
         duration_seconds: (endTime.getTime() - startTime.getTime()) / 1000,
