@@ -44,18 +44,26 @@ export async function upsertBusinessGlobal(data: {
   name: string;
   address: string | null;
   postal_code: string | null;
-  city_id: string; // UUID
-  industry_id: string | null; // UUID
+  city_id: string; // UUID - REQUIRED (NOT NULL)
+  industry_id: string; // UUID - REQUIRED (NOT NULL)
+  dataset_id: string; // UUID - REQUIRED (NOT NULL)
   google_place_id: string; // REQUIRED for global deduplication
   latitude?: number | null;
   longitude?: number | null;
   rating?: number | null;
   user_rating_count?: number | null;
 }): Promise<{ business: Business; wasUpdated: boolean; wasNew: boolean }> {
-  // CRITICAL: city_id is NOT NULL in database - missing this causes silent rollbacks
-  // Always validate city_id is provided from discovery context
+  // CRITICAL: Fail-fast guard - all required fields must be provided from discovery context
   if (!data.city_id || data.city_id.trim().length === 0) {
-    throw new Error(`city_id missing in discovery insert for business "${data.name}" - this will cause silent insert failures. City ID must be provided from discovery context.`);
+    throw new Error(`Invalid business insert: missing city_id for business "${data.name}" - City ID must be provided from discovery context`);
+  }
+
+  if (!data.industry_id || data.industry_id.trim().length === 0) {
+    throw new Error(`Invalid business insert: missing industry_id for business "${data.name}" - Industry ID must be provided from discovery context`);
+  }
+
+  if (!data.dataset_id || data.dataset_id.trim().length === 0) {
+    throw new Error(`Invalid business insert: missing dataset_id for business "${data.name}" - Dataset ID must be provided from discovery context`);
   }
 
   if (!data.google_place_id) {
@@ -87,18 +95,20 @@ export async function upsertBusinessGlobal(data: {
   console.log('[upsertBusinessGlobal] name:', data.name);
   console.log('[upsertBusinessGlobal] normalized_name:', normalized_name);
   console.log('[upsertBusinessGlobal] city_id:', data.city_id);
+  console.log('[upsertBusinessGlobal] industry_id:', data.industry_id);
+  console.log('[upsertBusinessGlobal] dataset_id:', data.dataset_id);
   console.log('[upsertBusinessGlobal] google_place_id:', data.google_place_id);
   console.log('[upsertBusinessGlobal] address:', data.address);
   console.log('[upsertBusinessGlobal] postal_code:', data.postal_code);
-  console.log('[upsertBusinessGlobal] industry_id:', data.industry_id);
   console.log('[upsertBusinessGlobal] Full data object:', JSON.stringify({
     name: data.name,
     normalized_name,
     city_id: data.city_id,
+    industry_id: data.industry_id,
+    dataset_id: data.dataset_id,
     google_place_id: data.google_place_id,
     address: data.address,
     postal_code: data.postal_code,
-    industry_id: data.industry_id,
     latitude: data.latitude,
     longitude: data.longitude
   }, null, 2));
@@ -112,6 +122,7 @@ export async function upsertBusinessGlobal(data: {
     data.postal_code,
     data.city_id,
     data.industry_id,
+    data.dataset_id,
     data.google_place_id,
     data.latitude || null,
     data.longitude || null
@@ -124,28 +135,30 @@ export async function upsertBusinessGlobal(data: {
   console.log('[upsertBusinessGlobal]   $3 (address):', insertValues[2], typeof insertValues[2]);
   console.log('[upsertBusinessGlobal]   $4 (postal_code):', insertValues[3], typeof insertValues[3]);
   console.log('[upsertBusinessGlobal]   $5 (city_id):', insertValues[4], typeof insertValues[4], insertValues[4] === null ? '⚠️ NULL!' : '', insertValues[4] === undefined ? '⚠️ UNDEFINED!' : '');
-  console.log('[upsertBusinessGlobal]   $6 (industry_id):', insertValues[5], typeof insertValues[5]);
-  console.log('[upsertBusinessGlobal]   $7 (google_place_id):', insertValues[6], typeof insertValues[6]);
-  console.log('[upsertBusinessGlobal]   $8 (latitude):', insertValues[7], typeof insertValues[7]);
-  console.log('[upsertBusinessGlobal]   $9 (longitude):', insertValues[8], typeof insertValues[8]);
+  console.log('[upsertBusinessGlobal]   $6 (industry_id):', insertValues[5], typeof insertValues[5], insertValues[5] === null ? '⚠️ NULL!' : '', insertValues[5] === undefined ? '⚠️ UNDEFINED!' : '');
+  console.log('[upsertBusinessGlobal]   $7 (dataset_id):', insertValues[6], typeof insertValues[6], insertValues[6] === null ? '⚠️ NULL!' : '', insertValues[6] === undefined ? '⚠️ UNDEFINED!' : '');
+  console.log('[upsertBusinessGlobal]   $8 (google_place_id):', insertValues[7], typeof insertValues[7]);
+  console.log('[upsertBusinessGlobal]   $9 (latitude):', insertValues[8], typeof insertValues[8]);
+  console.log('[upsertBusinessGlobal]   $10 (longitude):', insertValues[9], typeof insertValues[9]);
 
   try {
     // Try to insert, handling conflict on google_place_id
     const result = await pool.query<Business>(
       `INSERT INTO businesses (
         name, normalized_name, address, postal_code, city_id, 
-        industry_id, google_place_id, latitude, longitude,
+        industry_id, dataset_id, google_place_id, latitude, longitude,
         last_discovered_at, crawl_status, created_at, updated_at
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), 'pending', NOW(), NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), 'pending', NOW(), NOW())
        ON CONFLICT (google_place_id) 
        DO UPDATE SET
          name = EXCLUDED.name,
          normalized_name = EXCLUDED.normalized_name,
          address = COALESCE(EXCLUDED.address, businesses.address),
-         postal_code = COALESCE(EXCLUDED.address, businesses.postal_code),
-         city_id = COALESCE(EXCLUDED.city_id, businesses.city_id),
-         industry_id = COALESCE(EXCLUDED.industry_id, businesses.industry_id),
+         postal_code = COALESCE(EXCLUDED.postal_code, businesses.postal_code),
+         city_id = EXCLUDED.city_id, -- CRITICAL: Always update city_id (NOT NULL)
+         industry_id = EXCLUDED.industry_id, -- CRITICAL: Always update industry_id (NOT NULL)
+         dataset_id = EXCLUDED.dataset_id, -- CRITICAL: Always update dataset_id (NOT NULL)
          latitude = COALESCE(EXCLUDED.latitude, businesses.latitude),
          longitude = COALESCE(EXCLUDED.longitude, businesses.longitude),
          last_discovered_at = NOW(), -- Always update discovery timestamp

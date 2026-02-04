@@ -47,17 +47,24 @@ export async function upsertBusiness(data: {
   name: string;
   address: string | null;
   postal_code: string | null;
-  city_id: string; // UUID
-  industry_id: string | null; // UUID
+  city_id: string; // UUID - REQUIRED (NOT NULL)
+  industry_id: string; // UUID - REQUIRED (NOT NULL)
   google_place_id: string | null;
-  dataset_id: string; // UUID
+  dataset_id: string; // UUID - REQUIRED (NOT NULL)
   owner_user_id: string;
   discovery_run_id?: string | null; // UUID
 }): Promise<{ business: Business; wasUpdated: boolean }> {
-  // CRITICAL: city_id is NOT NULL in database - missing this causes silent rollbacks
-  // Always validate city_id is provided from discovery context
+  // CRITICAL: Fail-fast guard - all required fields must be provided from discovery context
   if (!data.city_id || data.city_id.trim().length === 0) {
-    throw new Error(`city_id missing in discovery insert for business "${data.name}" - this will cause silent insert failures. City ID must be provided from discovery context.`);
+    throw new Error(`Invalid business insert: missing city_id for business "${data.name}" - City ID must be provided from discovery context`);
+  }
+
+  if (!data.industry_id || data.industry_id.trim().length === 0) {
+    throw new Error(`Invalid business insert: missing industry_id for business "${data.name}" - Industry ID must be provided from discovery context`);
+  }
+
+  if (!data.dataset_id || data.dataset_id.trim().length === 0) {
+    throw new Error(`Invalid business insert: missing dataset_id for business "${data.name}" - Dataset ID must be provided from discovery context`);
   }
 
   // CRITICAL: normalized_name is NOT NULL in database - missing this causes silent rollbacks
@@ -124,9 +131,9 @@ export async function upsertBusiness(data: {
   console.log('[upsertBusiness]   $3 (address):', insertValues[2], typeof insertValues[2]);
   console.log('[upsertBusiness]   $4 (postal_code):', insertValues[3], typeof insertValues[3]);
   console.log('[upsertBusiness]   $5 (city_id):', insertValues[4], typeof insertValues[4], insertValues[4] === null ? '⚠️ NULL!' : '', insertValues[4] === undefined ? '⚠️ UNDEFINED!' : '');
-  console.log('[upsertBusiness]   $6 (industry_id):', insertValues[5], typeof insertValues[5]);
+  console.log('[upsertBusiness]   $6 (industry_id):', insertValues[5], typeof insertValues[5], insertValues[5] === null ? '⚠️ NULL!' : '', insertValues[5] === undefined ? '⚠️ UNDEFINED!' : '');
   console.log('[upsertBusiness]   $7 (google_place_id):', insertValues[6], typeof insertValues[6]);
-  console.log('[upsertBusiness]   $8 (dataset_id):', insertValues[7], typeof insertValues[7]);
+  console.log('[upsertBusiness]   $8 (dataset_id):', insertValues[7], typeof insertValues[7], insertValues[7] === null ? '⚠️ NULL!' : '', insertValues[7] === undefined ? '⚠️ UNDEFINED!' : '');
   console.log('[upsertBusiness]   $9 (owner_user_id):', insertValues[8], typeof insertValues[8]);
   console.log('[upsertBusiness]   $10 (discovery_run_id):', insertValues[9], typeof insertValues[9]);
 
@@ -148,7 +155,8 @@ export async function upsertBusiness(data: {
          address = EXCLUDED.address,
          postal_code = EXCLUDED.postal_code,
          city_id = EXCLUDED.city_id, -- CRITICAL: Update city_id on conflict (must not be NULL)
-         industry_id = EXCLUDED.industry_id,
+         industry_id = EXCLUDED.industry_id, -- CRITICAL: Update industry_id on conflict (must not be NULL)
+         dataset_id = EXCLUDED.dataset_id, -- CRITICAL: Update dataset_id on conflict (must not be NULL)
          google_place_id = COALESCE(EXCLUDED.google_place_id, businesses.google_place_id),
          -- CRITICAL: Always set discovery_run_id if provided (EXCLUDED.discovery_run_id is not null)
          -- If EXCLUDED.discovery_run_id is NULL, keep existing value (for non-discovery updates)

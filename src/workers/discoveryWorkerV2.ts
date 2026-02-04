@@ -534,7 +534,8 @@ export async function discoverBusinessesV2(
           address: place.formatted_address || null,
           postal_code: postalCode,
           city_id: finalCityId, // CRITICAL: Required - businesses.city_id is NOT NULL
-          industry_id: industry.id,
+          industry_id: industry.id, // CRITICAL: Required - businesses.industry_id is NOT NULL
+          dataset_id: dataset.id, // CRITICAL: Required - businesses.dataset_id is NOT NULL
           google_place_id: place.place_id,
           latitude: place.latitude || resolvedLatitude || null, // Use place location or city center as fallback
           longitude: place.longitude || resolvedLongitude || null, // Use place location or city center as fallback
