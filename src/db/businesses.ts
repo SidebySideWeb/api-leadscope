@@ -162,7 +162,29 @@ export async function upsertBusiness(data: {
       throw new Error(`Failed to upsert business with normalized_name: ${normalized_name}`);
     }
 
-    return { business: result.rows[0], wasUpdated: false };
+    const business = result.rows[0];
+    
+    // Check if this was an update by comparing created_at vs updated_at
+    // If they're very close (< 1 second), it was likely an insert
+    const createdAt = new Date(business.created_at).getTime();
+    const updatedAt = new Date(business.updated_at).getTime();
+    const wasUpdated = (updatedAt - createdAt) > 1000; // More than 1 second difference
+
+    if (wasUpdated) {
+      console.log(`[upsertBusiness] UPDATED existing business:`, {
+        business_id: business.id,
+        normalized_name: business.normalized_name,
+        dataset_id: business.dataset_id
+      });
+    } else {
+      console.log(`[upsertBusiness] INSERTED new business:`, {
+        business_id: business.id,
+        normalized_name: business.normalized_name,
+        dataset_id: business.dataset_id
+      });
+    }
+
+    return { business, wasUpdated };
   } catch (error: any) {
     // CRITICAL: Catch NOT NULL violations and log exact values that caused failure
     if (error.code === '23502') { // NOT NULL violation
@@ -176,30 +198,6 @@ export async function upsertBusiness(data: {
     }
     throw error;
   }
-
-  const business = result.rows[0];
-  
-  // Check if this was an update by comparing created_at vs updated_at
-  // If they're very close (< 1 second), it was likely an insert
-  const createdAt = new Date(business.created_at).getTime();
-  const updatedAt = new Date(business.updated_at).getTime();
-  const wasUpdated = (updatedAt - createdAt) > 1000; // More than 1 second difference
-
-  if (wasUpdated) {
-    console.log(`[upsertBusiness] UPDATED existing business:`, {
-      business_id: business.id,
-      normalized_name: business.normalized_name,
-      dataset_id: business.dataset_id
-    });
-  } else {
-    console.log(`[upsertBusiness] INSERTED new business:`, {
-      business_id: business.id,
-      normalized_name: business.normalized_name,
-      dataset_id: business.dataset_id
-    });
-  }
-
-  return { business, wasUpdated };
 }
 
 /**
