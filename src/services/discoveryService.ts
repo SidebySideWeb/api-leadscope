@@ -17,6 +17,9 @@ import { createDiscoveryRun, updateDiscoveryRun } from '../db/discoveryRuns.js';
  * Uses geo-grid discovery and creates new businesses
  */
 export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResult> {
+  console.log(`\n[runDiscoveryJob] ===== RUN DISCOVERY JOB CALLED =====`);
+  console.log(`[runDiscoveryJob] Input:`, JSON.stringify(input, null, 2));
+  
   const startTime = new Date();
   const jobId = `discovery-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   const errors: string[] = [];

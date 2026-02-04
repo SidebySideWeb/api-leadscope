@@ -15,9 +15,17 @@ const router = express.Router();
  * Requires authentication
  */
 router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
+  console.log('\n[API] ===== DISCOVERY API ENDPOINT CALLED =====');
+  console.log('[API] Request method:', req.method);
+  console.log('[API] Request path:', req.path);
+  console.log('[API] Request body:', JSON.stringify(req.body, null, 2));
+  console.log('[API] User ID:', req.userId);
+  
   try {
     const userId = req.userId!;
     const { industryId: rawIndustryId, cityId: rawCityId, datasetId } = req.body;
+    
+    console.log('[API] Extracted params:', { rawIndustryId, rawCityId, datasetId });
     
     // Get user's plan from database
     const userResult = await pool.query<{ plan: string }>(
@@ -137,8 +145,14 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
 
     // CRITICAL: Create discovery_run at the VERY START (synchronously, before returning)
     // This makes discovery observable and stateful
+    console.log('[API] About to create discovery_run with datasetId:', finalDatasetId, 'userId:', userId);
     const discoveryRun = await createDiscoveryRun(finalDatasetId, userId);
-    console.log('[API] Created discovery_run:', discoveryRun.id);
+    console.log('[API] Created discovery_run:', JSON.stringify({
+      id: discoveryRun.id,
+      status: discoveryRun.status,
+      dataset_id: discoveryRun.dataset_id,
+      created_at: discoveryRun.created_at
+    }, null, 2));
 
     // Run discovery job asynchronously (don't wait for completion)
     // Uses V2 grid-based discovery (always uses grid + keyword expansion)
@@ -155,7 +169,9 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       discoveryRunId: discoveryRun.id
     });
     
-    runDiscoveryJob({
+    console.log('[API] About to call runDiscoveryJob...');
+    
+    const jobPromise = runDiscoveryJob({
       userId,
       industry_id: industry.id, // Use industry_id for keyword-based discovery
       city_id: city.id, // Use city_id for coordinate-based discovery
@@ -164,15 +180,24 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       cityRadiusKm: city.radius_km || undefined,
       datasetId: finalDatasetId, // Use resolved dataset ID
       discoveryRunId: discoveryRun.id, // Pass discovery_run_id to link businesses
-    }).catch((error) => {
-      // Log errors but don't block the response
-      console.error('[API] Discovery job error:', error);
-      console.error('[API] Discovery job error stack:', error instanceof Error ? error.stack : 'No stack trace');
     });
+    
+    console.log('[API] runDiscoveryJob called, promise created');
+    
+    jobPromise.catch((error) => {
+      // Log errors but don't block the response
+      console.error('[API] ===== DISCOVERY JOB ERROR (ASYNC) =====');
+      console.error('[API] Discovery job error:', error);
+      console.error('[API] Discovery job error message:', error instanceof Error ? error.message : String(error));
+      console.error('[API] Discovery job error stack:', error instanceof Error ? error.stack : 'No stack trace');
+      console.error('[API] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    });
+    
+    console.log('[API] Error handler attached to job promise');
 
     // Return discovery_run immediately - frontend can poll for results
     // Extraction will happen in background and businesses will be available via /businesses endpoint
-    return res.json({
+    const responseData = {
       data: [{
         id: discoveryRun.id,
         status: discoveryRun.status,
@@ -187,7 +212,13 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
         total_returned: 1,
         message: 'Discovery started. Businesses will be available shortly. Use /businesses endpoint to fetch results.',
       },
-    });
+    };
+    
+    console.log('[API] ===== SENDING RESPONSE =====');
+    console.log('[API] Response data:', JSON.stringify(responseData, null, 2));
+    console.log('[API] Response data length:', responseData.data.length);
+    
+    return res.json(responseData);
   } catch (error: any) {
     console.error('[API] Error in discovery:', error);
     // Try to get user plan for error response, but don't fail if it errors

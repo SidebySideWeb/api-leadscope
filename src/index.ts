@@ -3,8 +3,15 @@ import app from './server.js';
 import { runExtractionBatch } from './workers/extractWorker.js';
 
 async function main() {
+  console.log('========================================');
   console.log('Leads Generation Backend');
-  console.log('GDPR-compliant business contact intelligence engine for Greece\n');
+  console.log('GDPR-compliant business contact intelligence engine for Greece');
+  console.log('========================================\n');
+  console.log('[STARTUP] Backend starting at:', new Date().toISOString());
+  console.log('[STARTUP] Node version:', process.version);
+  console.log('[STARTUP] Process ID:', process.pid);
+  console.log('[STARTUP] Working directory:', process.cwd());
+  console.log('');
 
   // Test database connection on startup
   const connected = await testConnection();
