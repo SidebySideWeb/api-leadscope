@@ -44,21 +44,32 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     console.log('[discovery] req.body keys:', Object.keys(req.body || {}));
     console.log('[discovery] req.body values:', req.body);
     
-    // CRITICAL: Accept snake_case payload only (industry_id, city_id, dataset_id)
-    // Do NOT accept camelCase silently
-    const { industry_id, city_id, dataset_id } = req.body;
+    // CRITICAL: Accept snake_case payload (industry_id, city_id, dataset_id)
+    // Support camelCase with auto-conversion and warning (for frontend compatibility)
+    let industry_id: string | undefined;
+    let city_id: string | undefined;
+    let dataset_id: string | undefined;
     
-    // Check for camelCase (common mistake)
-    const hasCamelCase = req.body.industryId || req.body.cityId || req.body.datasetId;
-    if (hasCamelCase) {
-      const camelCaseFields = [];
-      if (req.body.industryId) camelCaseFields.push('industryId');
-      if (req.body.cityId) camelCaseFields.push('cityId');
-      if (req.body.datasetId) camelCaseFields.push('datasetId');
-      const errorMsg = `Invalid discovery request: received camelCase fields (${camelCaseFields.join(', ')}). Expected snake_case: industry_id, city_id, dataset_id`;
-      console.error('[API] Validation failed:', errorMsg);
-      console.error('[API] Received body:', JSON.stringify(req.body, null, 2));
-      throw new Error(errorMsg);
+    // Prefer snake_case, fallback to camelCase with warning
+    if (req.body.industry_id) {
+      industry_id = req.body.industry_id;
+    } else if (req.body.industryId) {
+      industry_id = req.body.industryId;
+      console.warn('[discovery] WARNING: Received camelCase industryId, converted to industry_id. Please use snake_case in future requests.');
+    }
+    
+    if (req.body.city_id) {
+      city_id = req.body.city_id;
+    } else if (req.body.cityId) {
+      city_id = req.body.cityId;
+      console.warn('[discovery] WARNING: Received camelCase cityId, converted to city_id. Please use snake_case in future requests.');
+    }
+    
+    if (req.body.dataset_id) {
+      dataset_id = req.body.dataset_id;
+    } else if (req.body.datasetId) {
+      dataset_id = req.body.datasetId;
+      console.warn('[discovery] WARNING: Received camelCase datasetId, converted to dataset_id. Please use snake_case in future requests.');
     }
     
     console.log('[discovery] payload:', { industry_id, city_id, dataset_id });
