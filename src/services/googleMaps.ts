@@ -44,9 +44,12 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
       };
 
       // Add location bias if provided
+      // CRITICAL FIX: Increase radius for grid searches - 1.5km might be too restrictive
+      // Google Places API works better with larger radii for location bias
       if (location) {
-        // Use provided radius or default to 1.5km (1500m) for grid-based discovery
-        const searchRadius = radiusMeters || 1500;
+        // Use provided radius, but increase minimum to 2km for better results
+        // Grid searches need larger radius to find businesses
+        const searchRadius = Math.max(radiusMeters || 2000, 2000); // Minimum 2km
         requestBody.locationBias = {
           circle: {
             center: {

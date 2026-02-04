@@ -320,7 +320,10 @@ export async function discoverBusinessesV2(
       // Execute batch
       const batchPromises = batch.map(async (task) => {
         try {
-          const searchQuery = task.keyword; // Just keyword, no city name (location bias handles it)
+          // CRITICAL FIX: Add city name to query for better results
+          // Google Places API works better with contextual queries
+          const cityName = city?.name || '';
+          const searchQuery = cityName ? `${task.keyword} ${cityName}` : task.keyword;
           const radiusMeters = discoveryConfig.gridRadiusKm * 1000; // Convert km to meters
           
           console.log(`[discoverBusinessesV2] Searching: "${searchQuery}" at (${task.gridPoint.lat}, ${task.gridPoint.lng}) radius ${radiusMeters}m`);
