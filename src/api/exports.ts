@@ -1,6 +1,8 @@
 import express from 'express';
 import { authMiddleware, type AuthRequest } from '../middleware/auth.js';
 import { pool } from '../config/database.js';
+import { runDatasetExport } from '../workers/exportWorker.js';
+import { verifyDatasetOwnership } from '../db/datasets.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -113,6 +115,98 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         gate_reason: error.message || 'Failed to fetch exports',
       },
     });
+  }
+});
+
+/**
+ * POST /exports/run
+ * Generate and download an export for a dataset
+ */
+router.post('/run', authMiddleware, async (req: AuthRequest, res): Promise<void> => {
+  try {
+    const userId = req.userId!;
+    const { datasetId, format } = req.body;
+
+    console.log('[exports/run] Request:', { userId, datasetId, format });
+
+    // Validate input
+    if (!datasetId) {
+      res.status(400).json({ error: 'datasetId is required' });
+      return;
+    }
+
+    if (!format || !['csv', 'xlsx'].includes(format)) {
+      res.status(400).json({ error: 'format must be "csv" or "xlsx"' });
+      return;
+    }
+
+    // Verify dataset ownership
+    const ownsDataset = await verifyDatasetOwnership(datasetId, userId);
+    if (!ownsDataset) {
+      res.status(403).json({ error: 'Dataset not found or access denied' });
+      return;
+    }
+
+    // Get user's plan to determine tier
+    const userResult = await pool.query<{ plan: string }>(
+      'SELECT plan FROM users WHERE id = $1',
+      [userId]
+    );
+    const userPlan = (userResult.rows[0]?.plan || 'demo') as string;
+    
+    // Map plan to tier (demo/starter -> starter, pro/professional -> pro, agency -> agency)
+    let tier = 'starter';
+    if (userPlan === 'professional' || userPlan === 'pro') {
+      tier = 'pro';
+    } else if (userPlan === 'agency') {
+      tier = 'agency';
+    }
+
+    console.log('[exports/run] User plan:', userPlan, 'Tier:', tier);
+
+    // Generate export
+    const filePath = await runDatasetExport(datasetId, tier, format);
+    console.log('[exports/run] Export generated:', filePath);
+
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      res.status(500).json({ error: 'Export file was not created' });
+      return;
+    }
+
+    // Get export record to get the export ID
+    const exportResult = await pool.query<{ id: string }>(
+      'SELECT id FROM exports WHERE file_path = $1 ORDER BY created_at DESC LIMIT 1',
+      [filePath]
+    );
+    const exportId = exportResult.rows[0]?.id || 'export';
+
+    // Set appropriate headers for file download
+    const filename = `export-${exportId}.${format}`;
+    res.setHeader('Content-Type', format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    // Stream the file
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+    
+    // Handle stream errors
+    fileStream.on('error', (error) => {
+      console.error('[exports/run] File stream error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to stream export file' });
+      }
+    });
+
+    // Clean up: Note - we don't delete the file here as it's stored for later download via /exports/:id/download
+  } catch (error: any) {
+    console.error('[exports/run] Error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: error.message || 'Failed to generate export',
+        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    }
   }
 });
 
