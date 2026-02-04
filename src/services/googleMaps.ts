@@ -228,7 +228,14 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
       
       return results;
     } catch (error: any) {
-      console.error('Error searching Google Maps:', error.response?.data || error.message);
+      console.error('[GoogleMaps] ===== ERROR SEARCHING GOOGLE MAPS =====');
+      console.error('[GoogleMaps] Error type:', error.constructor?.name);
+      console.error('[GoogleMaps] Error message:', error.message);
+      console.error('[GoogleMaps] Error response status:', error.response?.status);
+      console.error('[GoogleMaps] Error response data:', error.response?.data ? JSON.stringify(error.response.data, null, 2) : 'no response data');
+      console.error('[GoogleMaps] Error stack:', error.stack);
+      console.error('[GoogleMaps] Full error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+      console.error('[GoogleMaps] =========================================');
       throw error;
     }
   }
