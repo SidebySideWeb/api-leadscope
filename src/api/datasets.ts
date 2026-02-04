@@ -88,8 +88,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res): Promise<void> => 
             d.id,
             d.user_id,
             d.name,
-            d.city_id::text as city_id,
-            d.industry_id::text as industry_id,
+            d.city_id,
+            d.industry_id,
             d.last_refreshed_at,
             d.created_at,
             COUNT(DISTINCT b.id) as businesses_count,
@@ -107,8 +107,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res): Promise<void> => 
             d.id,
             d.user_id,
             d.name,
-            d.city_id::text as city_id,
-            d.industry_id::text as industry_id,
+            d.city_id,
+            d.industry_id,
             d.last_refreshed_at,
             d.created_at,
             COUNT(DISTINCT b.id) as businesses_count,
@@ -124,8 +124,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res): Promise<void> => 
         id: string;
         user_id: string;
         name: string;
-        city_id: string | number | null;
-        industry_id: string | number | null;
+        city_id: string | null;
+        industry_id: string | null;
         last_refreshed_at: Date | null;
         created_at: Date;
         businesses_count: number;
@@ -191,42 +191,15 @@ router.get('/', authMiddleware, async (req: AuthRequest, res): Promise<void> => 
         }
       }
 
-      // Handle type mismatch: datasets.city_id/industry_id might be INTEGER or UUID
-      // Try to find by converting to string for comparison
-      let industryName = 'Unknown';
-      let cityName = 'Unknown';
+      // Lookup industry and city names by UUID
+      // All IDs are UUID, so direct map lookup works
+      const industryName = row.industry_id 
+        ? (industryMap.get(row.industry_id) || 'Unknown')
+        : 'Unknown';
       
-      if (row.industry_id) {
-        // Try both as string and as number (in case it's stored as INTEGER)
-        const industryIdStr = String(row.industry_id);
-        industryName = industryMap.get(industryIdStr) || 'Unknown';
-        
-        // If not found, try finding by numeric ID (if industries.id is numeric)
-        if (industryName === 'Unknown' && !isNaN(Number(row.industry_id))) {
-          const numericId = Number(row.industry_id);
-          const found = industries.find((i: Industry) => {
-            const iId = typeof i.id === 'string' ? parseInt(i.id, 10) : i.id;
-            return iId === numericId;
-          });
-          industryName = found?.name || 'Unknown';
-        }
-      }
-      
-      if (row.city_id) {
-        // Try both as string and as number (in case it's stored as INTEGER)
-        const cityIdStr = String(row.city_id);
-        cityName = cityMap.get(cityIdStr) || 'Unknown';
-        
-        // If not found, try finding by numeric ID (if cities.id is numeric)
-        if (cityName === 'Unknown' && !isNaN(Number(row.city_id))) {
-          const numericId = Number(row.city_id);
-          const found = cities.find((c: City) => {
-            const cId = typeof c.id === 'string' ? parseInt(c.id, 10) : c.id;
-            return cId === numericId;
-          });
-          cityName = found?.name || 'Unknown';
-        }
-      }
+      const cityName = row.city_id 
+        ? (cityMap.get(row.city_id) || 'Unknown')
+        : 'Unknown';
 
       return {
         id: row.id,
@@ -364,11 +337,12 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res): Promise<void> 
       getCities(),
     ]);
 
+    // Direct UUID lookup - all IDs are UUID
     const industry = dataset.industry_id 
-      ? industries.find((i: Industry) => String(i.id) === String(dataset.industry_id))?.name || 'Unknown'
+      ? (industries.find((i: Industry) => i.id === dataset.industry_id)?.name || 'Unknown')
       : 'Unknown';
     const city = dataset.city_id
-      ? cities.find((c: City) => String(c.id) === String(dataset.city_id))?.name || 'Unknown'
+      ? (cities.find((c: City) => c.id === dataset.city_id)?.name || 'Unknown')
       : 'Unknown';
 
     const lastRefresh = dataset.last_refreshed_at ? new Date(dataset.last_refreshed_at) : null;
