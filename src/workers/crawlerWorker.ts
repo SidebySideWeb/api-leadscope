@@ -162,8 +162,9 @@ export async function crawlWebsite(website: Website, crawlJob: CrawlJob): Promis
       if (page) await page.close();
       if (context) await context.close();
 
-      // Store crawl results in database
+      // Store crawl results in database (both crawl_results and crawl_pages)
       for (const crawlResult of results) {
+        // Store in crawl_results (legacy)
         await createCrawlResult({
           crawl_job_id: crawlJob.id,
           url: crawlResult.url,
@@ -171,6 +172,26 @@ export async function crawlWebsite(website: Website, crawlJob: CrawlJob): Promis
           html_hash: crawlResult.htmlHash,
           page_type: crawlResult.pageType
         });
+
+        // Also store in crawl_pages (used by extraction worker)
+        try {
+          const { createCrawlPage } = await import('../db/crawlPages.js');
+          await createCrawlPage({
+            crawl_job_id: crawlJob.id,
+            url: crawlResult.url,
+            final_url: crawlResult.url,
+            status_code: 200,
+            content_type: 'text/html',
+            html: crawlResult.html,
+            hash: crawlResult.htmlHash,
+            fetched_at: new Date()
+          });
+        } catch (error: any) {
+          // If page already exists, skip (might be duplicate)
+          if (error.code !== '23505') {
+            console.error(`[crawlWebsite] Error storing page in crawl_pages:`, error.message);
+          }
+        }
       }
 
       // Update website with last crawl data (use homepage hash if available)

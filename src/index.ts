@@ -1,6 +1,7 @@
 import { testConnection } from './config/database.js';
 import app from './server.js';
 import { runExtractionBatch } from './workers/extractWorker.js';
+import { runCrawlBatch } from './workers/crawlWorker.js';
 
 async function main() {
   console.log('========================================');
@@ -50,6 +51,27 @@ async function main() {
       console.error('[Extraction Worker] Error processing batch:', error);
     }
   }, EXTRACTION_INTERVAL_MS);
+
+  // Start crawl worker (processes crawl jobs automatically)
+  // Process crawl jobs every 30 seconds (crawling takes longer)
+  const CRAWL_BATCH_SIZE = parseInt(process.env.CRAWL_BATCH_SIZE || '3', 10);
+  const CRAWL_INTERVAL_MS = parseInt(process.env.CRAWL_INTERVAL_MS || '30000', 10); // 30 seconds default
+
+  console.log(`🕷️  Starting crawl worker (batch size: ${CRAWL_BATCH_SIZE}, interval: ${CRAWL_INTERVAL_MS}ms)`);
+
+  // Process crawl jobs immediately on startup
+  runCrawlBatch(CRAWL_BATCH_SIZE).catch(error => {
+    console.error('[Crawl Worker] Error in initial batch:', error);
+  });
+
+  // Then process periodically
+  setInterval(async () => {
+    try {
+      await runCrawlBatch(CRAWL_BATCH_SIZE);
+    } catch (error) {
+      console.error('[Crawl Worker] Error processing batch:', error);
+    }
+  }, CRAWL_INTERVAL_MS);
 }
 
 main().catch(error => {

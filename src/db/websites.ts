@@ -79,6 +79,14 @@ export async function updateWebsiteCrawlData(id: number, html_hash: string): Pro
   return result.rows[0];
 }
 
+export async function getWebsiteById(id: number): Promise<Website | null> {
+  const result = await pool.query<Website>(
+    'SELECT * FROM websites WHERE id = $1',
+    [id]
+  );
+  return result.rows[0] || null;
+}
+
 export async function getOrCreateWebsite(business_id: number | null, url: string): Promise<Website> {
   const existing = await getWebsiteByUrl(url);
   if (existing) {
