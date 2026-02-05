@@ -69,7 +69,9 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
 
     // STEP 1: First, try to extract contact details from website crawl pages
     // This is free and preferred over paid Place Details API
+    console.log(`[processExtractionJob] Fetching crawl pages for business ${job.business_id} (type: ${typeof job.business_id})...`);
     const pages = await getCrawlPagesForBusiness(job.business_id);
+    console.log(`[processExtractionJob] Found ${pages.length} crawl pages for business ${job.business_id}`);
     
     const dedupe = new Set<string>(); // business_id|type|value
     const socialLinks: Map<string, string> = new Map(); // platform -> url
@@ -82,10 +84,16 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
       
       for (const page of pages) {
         const sourceUrl = page.final_url || page.url;
+        console.log(`[processExtractionJob] Processing page: ${sourceUrl} (HTML length: ${page.html?.length || 0})`);
         const extracted: ExtractedItem[] = extractFromHtmlPage(
           page.html,
           sourceUrl
         );
+        console.log(`[processExtractionJob] Extracted ${extracted.length} items from ${sourceUrl}:`, {
+          emails: extracted.filter(i => i.type === 'email').length,
+          phones: extracted.filter(i => i.type === 'phone').length,
+          social: extracted.filter(i => i.type === 'social').length
+        });
 
         for (const item of extracted) {
           const key = `${job.business_id}|${item.type}|${item.value.toLowerCase()}`;

@@ -32,6 +32,26 @@ async function processCrawlJob(job: CrawlJob): Promise<void> {
     const crawlResults = await crawlWebsite(website, job);
     
     console.log(`[crawlWorker] Successfully processed crawl job ${job.id}: ${crawlResults.length} pages crawled`);
+    
+    // After crawling completes, ensure extraction job exists and is reset to 'pending'
+    // This allows extraction worker to re-process with the newly crawled pages
+    if (website.business_id && crawlResults.length > 0) {
+      try {
+        const { pool } = await import('../config/database.js');
+        // Create or reset extraction job to 'pending' so it gets re-processed
+        await pool.query(
+          `INSERT INTO extraction_jobs (business_id, status)
+           VALUES ($1, 'pending')
+           ON CONFLICT (business_id) 
+           DO UPDATE SET status = 'pending', error_message = NULL, started_at = NULL, completed_at = NULL`,
+          [website.business_id]
+        );
+        console.log(`[crawlWorker] Created/reset extraction job for business ${website.business_id} after crawl completion`);
+      } catch (error: any) {
+        // Don't fail crawl job if extraction job creation fails
+        console.error(`[crawlWorker] Error creating/resetting extraction job for business ${website.business_id}:`, error.message);
+      }
+    }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error(`[crawlWorker] Error processing crawl job ${job.id}:`, errorMsg);

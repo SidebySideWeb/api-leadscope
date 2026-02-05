@@ -55,14 +55,15 @@ export async function getCrawlPagesForBusiness(
   businessId: number | string
 ): Promise<CrawlPageRecord[]> {
   // Join through websites table since crawl_jobs has website_id, not business_id
+  // Cast businessId to UUID since businesses.id is UUID in the database
   const result = await pool.query<CrawlPageRecord>(
     `SELECT cp.*
      FROM crawl_pages cp
      JOIN crawl_jobs cj ON cp.crawl_job_id = cj.id
      JOIN websites w ON cj.website_id = w.id
-     WHERE w.business_id = $1
+     WHERE w.business_id = $1::uuid
      ORDER BY cp.fetched_at ASC`,
-    [businessId]
+    [businessId.toString()] // Ensure it's a string for UUID casting
   );
 
   return result.rows;
