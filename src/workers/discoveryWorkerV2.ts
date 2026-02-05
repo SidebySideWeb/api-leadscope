@@ -58,6 +58,7 @@ export interface DiscoveryResult {
       estimatedTotalEUR: number;
     };
   };
+  extractionJobsCreated?: number;
 }
 
 /**

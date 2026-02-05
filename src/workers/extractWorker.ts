@@ -261,6 +261,7 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
         console.error(`[processExtractionJob] Error fetching Place Details for business ${business.id}:`, error);
         // Don't fail the extraction job if Place Details fetch fails
       }
+      }
     } else {
       console.log(`[processExtractionJob] Business ${business.id} has no google_place_id - cannot fetch Place Details`);
     }
