@@ -49,6 +49,7 @@ export async function upsertBusinessGlobal(data: {
   industry_id: string; // UUID - REQUIRED (NOT NULL)
   dataset_id: string; // UUID - REQUIRED (NOT NULL)
   google_place_id: string; // REQUIRED for global deduplication
+  owner_user_id?: string; // UUID - REQUIRED (NOT NULL in DB) - dataset owner user_id
   latitude?: number | null;
   longitude?: number | null;
   rating?: number | null;
@@ -65,6 +66,10 @@ export async function upsertBusinessGlobal(data: {
 
   if (!data.dataset_id || data.dataset_id.trim().length === 0) {
     throw new Error(`Invalid business insert: missing dataset_id for business "${data.name}" - Dataset ID must be provided from discovery context`);
+  }
+
+  if (!data.owner_user_id || data.owner_user_id.trim().length === 0) {
+    throw new Error(`Invalid business insert: missing owner_user_id for business "${data.name}" - Owner user ID must be provided (typically from dataset.user_id)`);
   }
 
   if (!data.google_place_id) {
@@ -133,6 +138,7 @@ export async function upsertBusinessGlobal(data: {
     data.industry_id,
     data.dataset_id,
     data.google_place_id,
+    data.owner_user_id, // REQUIRED: owner_user_id is NOT NULL in database
     data.latitude || null,
     data.longitude || null
   ];
@@ -147,18 +153,19 @@ export async function upsertBusinessGlobal(data: {
   console.log('[upsertBusinessGlobal]   $6 (industry_id):', insertValues[5], typeof insertValues[5], insertValues[5] === null ? '⚠️ NULL!' : '', insertValues[5] === undefined ? '⚠️ UNDEFINED!' : '');
   console.log('[upsertBusinessGlobal]   $7 (dataset_id):', insertValues[6], typeof insertValues[6], insertValues[6] === null ? '⚠️ NULL!' : '', insertValues[6] === undefined ? '⚠️ UNDEFINED!' : '');
   console.log('[upsertBusinessGlobal]   $8 (google_place_id):', insertValues[7], typeof insertValues[7]);
-  console.log('[upsertBusinessGlobal]   $9 (latitude):', insertValues[8], typeof insertValues[8]);
-  console.log('[upsertBusinessGlobal]   $10 (longitude):', insertValues[9], typeof insertValues[9]);
+  console.log('[upsertBusinessGlobal]   $9 (owner_user_id):', insertValues[8], typeof insertValues[8], insertValues[8] === null ? '⚠️ NULL!' : '', insertValues[8] === undefined ? '⚠️ UNDEFINED!' : '');
+  console.log('[upsertBusinessGlobal]   $10 (latitude):', insertValues[9], typeof insertValues[9]);
+  console.log('[upsertBusinessGlobal]   $11 (longitude):', insertValues[10], typeof insertValues[10]);
 
   try {
     // Try to insert, handling conflict on google_place_id
     const result = await pool.query<Business>(
       `INSERT INTO businesses (
         name, normalized_name, address, postal_code, city_id, 
-        industry_id, dataset_id, google_place_id, latitude, longitude,
+        industry_id, dataset_id, google_place_id, owner_user_id, latitude, longitude,
         last_discovered_at, crawl_status, created_at, updated_at
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), 'pending', NOW(), NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), 'pending', NOW(), NOW())
        ON CONFLICT (google_place_id) 
        DO UPDATE SET
          name = EXCLUDED.name,
