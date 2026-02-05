@@ -53,10 +53,15 @@ export async function runCrawlBatch(batchSize: number = 5): Promise<void> {
     const jobs = await getPendingCrawlJobs(batchSize);
     
     if (jobs.length === 0) {
+      // Log periodically so we know the worker is running
+      const now = new Date();
+      if (now.getSeconds() % 30 === 0) { // Log every 30 seconds
+        console.log(`[crawlWorker] No pending crawl jobs found`);
+      }
       return;
     }
 
-    console.log(`[crawlWorker] Found ${jobs.length} pending crawl jobs`);
+    console.log(`[crawlWorker] Found ${jobs.length} pending crawl jobs - processing...`);
     
     for (const job of jobs) {
       try {
@@ -66,6 +71,8 @@ export async function runCrawlBatch(batchSize: number = 5): Promise<void> {
         console.error(`[crawlWorker] Failed to process crawl job ${job.id}, continuing...`);
       }
     }
+    
+    console.log(`[crawlWorker] Completed batch: processed ${jobs.length} crawl jobs`);
   } catch (error) {
     console.error('[crawlWorker] Error in crawl batch:', error);
     throw error;
