@@ -84,6 +84,7 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
         status: response.status,
         placesCount: response.data?.places?.length || 0,
         hasPlaces: !!response.data?.places,
+        hasNextPageToken: !!response.data?.nextPageToken,
       });
 
       if (!response.data.places || response.data.places.length === 0) {
@@ -95,27 +96,91 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
       // Return only data from Text Search API (no Place Details calls)
       // Place Details will be fetched later in extraction phase if needed
       const results: GooglePlaceResult[] = [];
+      
+      // Helper function to map place data
+      const mapPlace = (place: any) => ({
+        place_id: place.id,
+        name: place.displayName?.text || '',
+        formatted_address: place.formattedAddress || '',
+        // website and phone are NOT available from Text Search - will be fetched in extraction if needed
+        website: undefined,
+        international_phone_number: undefined,
+        address_components: this.mapAddressComponents(place.addressComponents),
+        // rating and user_rating_count may be available from Text Search
+        rating: place.rating || undefined,
+        user_rating_count: place.userRatingCount || undefined,
+        // Location is available from Text Search API
+        latitude: place.location?.latitude || undefined,
+        longitude: place.location?.longitude || undefined
+      });
+
+      // Add first page results
       for (const place of response.data.places) {
-        // Map Text Search response directly (no Place Details call)
-        // Text Search provides: id, name, address, location, rating, types, addressComponents
-        // Text Search does NOT provide: website, phone (these require Place Details API)
-        results.push({
-          place_id: place.id,
-          name: place.displayName?.text || '',
-          formatted_address: place.formattedAddress || '',
-          // website and phone are NOT available from Text Search - will be fetched in extraction if needed
-          website: undefined,
-          international_phone_number: undefined,
-          address_components: this.mapAddressComponents(place.addressComponents),
-          // rating and user_rating_count may be available from Text Search
-          rating: place.rating || undefined,
-          user_rating_count: place.userRatingCount || undefined,
-          // Location is available from Text Search API
-          latitude: place.location?.latitude || undefined,
-          longitude: place.location?.longitude || undefined
-        });
+        results.push(mapPlace(place));
       }
 
+      // Handle pagination - fetch additional pages if available
+      let nextPageToken = response.data.nextPageToken;
+      let pageCount = 1;
+      const maxPages = 5; // Limit to 5 pages (100 results max) to avoid excessive API calls
+
+      while (nextPageToken && pageCount < maxPages) {
+        pageCount++;
+        console.log(`[GoogleMaps] Fetching page ${pageCount} with nextPageToken...`);
+        
+        // Wait a bit before next request (Google requires short delay for pagination)
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        const paginatedRequestBody: any = {
+          textQuery: query,
+          languageCode: 'el',
+          regionCode: 'GR',
+          pageToken: nextPageToken
+        };
+
+        // Add location bias if it was in original request
+        if (location) {
+          const searchRadius = Math.max(radiusMeters || 2000, 2000);
+          paginatedRequestBody.locationBias = {
+            circle: {
+              center: {
+                latitude: location.lat,
+                longitude: location.lng
+              },
+              radius: searchRadius
+            }
+          };
+        }
+
+        try {
+          const paginatedResponse = await axios.post(url, paginatedRequestBody, {
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Goog-Api-Key': this.apiKey,
+              'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.addressComponents'
+            }
+          });
+
+          if (paginatedResponse.data.places && paginatedResponse.data.places.length > 0) {
+            for (const place of paginatedResponse.data.places) {
+              results.push(mapPlace(place));
+            }
+            console.log(`[GoogleMaps] Page ${pageCount}: Added ${paginatedResponse.data.places.length} results (total: ${results.length})`);
+          }
+
+          nextPageToken = paginatedResponse.data.nextPageToken;
+        } catch (error: any) {
+          console.error(`[GoogleMaps] Error fetching page ${pageCount}:`, error.message);
+          // Stop pagination on error
+          break;
+        }
+      }
+
+      if (nextPageToken && pageCount >= maxPages) {
+        console.log(`[GoogleMaps] Reached max pages (${maxPages}), stopping pagination. More results may be available.`);
+      }
+
+      console.log(`[GoogleMaps] Total results fetched: ${results.length} across ${pageCount} page(s)`);
       return results;
     } catch (error: any) {
       console.error('[GoogleMaps] ===== ERROR SEARCHING GOOGLE MAPS =====');
