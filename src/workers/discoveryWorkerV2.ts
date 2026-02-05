@@ -229,9 +229,10 @@ export async function discoverBusinessesV2(
       if (!city) {
         throw new Error(`City ${input.city_id} not found`);
       }
-      resolvedLatitude = city.latitude || undefined;
-      resolvedLongitude = city.longitude || undefined;
-      resolvedRadiusKm = city.radius_km || undefined;
+      // CRITICAL: Convert to numbers - database may return strings or numbers
+      resolvedLatitude = city.latitude ? (typeof city.latitude === 'string' ? parseFloat(city.latitude) : Number(city.latitude)) : undefined;
+      resolvedLongitude = city.longitude ? (typeof city.longitude === 'string' ? parseFloat(city.longitude) : Number(city.longitude)) : undefined;
+      resolvedRadiusKm = city.radius_km ? (typeof city.radius_km === 'string' ? parseFloat(city.radius_km) : Number(city.radius_km)) : undefined;
     } else if (input.city) {
       // Legacy support: look up city by name, but don't create if not found
       const { normalizeCityName } = await import('../utils/cityNormalizer.js');
@@ -264,14 +265,17 @@ export async function discoverBusinessesV2(
         city = await updateCityCoordinates(city.id, coordinates);
       }
     } else {
-      resolvedLatitude = input.latitude;
-      resolvedLongitude = input.longitude;
-      resolvedRadiusKm = input.cityRadiusKm;
+      // CRITICAL: Convert string coordinates to numbers if needed
+      // API may send coordinates as strings (e.g., "37.98380000")
+      resolvedLatitude = typeof input.latitude === 'string' ? parseFloat(input.latitude) : input.latitude;
+      resolvedLongitude = typeof input.longitude === 'string' ? parseFloat(input.longitude) : input.longitude;
+      resolvedRadiusKm = typeof input.cityRadiusKm === 'string' ? parseFloat(input.cityRadiusKm) : input.cityRadiusKm;
     }
 
-    // Validate coordinates
-    if (!resolvedLatitude || !resolvedLongitude || !resolvedRadiusKm) {
-      throw new Error('City coordinates (latitude, longitude, radius_km) are required for discovery');
+    // Validate coordinates (check for NaN after conversion)
+    if (!resolvedLatitude || !resolvedLongitude || !resolvedRadiusKm || 
+        isNaN(resolvedLatitude) || isNaN(resolvedLongitude) || isNaN(resolvedRadiusKm)) {
+      throw new Error(`City coordinates (latitude, longitude, radius_km) are required for discovery. Got: lat=${resolvedLatitude}, lng=${resolvedLongitude}, radius=${resolvedRadiusKm}`);
     }
 
     const finalCityId = city?.id;
@@ -281,6 +285,8 @@ export async function discoverBusinessesV2(
 
     console.log(`[discoverBusinessesV2] Using city: ${city?.name || 'coordinates'} (${resolvedLatitude}, ${resolvedLongitude}, radius: ${resolvedRadiusKm}km)`);
     console.log(`[discoverBusinessesV2] Grid config: radius=${discoveryConfig.gridRadiusKm}km, density=${discoveryConfig.gridDensity}km`);
+    console.log(`[discoverBusinessesV2] Coordinate types: lat=${typeof resolvedLatitude}, lng=${typeof resolvedLongitude}, radius=${typeof resolvedRadiusKm}`);
+    console.log(`[discoverBusinessesV2] Coordinate values: lat=${resolvedLatitude}, lng=${resolvedLongitude}, radius=${resolvedRadiusKm}`);
 
     // STEP 1: Generate grid points covering the city
     const gridPoints = generateGridPoints(
@@ -291,6 +297,12 @@ export async function discoverBusinessesV2(
     );
     result.gridPointsGenerated = gridPoints.length;
     console.log(`[discoverBusinessesV2] Generated ${gridPoints.length} grid points`);
+    
+    if (gridPoints.length === 0) {
+      console.error(`[discoverBusinessesV2] ⚠️⚠️⚠️ GRID GENERATION FAILED ⚠️⚠️⚠️`);
+      console.error(`[discoverBusinessesV2] This will cause 0 businesses to be discovered`);
+      console.error(`[discoverBusinessesV2] Check: coordinates are valid numbers, radius > 0, step > 0`);
+    }
 
     // STEP 2: Expand keywords (grid point × keyword = one search)
     const searchTasks: Array<{ gridPoint: GridPoint; keyword: string }> = [];
