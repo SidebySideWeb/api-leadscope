@@ -1,57 +1,59 @@
 /**
- * Test Discovery V2 Endpoint
- * Tests the discovery API endpoint with V2 worker to see debug logs
+ * Test Discovery Endpoint
+ * 
+ * This script tests the discovery API endpoint directly to verify it's working
+ * and to see logs.
+ * 
+ * Usage: 
+ * 1. Set environment variables: GOOGLE_MAPS_API_KEY, DATABASE_URL
+ * 2. Make sure you have a valid JWT token (or modify to use test auth)
+ * 3. Run: tsx scripts/testDiscoveryEndpoint.ts
  */
 
 import dotenv from 'dotenv';
-import { generateToken } from '../src/utils/jwt.js';
 dotenv.config();
 
 const API_URL = process.env.API_URL || 'http://localhost:3000';
 const DISCOVERY_ENDPOINT = `${API_URL}/discovery/businesses`;
 
-// User ID from database
-const USER_ID = '917b00f6-68d6-45ec-8654-2988b8311387';
-const INDUSTRY_ID = '1e539953-2b2a-44fe-a7e6-78a2b98cab4c'; // Barbers
-const CITY_ID = 'f7173014-48eb-488e-a8e7-46d4f8c83ef5'; // Athens
-const DATASET_ID = '25ef6f9c-35d4-45c1-be87-c162aee9e899';
+// You'll need to get a valid JWT token - replace this with a real token
+// Or modify to use test authentication
+const JWT_TOKEN = process.env.TEST_JWT_TOKEN || '';
 
-async function testDiscoveryV2() {
-  console.log('🧪 Testing Discovery V2 Endpoint');
+async function testDiscoveryEndpoint() {
+  console.log('🧪 Testing Discovery Endpoint');
   console.log('============================');
   console.log(`API URL: ${API_URL}`);
   console.log(`Endpoint: ${DISCOVERY_ENDPOINT}`);
   console.log('');
 
-  // Generate JWT token
-  const token = generateToken({
-    id: USER_ID,
-    email: 'test@example.com',
-    plan: 'pro'
-  });
+  if (!JWT_TOKEN) {
+    console.error('❌ ERROR: TEST_JWT_TOKEN environment variable is required');
+    console.log('   Get a JWT token from your frontend or auth endpoint');
+    process.exit(1);
+  }
 
-  console.log('✓ Generated JWT token');
-  console.log('');
-
+  // Example request - adjust these IDs to match your database
   const requestBody = {
-    industryId: INDUSTRY_ID,
-    cityId: CITY_ID
-    // datasetId: DATASET_ID // Omit to let it auto-create
+    industryId: process.env.TEST_INDUSTRY_ID || 'your-industry-id-here',
+    cityId: process.env.TEST_CITY_ID || 'your-city-id-here',
+    datasetId: process.env.TEST_DATASET_ID || undefined // Optional
   };
 
   console.log('📤 Request:');
+  console.log('Headers:', {
+    'Content-Type': 'application/json',
+    'Cookie': `token=${JWT_TOKEN}` // Adjust based on your auth method
+  });
   console.log('Body:', JSON.stringify(requestBody, null, 2));
   console.log('');
 
   try {
-    // Wait a bit for server to start
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
     const response = await fetch(DISCOVERY_ENDPOINT, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Cookie': `token=${token}`
+        'Cookie': `token=${JWT_TOKEN}` // Adjust based on your auth method
       },
       body: JSON.stringify(requestBody)
     });
@@ -78,7 +80,6 @@ async function testDiscoveryV2() {
     if (response.status === 200 || response.status === 201) {
       console.log('✅ Request succeeded!');
       console.log('   Check backend logs for discovery execution');
-      console.log('   Look for 🚨 ABOUT TO INSERT BUSINESSES and ✅ INSERT ATTEMPT FINISHED');
     } else {
       console.log(`⚠️  Request returned status ${response.status}`);
     }
@@ -93,15 +94,15 @@ async function testDiscoveryV2() {
   }
 }
 
-testDiscoveryV2()
+testDiscoveryEndpoint()
   .then(() => {
     console.log('');
     console.log('✅ Test completed');
     console.log('');
-    console.log('Check server logs for:');
-    console.log('  - 🚨 ABOUT TO INSERT BUSINESSES');
-    console.log('  - ✅ INSERT ATTEMPT FINISHED');
-    console.log('  - [discoverBusinessesV2] logs');
+    console.log('Next steps:');
+    console.log('1. Check backend logs for discovery execution');
+    console.log('2. Look for logs starting with [API] ===== DISCOVERY API ENDPOINT CALLED =====');
+    console.log('3. Check for [runDiscoveryJob] and [discoverBusinessesV2] logs');
     process.exit(0);
   })
   .catch((error) => {
