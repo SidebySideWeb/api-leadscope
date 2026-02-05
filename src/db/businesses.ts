@@ -348,7 +348,7 @@ export async function hasCompleteBusinessData(googlePlaceId: string): Promise<bo
           SELECT 1 
           FROM contact_sources cs
           JOIN contacts c ON c.id = cs.contact_id
-          WHERE cs.business_id = b.id::text
+          WHERE cs.business_id::text = b.id::text
             AND (c.email IS NOT NULL OR c.phone IS NOT NULL)
         )
     ) as has_complete_data`,

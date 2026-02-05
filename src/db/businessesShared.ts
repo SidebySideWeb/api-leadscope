@@ -223,8 +223,10 @@ export async function upsertBusinessGlobal(data: {
       industry_id: insertValues[5],
       dataset_id: insertValues[6],
       google_place_id: insertValues[7],
-      latitude: insertValues[8],
-      longitude: insertValues[9],
+      owner_user_id: insertValues[8],
+      discovery_run_id: insertValues[9],
+      latitude: insertValues[10],
+      longitude: insertValues[11],
     });
     console.error('[upsertBusinessGlobal] Input data:', JSON.stringify(data, null, 2));
     console.error('[upsertBusinessGlobal] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
@@ -293,7 +295,7 @@ export async function recalculateDataCompletenessScore(businessId: number): Prom
         SELECT 1 
         FROM contact_sources cs
         JOIN contacts c ON c.id = cs.contact_id
-        WHERE cs.business_id = b.id::text
+        WHERE cs.business_id::text = b.id::text
           AND c.email IS NOT NULL
       ) as has_email_from_contacts
      FROM businesses b
@@ -328,7 +330,7 @@ export async function recalculateDataCompletenessScore(businessId: number): Prom
       SELECT 1 
       FROM contact_sources cs
       JOIN contacts c ON c.id = cs.contact_id
-      WHERE cs.business_id = $1::text
+      WHERE cs.business_id::text = $1::text
         AND (c.phone IS NOT NULL OR c.mobile IS NOT NULL)
     ) as has_phone`,
     [businessId]
