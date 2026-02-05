@@ -145,6 +145,7 @@ export async function discoverBusinessesV2(
     businessesCreated: 0,
     businessesSkipped: 0,
     businessesUpdated: 0,
+    extractionJobsCreated: 0,
     errors: [],
     gridPointsGenerated: 0,
     searchesExecuted: 0,
@@ -620,13 +621,13 @@ export async function discoverBusinessesV2(
     console.log(`[discoverBusinessesV2] ==============================`);
 
     // STEP 6: Discovery does NOT create extraction jobs automatically
-    // Extraction jobs are created:
-    // - On export (if user requests refresh)
-    // - On paid refresh
-    // - Via explicit crawl trigger
+    // Extraction jobs are created only when user explicitly requests extraction (and pays):
+    // - On export request (user pays for export)
+    // - On explicit refresh/extraction request (user pays for refresh)
     // 
-    // Discovery only enriches business metadata, never triggers crawling
-    console.log(`[discoverBusinessesV2] Discovery complete - no extraction jobs created (enrichment-only)`);
+    // Discovery only enriches business metadata (name, address, location) - no website/phone/email
+    // This keeps discovery free - extraction is the paid step
+    console.log(`[discoverBusinessesV2] Discovery complete - no extraction jobs created (extraction requires user request and payment)`);
 
     // Mark discovery_run as completed and store cost estimates
     if (discoveryRunId) {

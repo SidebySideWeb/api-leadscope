@@ -183,10 +183,15 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
       console.log(`[processExtractionJob] No crawl pages found for business ${business.id}`);
     }
 
-    // STEP 2: Only if website OR phone is still missing, fetch from Google Place Details API
-    // This is a paid API, so we only use it as a fallback
-    if (business.google_place_id && (!foundWebsiteFromPages || !foundPhoneFromPages)) {
-      console.log(`[processExtractionJob] Contact details missing from website - fetching Place Details API (website: ${foundWebsiteFromPages}, phone: ${foundPhoneFromPages})`);
+    // STEP 2: Fetch from Google Place Details API if website or phone is missing
+    // This is a paid API, so we fetch it when user requests extraction (and pays)
+    // Always fetch if business has google_place_id and we're missing website or phone
+    if (business.google_place_id) {
+      const needsWebsite = !foundWebsiteFromPages;
+      const needsPhone = !foundPhoneFromPages;
+      
+      if (needsWebsite || needsPhone) {
+        console.log(`[processExtractionJob] Fetching Place Details API for business ${business.id} (needsWebsite: ${needsWebsite}, needsPhone: ${needsPhone})`);
       
       try {
         const placeDetails = await googleMapsService.getPlaceDetails(business.google_place_id);
@@ -249,13 +254,15 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
               });
             }
           }
+        } else {
+          console.log(`[processExtractionJob] Place Details API returned no data for business ${business.id}`);
         }
       } catch (error) {
         console.error(`[processExtractionJob] Error fetching Place Details for business ${business.id}:`, error);
         // Don't fail the extraction job if Place Details fetch fails
       }
-    } else if (foundWebsiteFromPages && foundPhoneFromPages) {
-      console.log(`[processExtractionJob] Skipping Place Details API - found website and phone from website crawl`);
+    } else {
+      console.log(`[processExtractionJob] Business ${business.id} has no google_place_id - cannot fetch Place Details`);
     }
 
     // If no crawl pages were found and we didn't get data from Place Details, mark as completed anyway
