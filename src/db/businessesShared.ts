@@ -193,17 +193,39 @@ export async function upsertBusinessGlobal(data: {
 
     return { business, wasUpdated, wasNew };
   } catch (error: any) {
-    // CRITICAL: Catch NOT NULL violations and log exact values that caused failure
-    if (error.code === '23502') { // NOT NULL violation
-      console.error('[upsertBusinessGlobal] ===== NOT NULL VIOLATION =====');
-      console.error('[upsertBusinessGlobal] Error code:', error.code);
-      console.error('[upsertBusinessGlobal] Error message:', error.message);
-      console.error('[upsertBusinessGlobal] Error detail:', error.detail);
-      console.error('[upsertBusinessGlobal] Error constraint:', error.constraint);
-      console.error('[upsertBusinessGlobal] Failed INSERT VALUES:', insertValues);
-      console.error('[upsertBusinessGlobal] ===============================');
-    }
-    throw error;
+    // CRITICAL: Log ALL database errors with full context
+    console.error('[upsertBusinessGlobal] ===== DATABASE INSERT ERROR =====');
+    console.error('[upsertBusinessGlobal] Error code:', error.code);
+    console.error('[upsertBusinessGlobal] Error name:', error.name);
+    console.error('[upsertBusinessGlobal] Error message:', error.message);
+    console.error('[upsertBusinessGlobal] Error detail:', error.detail);
+    console.error('[upsertBusinessGlobal] Error constraint:', error.constraint);
+    console.error('[upsertBusinessGlobal] Error table:', error.table);
+    console.error('[upsertBusinessGlobal] Error column:', error.column);
+    console.error('[upsertBusinessGlobal] Failed INSERT VALUES:', insertValues);
+    console.error('[upsertBusinessGlobal] Failed INSERT VALUES (detailed):', {
+      name: insertValues[0],
+      normalized_name: insertValues[1],
+      address: insertValues[2],
+      postal_code: insertValues[3],
+      city_id: insertValues[4],
+      industry_id: insertValues[5],
+      dataset_id: insertValues[6],
+      google_place_id: insertValues[7],
+      latitude: insertValues[8],
+      longitude: insertValues[9],
+    });
+    console.error('[upsertBusinessGlobal] Input data:', JSON.stringify(data, null, 2));
+    console.error('[upsertBusinessGlobal] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    console.error('[upsertBusinessGlobal] ===================================');
+    
+    // Re-throw with enhanced error message
+    const enhancedError = new Error(
+      `Failed to upsert business "${data.name}": ${error.message} (code: ${error.code || 'unknown'})`
+    );
+    (enhancedError as any).originalError = error;
+    (enhancedError as any).code = error.code;
+    throw enhancedError;
   }
 }
 
