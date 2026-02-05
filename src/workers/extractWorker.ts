@@ -355,7 +355,7 @@ async function checkAndCompleteDiscoveryRun(discoveryRunId: string): Promise<voi
          SELECT 1
          FROM businesses b
          JOIN extraction_jobs ej ON ej.business_id = b.id
-         WHERE b.discovery_run_id = $1
+         WHERE b.discovery_run_id = $1::uuid
          AND ej.status IN ('pending', 'running')
        )
        RETURNING *`,
@@ -369,7 +369,7 @@ async function checkAndCompleteDiscoveryRun(discoveryRunId: string): Promise<voi
         `SELECT ej.status, COUNT(*) as count
          FROM businesses b
          JOIN extraction_jobs ej ON ej.business_id = b.id
-         WHERE b.discovery_run_id = $1
+         WHERE b.discovery_run_id = $1::uuid
          GROUP BY ej.status`,
         [discoveryRunId]
       );

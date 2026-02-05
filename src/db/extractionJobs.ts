@@ -118,7 +118,7 @@ export async function getExtractionJobsByDiscoveryRunId(
   const result = await pool.query<ExtractionJob>(
     `SELECT ej.* FROM extraction_jobs ej
      JOIN businesses b ON b.id = ej.business_id
-     WHERE b.discovery_run_id = $1
+     WHERE b.discovery_run_id = $1::uuid
      ORDER BY ej.created_at ASC`,
     [discoveryRunId]
   );

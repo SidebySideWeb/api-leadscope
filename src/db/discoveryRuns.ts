@@ -163,11 +163,27 @@ export async function updateDiscoveryRun(
       values
     );
   } catch (error: any) {
-    // If cost_estimates column doesn't exist, retry without it
-    if (error.code === '42703' && updates.some(u => u.includes('cost_estimates'))) {
-      console.warn('[updateDiscoveryRun] cost_estimates column not found, retrying without it');
-      const filteredUpdates = updates.filter(u => !u.includes('cost_estimates'));
-      const filteredValues = values.filter((_, i) => !updates[i]?.includes('cost_estimates'));
+    // If cost_estimates or error_message column doesn't exist, retry without them
+    if (error.code === '42703' && (updates.some(u => u.includes('cost_estimates')) || updates.some(u => u.includes('error_message')))) {
+      const missingColumns: string[] = [];
+      if (updates.some(u => u.includes('cost_estimates'))) {
+        missingColumns.push('cost_estimates');
+        console.warn('[updateDiscoveryRun] cost_estimates column not found, retrying without it');
+      }
+      if (updates.some(u => u.includes('error_message'))) {
+        missingColumns.push('error_message');
+        console.warn('[updateDiscoveryRun] error_message column not found, retrying without it');
+      }
+      
+      const filteredUpdates = updates.filter(u => !missingColumns.some(col => u.includes(col)));
+      const filteredValues: any[] = [];
+      let valueIndex = 0;
+      for (let i = 0; i < updates.length; i++) {
+        if (!missingColumns.some(col => updates[i].includes(col))) {
+          filteredValues.push(values[i]);
+        }
+      }
+      
       if (filteredUpdates.length > 0) {
         result = await pool.query<DiscoveryRun>(
           `UPDATE discovery_runs

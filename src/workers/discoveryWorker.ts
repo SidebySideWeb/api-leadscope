@@ -368,7 +368,7 @@ export async function discoverBusinesses(
           `INSERT INTO extraction_jobs (business_id, status, created_at)
            SELECT b.id, 'pending', NOW()
            FROM businesses b
-           WHERE b.discovery_run_id = $1
+           WHERE b.discovery_run_id = $1::uuid
            ON CONFLICT (business_id) DO NOTHING
            RETURNING id`,
           [discoveryRunId]
