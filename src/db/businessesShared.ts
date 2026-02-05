@@ -50,6 +50,7 @@ export async function upsertBusinessGlobal(data: {
   dataset_id: string; // UUID - REQUIRED (NOT NULL)
   google_place_id: string; // REQUIRED for global deduplication
   owner_user_id?: string; // UUID - REQUIRED (NOT NULL in DB) - dataset owner user_id
+  discovery_run_id?: string | null; // UUID - Optional - links business to discovery run
   latitude?: number | null;
   longitude?: number | null;
   rating?: number | null;
@@ -139,6 +140,7 @@ export async function upsertBusinessGlobal(data: {
     data.dataset_id,
     data.google_place_id,
     data.owner_user_id, // REQUIRED: owner_user_id is NOT NULL in database
+    data.discovery_run_id || null, // Optional: links business to discovery run
     data.latitude || null,
     data.longitude || null
   ];
@@ -154,18 +156,19 @@ export async function upsertBusinessGlobal(data: {
   console.log('[upsertBusinessGlobal]   $7 (dataset_id):', insertValues[6], typeof insertValues[6], insertValues[6] === null ? '⚠️ NULL!' : '', insertValues[6] === undefined ? '⚠️ UNDEFINED!' : '');
   console.log('[upsertBusinessGlobal]   $8 (google_place_id):', insertValues[7], typeof insertValues[7]);
   console.log('[upsertBusinessGlobal]   $9 (owner_user_id):', insertValues[8], typeof insertValues[8], insertValues[8] === null ? '⚠️ NULL!' : '', insertValues[8] === undefined ? '⚠️ UNDEFINED!' : '');
-  console.log('[upsertBusinessGlobal]   $10 (latitude):', insertValues[9], typeof insertValues[9]);
-  console.log('[upsertBusinessGlobal]   $11 (longitude):', insertValues[10], typeof insertValues[10]);
+  console.log('[upsertBusinessGlobal]   $10 (discovery_run_id):', insertValues[9], typeof insertValues[9]);
+  console.log('[upsertBusinessGlobal]   $11 (latitude):', insertValues[10], typeof insertValues[10]);
+  console.log('[upsertBusinessGlobal]   $12 (longitude):', insertValues[11], typeof insertValues[11]);
 
   try {
     // Try to insert, handling conflict on google_place_id
     const result = await pool.query<Business>(
       `INSERT INTO businesses (
         name, normalized_name, address, postal_code, city_id, 
-        industry_id, dataset_id, google_place_id, owner_user_id, latitude, longitude,
+        industry_id, dataset_id, google_place_id, owner_user_id, discovery_run_id, latitude, longitude,
         last_discovered_at, crawl_status, created_at, updated_at
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), 'pending', NOW(), NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), 'pending', NOW(), NOW())
        ON CONFLICT (google_place_id) 
        DO UPDATE SET
          name = EXCLUDED.name,
@@ -175,6 +178,7 @@ export async function upsertBusinessGlobal(data: {
          city_id = EXCLUDED.city_id, -- CRITICAL: Always update city_id (NOT NULL)
          industry_id = EXCLUDED.industry_id, -- CRITICAL: Always update industry_id (NOT NULL)
          dataset_id = EXCLUDED.dataset_id, -- CRITICAL: Always update dataset_id (NOT NULL)
+         discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id), -- Update if provided
          latitude = COALESCE(EXCLUDED.latitude, businesses.latitude),
          longitude = COALESCE(EXCLUDED.longitude, businesses.longitude),
          last_discovered_at = NOW(), -- Always update discovery timestamp

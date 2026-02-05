@@ -577,6 +577,7 @@ export async function discoverBusinessesV2(
           dataset_id: dataset.id, // CRITICAL: Required - businesses.dataset_id is NOT NULL
           google_place_id: place.place_id,
           owner_user_id: dataset.user_id, // CRITICAL: Required - businesses.owner_user_id is NOT NULL
+          discovery_run_id: discoveryRunId || null, // Link business to discovery run
           latitude: place.latitude || resolvedLatitude || null, // Use place location or city center as fallback
           longitude: place.longitude || resolvedLongitude || null, // Use place location or city center as fallback
           rating: place.rating || undefined,
