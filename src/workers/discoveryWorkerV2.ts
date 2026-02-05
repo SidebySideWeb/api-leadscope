@@ -212,13 +212,35 @@ export async function discoverBusinessesV2(
       throw new Error('Either industry_id or industry name is required');
     }
 
+    // Normalize discovery_keywords - handle JSONB that might come as string or array
+    let discoveryKeywords: string[];
+    if (!industry.discovery_keywords) {
+      throw new Error(`Industry ${industry.id} has no discovery_keywords configured`);
+    } else if (Array.isArray(industry.discovery_keywords)) {
+      discoveryKeywords = industry.discovery_keywords;
+    } else if (typeof industry.discovery_keywords === 'string') {
+      // Try to parse as JSON first
+      try {
+        const parsed = JSON.parse(industry.discovery_keywords);
+        discoveryKeywords = Array.isArray(parsed) ? parsed : [industry.discovery_keywords];
+      } catch {
+        // If not JSON, treat as comma-separated string
+        discoveryKeywords = industry.discovery_keywords.split(',').map(k => k.trim());
+      }
+    } else {
+      throw new Error(`Industry ${industry.id} has invalid discovery_keywords format`);
+    }
+
     // Validate discovery_keywords
-    if (!industry.discovery_keywords || industry.discovery_keywords.length === 0) {
+    if (discoveryKeywords.length === 0) {
       throw new Error(`Industry ${industry.id} has no discovery_keywords configured`);
     }
 
     console.log(`[discoverBusinessesV2] Using industry: ${industry.name} (${industry.id})`);
-    console.log(`[discoverBusinessesV2] Discovery keywords: ${industry.discovery_keywords.join(', ')}`);
+    console.log(`[discoverBusinessesV2] Discovery keywords: ${discoveryKeywords.join(', ')}`);
+    
+    // Update industry object with normalized keywords for rest of function
+    industry.discovery_keywords = discoveryKeywords;
 
     // Resolve city and coordinates
     let city: City | null = null;

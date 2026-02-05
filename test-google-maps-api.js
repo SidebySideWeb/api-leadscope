@@ -34,10 +34,24 @@ async function testGoogleMapsAPI(cityId, industryId) {
     console.log(`🏢 Industry: ${industry.name}`);
     console.log(`🔑 Industry keywords: ${industry.discovery_keywords || 'N/A'}\n`);
 
-    // Get discovery keywords
-    const keywords = industry.discovery_keywords 
-      ? industry.discovery_keywords.split(',').map(k => k.trim())
-      : [industry.name];
+    // Get discovery keywords - handle both string (JSON) and array formats
+    let keywords;
+    if (!industry.discovery_keywords) {
+      keywords = [industry.name];
+    } else if (Array.isArray(industry.discovery_keywords)) {
+      keywords = industry.discovery_keywords;
+    } else if (typeof industry.discovery_keywords === 'string') {
+      // Try to parse as JSON first
+      try {
+        const parsed = JSON.parse(industry.discovery_keywords);
+        keywords = Array.isArray(parsed) ? parsed : [industry.discovery_keywords];
+      } catch {
+        // If not JSON, treat as comma-separated string
+        keywords = industry.discovery_keywords.split(',').map(k => k.trim());
+      }
+    } else {
+      keywords = [industry.name];
+    }
 
     console.log(`📝 Using keywords: ${keywords.join(', ')}\n`);
 
