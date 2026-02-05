@@ -7,6 +7,7 @@
  * Normalization strategy:
  * - Convert to lowercase
  * - Remove accents (Unicode NFD decomposition + remove combining marks)
+ * - Preserve Unicode letters (including Greek, Cyrillic, etc.) and numbers
  * - Replace non-alphanumeric characters with hyphens
  * - Remove leading/trailing hyphens
  * 
@@ -19,12 +20,16 @@ export function normalizeBusinessName(name: string): string {
     throw new Error('Cannot generate normalized_name without name');
   }
 
+  // Normalize: lowercase, remove accents, preserve Unicode letters and numbers
+  // Use explicit character classes to support Greek, Latin, Cyrillic, etc.
+  // \p{L} matches any Unicode letter (requires 'u' flag)
+  // \p{N} matches any Unicode number
   const normalized = name
     .toLowerCase()
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
+    .replace(/[\u0300-\u036f]/g, '') // Remove combining marks (accents)
+    .replace(/[^\p{L}\p{N}]+/gu, '-') // Replace non-letters/non-numbers with hyphens (Unicode-aware)
+    .replace(/^-+|-+$/g, ''); // Remove leading/trailing hyphens
 
   // Validate: normalized name must not be empty
   if (!normalized || normalized.length === 0) {

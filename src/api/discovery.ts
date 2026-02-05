@@ -188,6 +188,33 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       console.error(`[API] ${errorMsg}`);
       throw new Error(errorMsg);
     }
+    
+    // CRITICAL: Verify dataset matches requested city and industry
+    // This prevents using wrong datasets when city_id/industry_id don't match
+    if (dataset.city_id !== city.id || dataset.industry_id !== industry.id) {
+      console.error(`[API] Dataset mismatch detected:`);
+      console.error(`[API]   Requested: city_id=${city.id} (${city.name}), industry_id=${industry.id} (${industry.name})`);
+      console.error(`[API]   Dataset: city_id=${dataset.city_id}, industry_id=${dataset.industry_id}`);
+      console.error(`[API]   Creating new dataset instead of reusing mismatched one...`);
+      
+      // Create a new dataset that matches the request
+      const { resolveDataset: resolveDatasetForMismatch } = await import('../services/datasetResolver.js');
+      const resolverResult = await resolveDatasetForMismatch({
+        userId,
+        cityId: city.id,
+        industryId: industry.id,
+      });
+      finalDatasetId = resolverResult.dataset.id;
+      console.log(`[API] Created new matching dataset: ${finalDatasetId}`);
+      
+      // Re-fetch the dataset to ensure we have the correct one
+      const newDataset = await getDatasetById(finalDatasetId);
+      if (!newDataset) {
+        throw new Error(`Failed to create matching dataset`);
+      }
+      // Update dataset reference for rest of function
+      Object.assign(dataset, newDataset);
+    }
 
     // CRITICAL: Create discovery_run at the VERY START (synchronously, before returning)
     // This makes discovery observable and stateful

@@ -2,6 +2,8 @@
 
 GDPR-compliant business contact intelligence engine for Greece.
 
+> **Quick Start**: See [QUICK_START.md](./QUICK_START.md) for the simplest way to run the app.
+
 ## Overview
 
 This backend system discovers Greek businesses, crawls their websites, and extracts public contact information while maintaining full source tracking for GDPR compliance.
