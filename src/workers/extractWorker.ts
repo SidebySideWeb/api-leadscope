@@ -201,8 +201,18 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
           if (!foundWebsiteFromPages && placeDetails.website) {
             try {
               console.log(`[processExtractionJob] Creating website from Place Details for business ${business.id}: ${placeDetails.website}`);
-              await getOrCreateWebsite(business.id, placeDetails.website);
+              const website = await getOrCreateWebsite(business.id, placeDetails.website);
               console.log(`[processExtractionJob] Successfully created website from Place Details: ${placeDetails.website}`);
+              
+              // Create crawl job to extract emails from the website
+              try {
+                const { createCrawlJob } = await import('../db/crawlJobs.js');
+                await createCrawlJob(website.id, 'discovery', 25);
+                console.log(`[processExtractionJob] Created crawl job for website ${website.id} to extract emails`);
+              } catch (crawlJobError: any) {
+                console.error(`[processExtractionJob] Error creating crawl job for website ${website.id}:`, crawlJobError.message);
+                // Don't fail extraction if crawl job creation fails
+              }
             } catch (error: any) {
               console.error(`[processExtractionJob] CRITICAL ERROR creating website from Place Details:`, {
                 error_code: error.code,

@@ -194,31 +194,71 @@ export async function upsertBusinessGlobal(data: {
         [...insertValues.slice(0, 11), existing.id]
       );
     } else {
-      // No conflict on (dataset_id, normalized_name), try INSERT with conflict on google_place_id
-      result = await pool.query<Business>(
-        `INSERT INTO businesses (
-          name, normalized_name, address, postal_code, city_id, 
-          industry_id, dataset_id, google_place_id, owner_user_id, discovery_run_id, latitude, longitude,
-          last_discovered_at, crawl_status, created_at, updated_at
-        )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), 'pending', NOW(), NOW())
-         ON CONFLICT (google_place_id) 
-         DO UPDATE SET
-           name = EXCLUDED.name,
-           normalized_name = EXCLUDED.normalized_name,
-           address = COALESCE(EXCLUDED.address, businesses.address),
-           postal_code = COALESCE(EXCLUDED.postal_code, businesses.postal_code),
-           city_id = EXCLUDED.city_id, -- CRITICAL: Always update city_id (NOT NULL)
-           industry_id = EXCLUDED.industry_id, -- CRITICAL: Always update industry_id (NOT NULL)
-           dataset_id = EXCLUDED.dataset_id, -- CRITICAL: Always update dataset_id (NOT NULL)
-           discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id), -- Update if provided
-           latitude = COALESCE(EXCLUDED.latitude, businesses.latitude),
-           longitude = COALESCE(EXCLUDED.longitude, businesses.longitude),
-           last_discovered_at = NOW(), -- Always update discovery timestamp
-           updated_at = NOW()
-         RETURNING *`,
-        insertValues
-      );
+      // No conflict on (dataset_id, normalized_name), try INSERT with conflict handling
+      // Handle both google_place_id conflict and (dataset_id, normalized_name) constraint
+      try {
+        result = await pool.query<Business>(
+          `INSERT INTO businesses (
+            name, normalized_name, address, postal_code, city_id, 
+            industry_id, dataset_id, google_place_id, owner_user_id, discovery_run_id, latitude, longitude,
+            last_discovered_at, crawl_status, created_at, updated_at
+          )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), 'pending', NOW(), NOW())
+           ON CONFLICT (google_place_id) 
+           DO UPDATE SET
+             name = EXCLUDED.name,
+             normalized_name = EXCLUDED.normalized_name,
+             address = COALESCE(EXCLUDED.address, businesses.address),
+             postal_code = COALESCE(EXCLUDED.postal_code, businesses.postal_code),
+             city_id = EXCLUDED.city_id, -- CRITICAL: Always update city_id (NOT NULL)
+             industry_id = EXCLUDED.industry_id, -- CRITICAL: Always update industry_id (NOT NULL)
+             dataset_id = EXCLUDED.dataset_id, -- CRITICAL: Always update dataset_id (NOT NULL)
+             discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id), -- Update if provided
+             latitude = COALESCE(EXCLUDED.latitude, businesses.latitude),
+             longitude = COALESCE(EXCLUDED.longitude, businesses.longitude),
+             last_discovered_at = NOW(), -- Always update discovery timestamp
+             updated_at = NOW()
+           RETURNING *`,
+          insertValues
+        );
+      } catch (insertError: any) {
+        // If INSERT fails due to (dataset_id, normalized_name) constraint, update existing business
+        if (insertError.code === '23505' && insertError.constraint === 'businesses_dataset_normalized_unique') {
+          const existingByNormalizedName = await pool.query<Business>(
+            `SELECT * FROM businesses 
+             WHERE dataset_id = $1 AND normalized_name = $2 
+             LIMIT 1`,
+            [data.dataset_id, normalized_name]
+          );
+          
+          if (existingByNormalizedName.rows.length > 0) {
+            const existing = existingByNormalizedName.rows[0];
+            result = await pool.query<Business>(
+              `UPDATE businesses SET
+                name = $1,
+                normalized_name = $2,
+                address = COALESCE($3, address),
+                postal_code = COALESCE($4, postal_code),
+                city_id = $5,
+                industry_id = $6,
+                dataset_id = $7,
+                google_place_id = COALESCE($8, google_place_id),
+                discovery_run_id = COALESCE($9, discovery_run_id),
+                latitude = COALESCE($10, latitude),
+                longitude = COALESCE($11, longitude),
+                last_discovered_at = NOW(),
+                updated_at = NOW()
+               WHERE id = $12
+               RETURNING *`,
+              [...insertValues.slice(0, 11), existing.id]
+            );
+          } else {
+            throw insertError; // Re-throw if we can't find the business
+          }
+        } else {
+          throw insertError; // Re-throw other errors
+        }
+      }
     }
 
     if (result.rows.length === 0) {
