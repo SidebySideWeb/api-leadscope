@@ -164,6 +164,47 @@ router.post('/run', authMiddleware, async (req: AuthRequest, res): Promise<void>
 
     console.log('[exports/run] User plan:', userPlan, 'Tier:', tier);
 
+    // Before exporting, ensure crawl jobs are created for businesses with websites
+    // This ensures websites get crawled and emails/phones are extracted
+    try {
+      const { createCrawlJob } = await import('../db/crawlJobs.js');
+      const { pool } = await import('../config/database.js');
+      
+      // Find businesses in this dataset that have websites but no crawl jobs or incomplete crawling
+      const businessesNeedingCrawl = await pool.query<{ business_id: number; website_id: number }>(
+        `SELECT DISTINCT b.id AS business_id, w.id AS website_id
+         FROM businesses b
+         JOIN websites w ON w.business_id = b.id
+         LEFT JOIN crawl_jobs cj ON cj.website_id = w.id AND cj.status IN ('pending', 'running', 'completed')
+         WHERE b.dataset_id = $1
+           AND (cj.id IS NULL OR (cj.status = 'completed' AND w.last_crawled_at IS NULL))
+         LIMIT 50`,
+        [datasetId]
+      );
+
+      if (businessesNeedingCrawl.rows.length > 0) {
+        console.log(`[exports/run] Creating ${businessesNeedingCrawl.rows.length} crawl jobs for businesses with websites...`);
+        let crawlJobsCreated = 0;
+        for (const row of businessesNeedingCrawl.rows) {
+          try {
+            await createCrawlJob(row.website_id, 'discovery', 25);
+            crawlJobsCreated++;
+          } catch (error: any) {
+            // If crawl job already exists, skip
+            if (error.code !== '23505') {
+              console.error(`[exports/run] Error creating crawl job for website ${row.website_id}:`, error.message);
+            }
+          }
+        }
+        console.log(`[exports/run] Created ${crawlJobsCreated} crawl jobs`);
+      } else {
+        console.log(`[exports/run] All businesses with websites already have crawl jobs or are being crawled`);
+      }
+    } catch (error) {
+      console.error('[exports/run] Error creating crawl jobs:', error);
+      // Don't fail the export if crawl job creation fails
+    }
+
     // Generate export
     const filePath = await runDatasetExport(datasetId, tier, format);
     console.log('[exports/run] Export generated:', filePath);

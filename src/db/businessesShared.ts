@@ -184,7 +184,7 @@ export async function upsertBusinessGlobal(data: {
           industry_id = $6,
           dataset_id = $7,
           google_place_id = COALESCE($8, google_place_id),
-          discovery_run_id = COALESCE($9, discovery_run_id),
+          discovery_run_id = COALESCE($9::uuid, discovery_run_id),
           latitude = COALESCE($10, latitude),
           longitude = COALESCE($11, longitude),
           last_discovered_at = NOW(),
@@ -203,7 +203,7 @@ export async function upsertBusinessGlobal(data: {
             industry_id, dataset_id, google_place_id, owner_user_id, discovery_run_id, latitude, longitude,
             last_discovered_at, crawl_status, created_at, updated_at
           )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), 'pending', NOW(), NOW())
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::uuid, $11, $12, NOW(), 'pending', NOW(), NOW())
            ON CONFLICT (google_place_id) 
            DO UPDATE SET
              name = EXCLUDED.name,
@@ -213,7 +213,7 @@ export async function upsertBusinessGlobal(data: {
              city_id = EXCLUDED.city_id, -- CRITICAL: Always update city_id (NOT NULL)
              industry_id = EXCLUDED.industry_id, -- CRITICAL: Always update industry_id (NOT NULL)
              dataset_id = EXCLUDED.dataset_id, -- CRITICAL: Always update dataset_id (NOT NULL)
-             discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id), -- Update if provided
+             discovery_run_id = COALESCE(EXCLUDED.discovery_run_id::uuid, businesses.discovery_run_id), -- Update if provided, cast to UUID
              latitude = COALESCE(EXCLUDED.latitude, businesses.latitude),
              longitude = COALESCE(EXCLUDED.longitude, businesses.longitude),
              last_discovered_at = NOW(), -- Always update discovery timestamp
@@ -243,7 +243,7 @@ export async function upsertBusinessGlobal(data: {
                 industry_id = $6,
                 dataset_id = $7,
                 google_place_id = COALESCE($8, google_place_id),
-                discovery_run_id = COALESCE($9, discovery_run_id),
+                discovery_run_id = COALESCE($9::uuid, discovery_run_id),
                 latitude = COALESCE($10, latitude),
                 longitude = COALESCE($11, longitude),
                 last_discovered_at = NOW(),
