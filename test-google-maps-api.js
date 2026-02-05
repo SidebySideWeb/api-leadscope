@@ -61,13 +61,16 @@ async function testGoogleMapsAPI(cityId, industryId) {
     
     console.log(`🔎 Searching: "${query}"\n`);
 
-    const results = await googleMapsService.searchPlaces({
+    // Convert coordinates to numbers (database may return strings)
+    const lat = city.latitude ? (typeof city.latitude === 'string' ? parseFloat(city.latitude) : Number(city.latitude)) : undefined;
+    const lng = city.longitude ? (typeof city.longitude === 'string' ? parseFloat(city.longitude) : Number(city.longitude)) : undefined;
+    const radiusMeters = city.radius_km ? (typeof city.radius_km === 'string' ? parseFloat(city.radius_km) : Number(city.radius_km)) * 1000 : undefined;
+
+    const results = await googleMapsService.searchPlaces(
       query,
-      location: city.latitude && city.longitude 
-        ? { lat: city.latitude, lng: city.longitude }
-        : undefined,
-      radius: city.radius_km ? city.radius_km * 1000 : undefined, // Convert km to meters
-    });
+      lat && lng ? { lat, lng } : undefined,
+      radiusMeters
+    );
 
     console.log(`✅ Found ${results.length} results\n`);
 
