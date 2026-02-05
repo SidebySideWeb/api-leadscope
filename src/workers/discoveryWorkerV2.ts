@@ -225,7 +225,8 @@ export async function discoverBusinessesV2(
         discoveryKeywords = Array.isArray(parsed) ? parsed : [industry.discovery_keywords];
       } catch {
         // If not JSON, treat as comma-separated string
-        discoveryKeywords = industry.discovery_keywords.split(',').map(k => k.trim());
+        const keywordString: string = industry.discovery_keywords;
+        discoveryKeywords = keywordString.split(',').map((k: string) => k.trim());
       }
     } else {
       throw new Error(`Industry ${industry.id} has invalid discovery_keywords format`);
