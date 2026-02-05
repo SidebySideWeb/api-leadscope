@@ -161,31 +161,65 @@ export async function upsertBusinessGlobal(data: {
   console.log('[upsertBusinessGlobal]   $12 (longitude):', insertValues[11], typeof insertValues[11]);
 
   try {
-    // Try to insert, handling conflict on google_place_id
-    const result = await pool.query<Business>(
-      `INSERT INTO businesses (
-        name, normalized_name, address, postal_code, city_id, 
-        industry_id, dataset_id, google_place_id, owner_user_id, discovery_run_id, latitude, longitude,
-        last_discovered_at, crawl_status, created_at, updated_at
-      )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), 'pending', NOW(), NOW())
-       ON CONFLICT (google_place_id) 
-       DO UPDATE SET
-         name = EXCLUDED.name,
-         normalized_name = EXCLUDED.normalized_name,
-         address = COALESCE(EXCLUDED.address, businesses.address),
-         postal_code = COALESCE(EXCLUDED.postal_code, businesses.postal_code),
-         city_id = EXCLUDED.city_id, -- CRITICAL: Always update city_id (NOT NULL)
-         industry_id = EXCLUDED.industry_id, -- CRITICAL: Always update industry_id (NOT NULL)
-         dataset_id = EXCLUDED.dataset_id, -- CRITICAL: Always update dataset_id (NOT NULL)
-         discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id), -- Update if provided
-         latitude = COALESCE(EXCLUDED.latitude, businesses.latitude),
-         longitude = COALESCE(EXCLUDED.longitude, businesses.longitude),
-         last_discovered_at = NOW(), -- Always update discovery timestamp
-         updated_at = NOW()
-       RETURNING *`,
-      insertValues
+    // First, try to find existing business by (dataset_id, normalized_name) constraint
+    // This handles the businesses_dataset_normalized_unique constraint
+    const existingByNormalizedName = await pool.query<Business>(
+      `SELECT * FROM businesses 
+       WHERE dataset_id = $1 AND normalized_name = $2 
+       LIMIT 1`,
+      [data.dataset_id, normalized_name]
     );
+
+    let result;
+    if (existingByNormalizedName.rows.length > 0) {
+      // Business exists with same (dataset_id, normalized_name) - update it
+      const existing = existingByNormalizedName.rows[0];
+      result = await pool.query<Business>(
+        `UPDATE businesses SET
+          name = $1,
+          normalized_name = $2,
+          address = COALESCE($3, address),
+          postal_code = COALESCE($4, postal_code),
+          city_id = $5,
+          industry_id = $6,
+          dataset_id = $7,
+          google_place_id = COALESCE($8, google_place_id),
+          discovery_run_id = COALESCE($9, discovery_run_id),
+          latitude = COALESCE($10, latitude),
+          longitude = COALESCE($11, longitude),
+          last_discovered_at = NOW(),
+          updated_at = NOW()
+         WHERE id = $12
+         RETURNING *`,
+        [...insertValues.slice(0, 11), existing.id]
+      );
+    } else {
+      // No conflict on (dataset_id, normalized_name), try INSERT with conflict on google_place_id
+      result = await pool.query<Business>(
+        `INSERT INTO businesses (
+          name, normalized_name, address, postal_code, city_id, 
+          industry_id, dataset_id, google_place_id, owner_user_id, discovery_run_id, latitude, longitude,
+          last_discovered_at, crawl_status, created_at, updated_at
+        )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), 'pending', NOW(), NOW())
+         ON CONFLICT (google_place_id) 
+         DO UPDATE SET
+           name = EXCLUDED.name,
+           normalized_name = EXCLUDED.normalized_name,
+           address = COALESCE(EXCLUDED.address, businesses.address),
+           postal_code = COALESCE(EXCLUDED.postal_code, businesses.postal_code),
+           city_id = EXCLUDED.city_id, -- CRITICAL: Always update city_id (NOT NULL)
+           industry_id = EXCLUDED.industry_id, -- CRITICAL: Always update industry_id (NOT NULL)
+           dataset_id = EXCLUDED.dataset_id, -- CRITICAL: Always update dataset_id (NOT NULL)
+           discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id), -- Update if provided
+           latitude = COALESCE(EXCLUDED.latitude, businesses.latitude),
+           longitude = COALESCE(EXCLUDED.longitude, businesses.longitude),
+           last_discovered_at = NOW(), -- Always update discovery timestamp
+           updated_at = NOW()
+         RETURNING *`,
+        insertValues
+      );
+    }
 
     if (result.rows.length === 0) {
       throw new Error(`Failed to upsert business with google_place_id: ${data.google_place_id}`);

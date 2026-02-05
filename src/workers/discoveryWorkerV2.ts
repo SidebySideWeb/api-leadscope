@@ -621,14 +621,32 @@ export async function discoverBusinessesV2(
     console.log(`[discoverBusinessesV2] Total unique places: ${uniquePlaces.length}`);
     console.log(`[discoverBusinessesV2] ==============================`);
 
-    // STEP 6: Discovery does NOT create extraction jobs automatically
-    // Extraction jobs are created only when user explicitly requests extraction (and pays):
-    // - On export request (user pays for export)
-    // - On explicit refresh/extraction request (user pays for refresh)
-    // 
-    // Discovery only enriches business metadata (name, address, location) - no website/phone/email
-    // This keeps discovery free - extraction is the paid step
-    console.log(`[discoverBusinessesV2] Discovery complete - no extraction jobs created (extraction requires user request and payment)`);
+    // STEP 6: Create extraction jobs for all businesses in this discovery run
+    // This ensures that the extraction worker will process these businesses
+    if (discoveryRunId && uniquePlaces.length > 0) {
+      console.log(`\n[discoverBusinessesV2] Enqueuing extraction_jobs for ${uniquePlaces.length} businesses in discovery_run: ${discoveryRunId}...`);
+      try {
+        const { pool } = await import('../config/database.js');
+        const insertResult = await pool.query<{ id: string }>(
+          `INSERT INTO extraction_jobs (business_id, status, created_at)
+           SELECT b.id, 'pending', NOW()
+           FROM businesses b
+           WHERE b.discovery_run_id = $1::uuid
+           ON CONFLICT (business_id) DO NOTHING
+           RETURNING id`,
+          [discoveryRunId]
+        );
+        const extractionJobsCreated = insertResult.rows.length;
+        console.log(`[discoverBusinessesV2] Created ${extractionJobsCreated} extraction jobs for discovery_run: ${discoveryRunId}`);
+        result.extractionJobsCreated = extractionJobsCreated;
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error(`[discoverBusinessesV2] Error enqueuing extraction jobs:`, errorMsg);
+        result.errors.push(`Failed to enqueue extraction jobs: ${errorMsg}`);
+      }
+    } else {
+      console.log(`[discoverBusinessesV2] No businesses to enqueue extraction jobs for.`);
+    }
 
     // Mark discovery_run as completed and store cost estimates
     if (discoveryRunId) {
