@@ -180,9 +180,23 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     }>(query, params);
 
     // Get base URL from request or environment
-    const protocol = req.protocol || 'http';
-    const host = req.get('host') || process.env.API_BASE_URL || 'localhost:3001';
-    const baseUrl = process.env.API_BASE_URL || `${protocol}://${host}`;
+    // Check X-Forwarded-Proto header (set by nginx/proxy) for HTTPS detection
+    const forwardedProto = req.get('X-Forwarded-Proto');
+    const protocol = forwardedProto || req.protocol || (process.env.NODE_ENV === 'production' ? 'https' : 'http');
+    
+    // Use API_BASE_URL if set (should be HTTPS in production), otherwise construct from request
+    let baseUrl: string;
+    if (process.env.API_BASE_URL) {
+      baseUrl = process.env.API_BASE_URL;
+    } else {
+      const host = req.get('host') || 'localhost:3001';
+      baseUrl = `${protocol}://${host}`;
+    }
+    
+    // Ensure HTTPS in production
+    if (process.env.NODE_ENV === 'production' && baseUrl.startsWith('http://')) {
+      baseUrl = baseUrl.replace('http://', 'https://');
+    }
     
     const exports = result.rows.map(row => {
       const filters = row.filters || {};
