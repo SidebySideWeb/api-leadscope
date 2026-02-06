@@ -273,7 +273,7 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
                 // This allows retry if the previous crawl failed
                 try {
                   const { createCrawlJob } = await import('../db/crawlJobs.js');
-                  await createCrawlJob(website.id, 'extraction', 25);
+                  await createCrawlJob(website.id, 'discovery', 25);
                   console.log(`[processExtractionJob] Created crawl job for website ${website.id} to extract emails (fallback after Place Details)`);
                 } catch (crawlJobError: any) {
                   console.error(`[processExtractionJob] Error creating crawl job for website ${website.id}:`, crawlJobError.message);

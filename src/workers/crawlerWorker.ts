@@ -6,7 +6,6 @@ import type { Website, CrawlJob } from '../types/index.js';
 import type { CrawlResult } from '../types/index.js';
 import { updateWebsiteCrawlData } from '../db/websites.js';
 import { updateCrawlJob } from '../db/crawlJobs.js';
-import { createCrawlResult } from '../db/crawlResults.js';
 import { hashHtml } from '../utils/htmlHasher.js';
 import dotenv from 'dotenv';
 
