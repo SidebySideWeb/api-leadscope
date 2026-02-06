@@ -195,6 +195,8 @@ export async function crawlWebsite(website: Website, crawlJob: CrawlJob): Promis
             /epikoinonia/i
           ];
           
+          // Load HTML with cheerio to extract links
+          const $ = cheerio.load(html);
           $('a[href]').each((_, element) => {
             const href = $(element).attr('href');
             if (!href) return;
