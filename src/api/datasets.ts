@@ -442,6 +442,27 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res): Promis
       finished_at: Date | null;
     }>(
       `
+      WITH crawl_stats AS (
+        SELECT
+          w.business_id,
+          COUNT(DISTINCT cp.id) AS pages_visited,
+          MAX(cj.pages_limit) AS pages_limit,
+          BOOL_OR(cj.status = 'completed') AS any_completed,
+          MAX(cj.completed_at) AS finished_at
+        FROM websites w
+        JOIN crawl_jobs cj ON cj.website_id = w.id
+        LEFT JOIN crawl_pages cp ON cp.crawl_job_id = cj.id
+        GROUP BY w.business_id
+      ),
+      contact_counts AS (
+        SELECT
+          cs.business_id,
+          COUNT(DISTINCT c.id) FILTER (WHERE c.contact_type = 'email' AND c.is_active = TRUE) AS emails_count,
+          COUNT(DISTINCT c.id) FILTER (WHERE c.contact_type IN ('phone','mobile') AND c.is_active = TRUE) AS phones_count
+        FROM contact_sources cs
+        JOIN contacts c ON c.id = cs.contact_id
+        GROUP BY cs.business_id
+      )
       SELECT 
         b.id,
         b.name,
@@ -458,28 +479,20 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res): Promis
         i.name as industry_name,
         w.url as website_url,
         CASE 
-          WHEN cr.id IS NULL THEN 'not_crawled'
-          WHEN cr.pages_crawled < 1 THEN 'not_crawled'
-          WHEN cr.pages_crawled >= cr.pages_limit THEN 'completed'
+          WHEN cs.business_id IS NULL OR cs.pages_visited IS NULL OR cs.pages_visited = 0 THEN 'not_crawled'
+          WHEN cs.any_completed = TRUE AND cs.pages_limit IS NOT NULL AND cs.pages_visited >= cs.pages_limit THEN 'completed'
           ELSE 'partial'
         END as crawl_status,
-        COALESCE(contact_counts.emails_count, 0) as emails_count,
-        COALESCE(contact_counts.phones_count, 0) as phones_count,
-        COALESCE(cr.pages_crawled, 0) as pages_visited,
-        cr.completed_at as finished_at
+        COALESCE(cc.emails_count, 0) as emails_count,
+        COALESCE(cc.phones_count, 0) as phones_count,
+        COALESCE(cs.pages_visited, 0) as pages_visited,
+        cs.finished_at as finished_at
       FROM businesses b
       LEFT JOIN cities c ON c.id = b.city_id
       LEFT JOIN industries i ON i.id = b.industry_id
       LEFT JOIN websites w ON w.business_id = b.id
-      LEFT JOIN crawl_results cr ON cr.business_id = b.id
-      LEFT JOIN (
-        SELECT 
-          business_id,
-          COUNT(*) FILTER (WHERE contact_type = 'email' AND is_active = true) as emails_count,
-          COUNT(*) FILTER (WHERE contact_type IN ('phone', 'mobile') AND is_active = true) as phones_count
-        FROM contacts
-        GROUP BY business_id
-      ) contact_counts ON contact_counts.business_id = b.id
+      LEFT JOIN crawl_stats cs ON cs.business_id = b.id
+      LEFT JOIN contact_counts cc ON cc.business_id = b.id
       WHERE b.dataset_id = $1
       ORDER BY b.created_at DESC
       LIMIT 100

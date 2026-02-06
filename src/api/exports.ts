@@ -6,6 +6,117 @@ import { verifyDatasetOwnership } from '../db/datasets.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
+/**
+ * Check if all crawl and extraction jobs for a dataset are complete
+ * Returns: { allComplete: boolean, pendingCrawlJobs: number, pendingExtractionJobs: number }
+ */
+async function checkDatasetJobsComplete(datasetId: string): Promise<{
+  allComplete: boolean;
+  pendingCrawlJobs: number;
+  pendingExtractionJobs: number;
+  runningCrawlJobs: number;
+  runningExtractionJobs: number;
+}> {
+  // Check crawl jobs (pending or running)
+  const crawlJobsResult = await pool.query<{ count: number }>(
+    `SELECT COUNT(*) as count
+     FROM crawl_jobs cj
+     JOIN websites w ON w.id = cj.website_id
+     JOIN businesses b ON b.id = w.business_id
+     WHERE b.dataset_id = $1
+       AND cj.status IN ('pending', 'running')`,
+    [datasetId]
+  );
+  const pendingCrawlJobs = parseInt(crawlJobsResult.rows[0]?.count.toString() || '0');
+
+  const runningCrawlJobsResult = await pool.query<{ count: number }>(
+    `SELECT COUNT(*) as count
+     FROM crawl_jobs cj
+     JOIN websites w ON w.id = cj.website_id
+     JOIN businesses b ON b.id = w.business_id
+     WHERE b.dataset_id = $1
+       AND cj.status = 'running'`,
+    [datasetId]
+  );
+  const runningCrawlJobs = parseInt(runningCrawlJobsResult.rows[0]?.count.toString() || '0');
+
+  // Check extraction jobs (pending or running)
+  const extractionJobsResult = await pool.query<{ count: number }>(
+    `SELECT COUNT(*) as count
+     FROM extraction_jobs ej
+     JOIN businesses b ON b.id = ej.business_id
+     WHERE b.dataset_id = $1
+       AND ej.status IN ('pending', 'running')`,
+    [datasetId]
+  );
+  const pendingExtractionJobs = parseInt(extractionJobsResult.rows[0]?.count.toString() || '0');
+
+  const runningExtractionJobsResult = await pool.query<{ count: number }>(
+    `SELECT COUNT(*) as count
+     FROM extraction_jobs ej
+     JOIN businesses b ON b.id = ej.business_id
+     WHERE b.dataset_id = $1
+       AND ej.status = 'running'`,
+    [datasetId]
+  );
+  const runningExtractionJobs = parseInt(runningExtractionJobsResult.rows[0]?.count.toString() || '0');
+
+  const allComplete = pendingCrawlJobs === 0 && pendingExtractionJobs === 0;
+
+  return {
+    allComplete,
+    pendingCrawlJobs,
+    pendingExtractionJobs,
+    runningCrawlJobs,
+    runningExtractionJobs
+  };
+}
+
+/**
+ * Wait for all crawl and extraction jobs to complete for a dataset
+ * Polls every 2 seconds, with a maximum timeout
+ * Returns true if all jobs completed, false if timeout
+ */
+async function waitForDatasetJobsComplete(
+  datasetId: string,
+  maxWaitSeconds: number = 300 // 5 minutes default
+): Promise<{ completed: boolean; waitedSeconds: number; finalStatus: { pendingCrawlJobs: number; pendingExtractionJobs: number; runningCrawlJobs: number; runningExtractionJobs: number } }> {
+  const startTime = Date.now();
+  const maxWaitMs = maxWaitSeconds * 1000;
+  const pollIntervalMs = 2000; // Check every 2 seconds
+
+  while (true) {
+    const status = await checkDatasetJobsComplete(datasetId);
+    
+    if (status.allComplete) {
+      const waitedSeconds = Math.floor((Date.now() - startTime) / 1000);
+      console.log(`[waitForDatasetJobsComplete] All jobs completed after ${waitedSeconds} seconds`);
+      return { completed: true, waitedSeconds, finalStatus: status };
+    }
+
+    const elapsedMs = Date.now() - startTime;
+    if (elapsedMs >= maxWaitMs) {
+      const waitedSeconds = Math.floor(elapsedMs / 1000);
+      console.warn(`[waitForDatasetJobsComplete] Timeout after ${waitedSeconds} seconds. Status:`, status);
+      return { completed: false, waitedSeconds, finalStatus: status };
+    }
+
+    // Log progress every 10 seconds
+    const elapsedSeconds = Math.floor(elapsedMs / 1000);
+    if (elapsedSeconds % 10 === 0) {
+      console.log(`[waitForDatasetJobsComplete] Still waiting... (${elapsedSeconds}s elapsed)`, {
+        pendingCrawl: status.pendingCrawlJobs,
+        runningCrawl: status.runningCrawlJobs,
+        pendingExtraction: status.pendingExtractionJobs,
+        runningExtraction: status.runningExtractionJobs
+      });
+    }
+
+    // Wait before next check
+    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+  }
+}
+
 const router = express.Router();
 
 /**
@@ -77,6 +188,10 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       const filters = row.filters || {};
       const tier = filters.tier || 'starter';
       
+      // Determine status: if file_path is empty/null, export is still processing
+      const isProcessing = !row.file_path || row.file_path.trim() === '';
+      const status = isProcessing ? 'processing' : 'completed';
+      
       return {
         id: row.id,
         dataset_id: filters.datasetId || '',
@@ -86,7 +201,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         rows_returned: row.total_rows, // Same as total_rows for now
         rows_total: row.total_rows,
         file_path: row.file_path,
-        download_url: row.file_path ? `${baseUrl}/exports/${row.id}/download` : null,
+        download_url: row.file_path && row.file_path.trim() !== '' ? `${baseUrl}/exports/${row.id}/download` : null,
+        status: status, // 'processing' or 'completed'
         created_at: row.created_at.toISOString(),
         expires_at: row.expires_at ? row.expires_at.toISOString() : null,
       };
@@ -120,7 +236,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 
 /**
  * POST /exports/run
- * Generate and download an export for a dataset
+ * Create an export job (async) - returns immediately with export ID
+ * Export is processed in background, frontend polls for completion
  */
 router.post('/run', authMiddleware, async (req: AuthRequest, res): Promise<void> => {
   try {
@@ -164,8 +281,67 @@ router.post('/run', authMiddleware, async (req: AuthRequest, res): Promise<void>
 
     console.log('[exports/run] User plan:', userPlan, 'Tier:', tier);
 
+    // Create export record immediately (with file_path = null to indicate processing)
+    const { logDatasetExport } = await import('../db/exports.js');
+    const exportRecord = await logDatasetExport({
+      datasetId,
+      userId,
+      tier,
+      format: format as 'csv' | 'xlsx',
+      rowCount: 0, // Will be updated when export completes
+      filePath: '', // Empty = processing
+      watermarkText: `Dataset ${datasetId} – ${tier} export`
+    });
+
+    console.log('[exports/run] Created export record:', exportRecord.id);
+
+    // Return export ID immediately (don't wait for processing)
+    res.json({
+      id: exportRecord.id,
+      dataset_id: datasetId,
+      format: format,
+      tier: tier,
+      status: 'processing',
+      message: 'Export job created. Processing in background...'
+    });
+
+    // Process export asynchronously (don't await - let it run in background)
+    processExportAsync(exportRecord.id, datasetId, tier, format, userId).catch(error => {
+      console.error(`[exports/run] Error processing export ${exportRecord.id} async:`, error);
+      // Update export record to mark as failed
+      pool.query(
+        'UPDATE exports SET file_path = NULL, total_rows = 0 WHERE id = $1',
+        [exportRecord.id]
+      ).catch(updateError => {
+        console.error(`[exports/run] Failed to update export ${exportRecord.id} status:`, updateError);
+      });
+    });
+
+  } catch (error: any) {
+    console.error('[exports/run] Error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: error.message || 'Failed to create export job',
+        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    }
+  }
+});
+
+/**
+ * Process export asynchronously (runs in background)
+ */
+async function processExportAsync(
+  exportId: string,
+  datasetId: string,
+  tier: string,
+  format: 'csv' | 'xlsx',
+  userId: string
+): Promise<void> {
+  try {
+    console.log(`[processExportAsync] Starting export ${exportId} for dataset ${datasetId}`);
+
     // Before exporting, ensure crawl jobs are created for businesses with websites
-    // This ensures websites get crawled and emails/phones are extracted
     try {
       const { createCrawlJob } = await import('../db/crawlJobs.js');
       const { pool } = await import('../config/database.js');
@@ -183,7 +359,7 @@ router.post('/run', authMiddleware, async (req: AuthRequest, res): Promise<void>
       );
 
       if (businessesNeedingCrawl.rows.length > 0) {
-        console.log(`[exports/run] Creating ${businessesNeedingCrawl.rows.length} crawl jobs for businesses with websites...`);
+        console.log(`[processExportAsync] Creating ${businessesNeedingCrawl.rows.length} crawl jobs for businesses with websites...`);
         let crawlJobsCreated = 0;
         for (const row of businessesNeedingCrawl.rows) {
           try {
@@ -192,62 +368,107 @@ router.post('/run', authMiddleware, async (req: AuthRequest, res): Promise<void>
           } catch (error: any) {
             // If crawl job already exists, skip
             if (error.code !== '23505') {
-              console.error(`[exports/run] Error creating crawl job for website ${row.website_id}:`, error.message);
+              console.error(`[processExportAsync] Error creating crawl job for website ${row.website_id}:`, error.message);
             }
           }
         }
-        console.log(`[exports/run] Created ${crawlJobsCreated} crawl jobs`);
-      } else {
-        console.log(`[exports/run] All businesses with websites already have crawl jobs or are being crawled`);
+        console.log(`[processExportAsync] Created ${crawlJobsCreated} crawl jobs`);
       }
     } catch (error) {
-      console.error('[exports/run] Error creating crawl jobs:', error);
-      // Don't fail the export if crawl job creation fails
+      console.error('[processExportAsync] Error creating crawl jobs:', error);
+      // Continue anyway
+    }
+
+    // CRITICAL: Wait for all crawl and extraction jobs to complete before exporting
+    console.log(`[processExportAsync] Waiting for crawl and extraction jobs to complete for export ${exportId}...`);
+    const waitResult = await waitForDatasetJobsComplete(datasetId, 300); // Wait up to 5 minutes
+    
+    if (!waitResult.completed) {
+      console.warn(`[processExportAsync] ⚠️  Export ${exportId} proceeding with incomplete data after ${waitResult.waitedSeconds}s timeout:`, {
+        pendingCrawlJobs: waitResult.finalStatus.pendingCrawlJobs,
+        runningCrawlJobs: waitResult.finalStatus.runningCrawlJobs,
+        pendingExtractionJobs: waitResult.finalStatus.pendingExtractionJobs,
+        runningExtractionJobs: waitResult.finalStatus.runningExtractionJobs
+      });
+    } else {
+      console.log(`[processExportAsync] ✅ All jobs completed after ${waitResult.waitedSeconds}s - proceeding with export ${exportId}`);
     }
 
     // Generate export
     const filePath = await runDatasetExport(datasetId, tier, format);
-    console.log('[exports/run] Export generated:', filePath);
+    console.log(`[processExportAsync] Export ${exportId} generated:`, filePath);
 
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
-      res.status(500).json({ error: 'Export file was not created' });
+    // Update export record with file path and row count
+    const { getDatasetById } = await import('../db/datasets.js');
+    const dataset = await getDatasetById(datasetId);
+    if (dataset) {
+      // Count businesses in dataset for total_rows
+      const countResult = await pool.query<{ count: number }>(
+        'SELECT COUNT(*) as count FROM businesses WHERE dataset_id = $1',
+        [datasetId]
+      );
+      const totalRows = parseInt(countResult.rows[0]?.count.toString() || '0');
+
+      await pool.query(
+        'UPDATE exports SET file_path = $1, total_rows = $2 WHERE id = $3',
+        [filePath, totalRows, exportId]
+      );
+      console.log(`[processExportAsync] Export ${exportId} updated with file_path and ${totalRows} rows`);
+    }
+
+  } catch (error: any) {
+    console.error(`[processExportAsync] Error processing export ${exportId}:`, error);
+    // Mark export as failed (file_path stays empty/null)
+    await pool.query(
+      'UPDATE exports SET total_rows = 0 WHERE id = $1',
+      [exportId]
+    ).catch(updateError => {
+      console.error(`[processExportAsync] Failed to update export ${exportId} status:`, updateError);
+    });
+  }
+}
+
+/**
+ * GET /exports/:id/status
+ * Get export status (processing or completed)
+ */
+router.get('/:id/status', authMiddleware, async (req: AuthRequest, res): Promise<void> => {
+  try {
+    const userId = req.userId!;
+    const exportId = req.params.id;
+
+    // Verify export belongs to user
+    const exportResult = await pool.query<{
+      id: string;
+      file_path: string | null;
+      total_rows: number;
+      file_format: 'csv' | 'xlsx';
+      created_at: Date;
+    }>(
+      'SELECT id, file_path, total_rows, file_format, created_at FROM exports WHERE id = $1 AND user_id = $2',
+      [exportId, userId]
+    );
+
+    if (exportResult.rows.length === 0) {
+      res.status(404).json({ error: 'Export not found' });
       return;
     }
 
-    // Get export record to get the export ID
-    const exportResult = await pool.query<{ id: string }>(
-      'SELECT id FROM exports WHERE file_path = $1 ORDER BY created_at DESC LIMIT 1',
-      [filePath]
-    );
-    const exportId = exportResult.rows[0]?.id || 'export';
+    const exportRow = exportResult.rows[0];
+    const isProcessing = !exportRow.file_path || exportRow.file_path.trim() === '';
+    const status = isProcessing ? 'processing' : 'completed';
 
-    // Set appropriate headers for file download
-    const filename = `export-${exportId}.${format}`;
-    res.setHeader('Content-Type', format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-
-    // Stream the file
-    const fileStream = fs.createReadStream(filePath);
-    fileStream.pipe(res);
-    
-    // Handle stream errors
-    fileStream.on('error', (error) => {
-      console.error('[exports/run] File stream error:', error);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to stream export file' });
-      }
+    res.json({
+      id: exportId,
+      status: status,
+      total_rows: exportRow.total_rows,
+      format: exportRow.file_format,
+      created_at: exportRow.created_at.toISOString(),
+      download_available: !isProcessing && fs.existsSync(exportRow.file_path || '')
     });
-
-    // Clean up: Note - we don't delete the file here as it's stored for later download via /exports/:id/download
   } catch (error: any) {
-    console.error('[exports/run] Error:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ 
-        error: error.message || 'Failed to generate export',
-        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-      });
-    }
+    console.error('[API] Error checking export status:', error);
+    res.status(500).json({ error: 'Failed to check export status' });
   }
 });
 
@@ -278,8 +499,17 @@ router.get('/:id/download', authMiddleware, async (req: AuthRequest, res): Promi
 
     const exportRow = exportResult.rows[0];
     
-    // Check if file exists
-    if (!exportRow.file_path || !fs.existsSync(exportRow.file_path)) {
+    // Check if file exists and is ready (not processing)
+    if (!exportRow.file_path || exportRow.file_path.trim() === '') {
+      res.status(202).json({ 
+        error: 'Export is still processing',
+        status: 'processing',
+        message: 'Please wait for the export to complete before downloading'
+      });
+      return;
+    }
+    
+    if (!fs.existsSync(exportRow.file_path)) {
       res.status(404).json({ error: 'Export file not found' });
       return;
     }

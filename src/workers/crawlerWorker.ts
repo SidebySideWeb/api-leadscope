@@ -226,18 +226,9 @@ export async function crawlWebsite(website: Website, crawlJob: CrawlJob): Promis
       if (page) await page.close();
       if (context) await context.close();
 
-      // Store crawl results in database (both crawl_results and crawl_pages)
+      // Store crawl results in database (crawl_pages only; crawl_results is legacy)
       for (const crawlResult of results) {
-        // Store in crawl_results (legacy)
-        await createCrawlResult({
-          crawl_job_id: crawlJob.id,
-          url: crawlResult.url,
-          html: crawlResult.html,
-          html_hash: crawlResult.htmlHash,
-          page_type: crawlResult.pageType
-        });
-
-        // Also store in crawl_pages (used by extraction worker)
+        // Store in crawl_pages (used by extraction worker)
         try {
           const { createCrawlPage } = await import('../db/crawlPages.js');
           await createCrawlPage({
@@ -264,26 +255,50 @@ export async function crawlWebsite(website: Website, crawlJob: CrawlJob): Promis
         await updateWebsiteCrawlData(website.id, homepageResult.htmlHash);
       }
 
-      // Update job status
-      await updateCrawlJob(crawlJob.id, {
-        status: 'completed',
-        pages_crawled: results.length,
-        completed_at: new Date()
-      });
+      // Update job status - mark as completed even if we got some results
+      // Partial success is better than complete failure
+      if (results.length > 0) {
+        console.log(`[crawlWebsite] Crawl completed with ${results.length} pages (some pages may have failed)`);
+        await updateCrawlJob(crawlJob.id, {
+          status: 'completed',
+          pages_crawled: results.length,
+          completed_at: new Date()
+        });
+      } else {
+        // No pages crawled - this is a complete failure
+        throw new Error('No pages were successfully crawled');
+      }
 
     } catch (error) {
       if (page) await page.close();
       if (context) await context.close();
+      
+      // If we have some results, don't fail completely - mark as completed with partial results
+      if (results.length > 0) {
+        console.warn(`[crawlWebsite] Crawl encountered errors but got ${results.length} pages - marking as completed with partial results`);
+        await updateCrawlJob(crawlJob.id, {
+          status: 'completed',
+          pages_crawled: results.length,
+          completed_at: new Date(),
+          error_message: error instanceof Error ? error.message : String(error)
+        });
+        return results; // Return partial results instead of throwing
+      }
+      
+      // No results at all - re-throw to mark as failed
       throw error;
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`[crawlWebsite] Crawl failed completely for website ${website.url}:`, errorMessage);
     await updateCrawlJob(crawlJob.id, {
       status: 'failed',
       error_message: errorMessage,
       completed_at: new Date()
     });
-    throw error;
+    // Don't throw - let the crawl worker continue with next job
+    // Return empty results so extraction worker can fallback to Place Details
+    return [];
   }
 
   return results;

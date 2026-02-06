@@ -28,17 +28,23 @@ async function processCrawlJob(job: CrawlJob): Promise<void> {
       throw new Error(`Website ${job.website_id} not found`);
     }
 
-    // Crawl website - this stores pages in both crawl_results and crawl_pages
+    // Crawl website - this stores pages in crawl_pages (used by extraction worker)
     const crawlResults = await crawlWebsite(website, job);
     
-    console.log(`[crawlWorker] Successfully processed crawl job ${job.id}: ${crawlResults.length} pages crawled`);
+    if (crawlResults.length > 0) {
+      console.log(`[crawlWorker] Successfully processed crawl job ${job.id}: ${crawlResults.length} pages crawled`);
+    } else {
+      console.warn(`[crawlWorker] Crawl job ${job.id} completed with 0 pages (crawling failed or no pages found) - extraction worker will fallback to Place Details API`);
+    }
     
     // After crawling completes, ensure extraction job exists and is reset to 'pending'
     // This allows extraction worker to re-process with the newly crawled pages
-    if (website.business_id && crawlResults.length > 0) {
+    // Note: Even if 0 pages were crawled, we still reset extraction job so it can fallback to Place Details API
+    if (website.business_id) {
       try {
         const { pool } = await import('../config/database.js');
         // Create or reset extraction job to 'pending' so it gets re-processed
+        // This is important even if crawling failed (0 pages) - extraction worker will fallback to Place Details
         await pool.query(
           `INSERT INTO extraction_jobs (business_id, status)
            VALUES ($1, 'pending')
@@ -46,7 +52,11 @@ async function processCrawlJob(job: CrawlJob): Promise<void> {
            DO UPDATE SET status = 'pending', error_message = NULL, started_at = NULL, completed_at = NULL`,
           [website.business_id]
         );
-        console.log(`[crawlWorker] Created/reset extraction job for business ${website.business_id} after crawl completion`);
+        if (crawlResults.length > 0) {
+          console.log(`[crawlWorker] Created/reset extraction job for business ${website.business_id} after crawl completion (${crawlResults.length} pages)`);
+        } else {
+          console.log(`[crawlWorker] Created/reset extraction job for business ${website.business_id} - extraction worker will fallback to Place Details API (0 pages crawled)`);
+        }
       } catch (error: any) {
         // Don't fail crawl job if extraction job creation fails
         console.error(`[crawlWorker] Error creating/resetting extraction job for business ${website.business_id}:`, error.message);

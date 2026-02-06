@@ -67,6 +67,53 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
       return;
     }
 
+    // FAST PATH: If this business already has both email and phone contacts, skip crawling & Place Details
+    try {
+      const existingContactsResult = await pool.query<{
+        has_email: boolean | null;
+        has_phone: boolean | null;
+      }>(
+        `SELECT
+           BOOL_OR(c.contact_type = 'email')  AS has_email,
+           BOOL_OR(c.contact_type IN ('phone','mobile')) AS has_phone
+         FROM contact_sources cs
+         JOIN contacts c ON cs.contact_id = c.id
+         WHERE cs.business_id = $1::uuid`,
+        [business.id]
+      );
+
+      const contactRow = existingContactsResult.rows[0];
+      const alreadyHasEmail = contactRow?.has_email === true;
+      const alreadyHasPhone = contactRow?.has_phone === true;
+
+      if (alreadyHasEmail && alreadyHasPhone) {
+        console.log(
+          `[processExtractionJob] Business ${business.id} already has email AND phone contacts in DB - skipping crawling and Place Details`
+        );
+
+        await updateExtractionJob(job.id, {
+          status: 'success',
+          completed_at: new Date()
+        });
+
+        if (business.discovery_run_id) {
+          await checkAndCompleteDiscoveryRun(business.discovery_run_id);
+        }
+
+        return;
+      } else {
+        console.log(
+          `[processExtractionJob] Existing contacts for business ${business.id}: email=${alreadyHasEmail}, phone=${alreadyHasPhone} - continuing with crawling/Place Details`
+        );
+      }
+    } catch (contactCheckError) {
+      console.error(
+        `[processExtractionJob] Error checking existing contacts for business ${business?.id}:`,
+        contactCheckError
+      );
+      // Continue with normal flow even if this check fails
+    }
+
     // STEP 1: First, try to extract contact details from website crawl pages
     // This is free and preferred over paid Place Details API
     console.log(`[processExtractionJob] Fetching crawl pages for business ${job.business_id} (type: ${typeof job.business_id})...`);
@@ -191,94 +238,107 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
       console.log(`[processExtractionJob] No crawl pages found for business ${business.id}`);
     }
 
-    // STEP 2: Fetch from Google Place Details API if website or phone is missing
-    // This is a paid API, so we fetch it when user requests extraction (and pays)
-    // Always fetch if business has google_place_id and we're missing website or phone
+    // STEP 2: Fetch from Google Place Details API as fallback if:
+    // - Crawling failed (no pages found), OR
+    // - We didn't find contact details (email/phone) from crawling
+    // This is a paid API, so we use it as fallback when crawling fails or doesn't yield results
     if (business.google_place_id) {
+      const crawlingFailed = pages.length === 0;
       const needsWebsite = !foundWebsiteFromPages;
       const needsPhone = !foundPhoneFromPages;
+      const needsEmail = !foundEmailFromPages;
       
-      if (needsWebsite || needsPhone) {
-        console.log(`[processExtractionJob] Fetching Place Details API for business ${business.id} (needsWebsite: ${needsWebsite}, needsPhone: ${needsPhone})`);
+      // Fallback to Place Details if:
+      // 1. Crawling completely failed (no pages), OR
+      // 2. We didn't find phone (Place Details can provide phone), OR
+      // 3. We didn't find website (Place Details can provide website)
+      // Note: Place Details doesn't provide emails, so if we only need email, we can't get it from Place Details
+      const shouldUsePlaceDetails = crawlingFailed || needsPhone || needsWebsite;
       
-      try {
-        const placeDetails = await googleMapsService.getPlaceDetails(business.google_place_id);
-        
-        if (placeDetails) {
-          // Create/update website if missing and Place Details has website
-          if (!foundWebsiteFromPages && placeDetails.website) {
-            try {
-              console.log(`[processExtractionJob] Creating website from Place Details for business ${business.id}: ${placeDetails.website}`);
-              const website = await getOrCreateWebsite(business.id, placeDetails.website);
-              console.log(`[processExtractionJob] Successfully created website from Place Details: ${placeDetails.website}`);
-              
-              // Create crawl job to extract emails from the website
+      if (shouldUsePlaceDetails) {
+        console.log(`[processExtractionJob] Falling back to Place Details API for business ${business.id} (crawlingFailed: ${crawlingFailed}, needsWebsite: ${needsWebsite}, needsPhone: ${needsPhone}, needsEmail: ${needsEmail})`);
+      
+        try {
+          const placeDetails = await googleMapsService.getPlaceDetails(business.google_place_id);
+          
+          if (placeDetails) {
+            // Create/update website if missing and Place Details has website
+            if (!foundWebsiteFromPages && placeDetails.website) {
               try {
-                const { createCrawlJob } = await import('../db/crawlJobs.js');
-                await createCrawlJob(website.id, 'discovery', 25);
-                console.log(`[processExtractionJob] Created crawl job for website ${website.id} to extract emails`);
-              } catch (crawlJobError: any) {
-                console.error(`[processExtractionJob] Error creating crawl job for website ${website.id}:`, crawlJobError.message);
-                // Don't fail extraction if crawl job creation fails
+                console.log(`[processExtractionJob] Creating website from Place Details for business ${business.id}: ${placeDetails.website}`);
+                const website = await getOrCreateWebsite(business.id, placeDetails.website);
+                console.log(`[processExtractionJob] Successfully created website from Place Details: ${placeDetails.website}`);
+                
+                // Create crawl job to extract emails from the website (even if we already tried crawling)
+                // This allows retry if the previous crawl failed
+                try {
+                  const { createCrawlJob } = await import('../db/crawlJobs.js');
+                  await createCrawlJob(website.id, 'extraction', 25);
+                  console.log(`[processExtractionJob] Created crawl job for website ${website.id} to extract emails (fallback after Place Details)`);
+                } catch (crawlJobError: any) {
+                  console.error(`[processExtractionJob] Error creating crawl job for website ${website.id}:`, crawlJobError.message);
+                  // Don't fail extraction if crawl job creation fails
+                }
+              } catch (error: any) {
+                console.error(`[processExtractionJob] CRITICAL ERROR creating website from Place Details:`, {
+                  error_code: error.code,
+                  error_message: error.message,
+                  error_detail: error.detail,
+                  error_hint: error.hint,
+                  error_constraint: error.constraint,
+                  business_id: business.id,
+                  website_url: placeDetails.website,
+                  stack: error.stack
+                });
               }
-            } catch (error: any) {
-              console.error(`[processExtractionJob] CRITICAL ERROR creating website from Place Details:`, {
-                error_code: error.code,
-                error_message: error.message,
-                error_detail: error.detail,
-                error_hint: error.hint,
-                error_constraint: error.constraint,
-                business_id: business.id,
-                website_url: placeDetails.website,
-                stack: error.stack
-              });
             }
-          }
 
-          // Create phone contact if missing and Place Details has phone
-          if (!foundPhoneFromPages && placeDetails.international_phone_number) {
-            try {
-              console.log(`[processExtractionJob] Creating phone contact from Place Details for business ${business.id}: ${placeDetails.international_phone_number}`);
-              
-              const phoneContact = await getOrCreateContact({
-                phone: placeDetails.international_phone_number,
-                contact_type: 'phone',
-                is_generic: false
-              });
-              
-              console.log(`[processExtractionJob] Contact created/found with id: ${phoneContact.id}, now creating contact_source...`);
-              
-              // Link contact to business via source with business_id
-              // Convert business.id to string (UUID) to match contact_sources.business_id type
-              await createContactSource({
-                contact_id: phoneContact.id,
-                business_id: business.id.toString(), // Convert to string (UUID) - businesses.id is UUID in DB
-                source_url: `https://maps.google.com/?cid=${business.google_place_id}`,
-                page_type: 'homepage',
-                html_hash: ''
-              });
-              
-              console.log(`[processExtractionJob] Successfully created phone contact from Place Details: ${placeDetails.international_phone_number}`);
-            } catch (error: any) {
-              console.error(`[processExtractionJob] CRITICAL ERROR creating phone contact from Place Details:`, {
-                error_code: error.code,
-                error_message: error.message,
-                error_detail: error.detail,
-                error_hint: error.hint,
-                error_constraint: error.constraint,
-                business_id: business.id,
-                phone: placeDetails.international_phone_number,
-                stack: error.stack
-              });
+            // Create phone contact if missing and Place Details has phone
+            if (!foundPhoneFromPages && placeDetails.international_phone_number) {
+              try {
+                console.log(`[processExtractionJob] Creating phone contact from Place Details for business ${business.id}: ${placeDetails.international_phone_number}`);
+                
+                const phoneContact = await getOrCreateContact({
+                  phone: placeDetails.international_phone_number,
+                  contact_type: 'phone',
+                  is_generic: false
+                });
+                
+                console.log(`[processExtractionJob] Contact created/found with id: ${phoneContact.id}, now creating contact_source...`);
+                
+                // Link contact to business via source with business_id
+                // Convert business.id to string (UUID) to match contact_sources.business_id type
+                await createContactSource({
+                  contact_id: phoneContact.id,
+                  business_id: business.id.toString(), // Convert to string (UUID) - businesses.id is UUID in DB
+                  source_url: `https://maps.google.com/?cid=${business.google_place_id}`,
+                  page_type: 'homepage',
+                  html_hash: ''
+                });
+                
+                console.log(`[processExtractionJob] Successfully created phone contact from Place Details: ${placeDetails.international_phone_number}`);
+              } catch (error: any) {
+                console.error(`[processExtractionJob] CRITICAL ERROR creating phone contact from Place Details:`, {
+                  error_code: error.code,
+                  error_message: error.message,
+                  error_detail: error.detail,
+                  error_hint: error.hint,
+                  error_constraint: error.constraint,
+                  business_id: business.id,
+                  phone: placeDetails.international_phone_number,
+                  stack: error.stack
+                });
+              }
             }
+          } else {
+            console.log(`[processExtractionJob] Place Details API returned no data for business ${business.id}`);
           }
-        } else {
-          console.log(`[processExtractionJob] Place Details API returned no data for business ${business.id}`);
+        } catch (error) {
+          console.error(`[processExtractionJob] Error fetching Place Details for business ${business.id}:`, error);
+          // Don't fail the extraction job if Place Details fetch fails
         }
-      } catch (error) {
-        console.error(`[processExtractionJob] Error fetching Place Details for business ${business.id}:`, error);
-        // Don't fail the extraction job if Place Details fetch fails
-      }
+      } else {
+        console.log(`[processExtractionJob] Skipping Place Details API - crawling succeeded and found all needed data (website: ${foundWebsiteFromPages}, phone: ${foundPhoneFromPages}, email: ${foundEmailFromPages})`);
       }
     } else {
       console.log(`[processExtractionJob] Business ${business.id} has no google_place_id - cannot fetch Place Details`);

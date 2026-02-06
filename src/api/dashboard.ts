@@ -25,27 +25,31 @@ router.get('/metrics', authMiddleware, async (req: AuthRequest, res) => {
     );
     const businesses_total = parseInt(businessesResult.rows[0]?.count.toString() || '0');
 
-    // Get businesses that have been crawled
+    // Get businesses that have been crawled (at least one crawl_page)
     const crawledResult = await pool.query<{ count: number }>(
       `
       SELECT COUNT(DISTINCT b.id) as count
       FROM businesses b
       INNER JOIN datasets d ON d.id = b.dataset_id
-      INNER JOIN crawl_results cr ON cr.business_id = b.id
+      INNER JOIN websites w ON w.business_id = b.id
+      INNER JOIN crawl_jobs cj ON cj.website_id = w.id
+      INNER JOIN crawl_pages cp ON cp.crawl_job_id = cj.id
       WHERE d.user_id = $1
       `,
       [userId]
     );
     const businesses_crawled = parseInt(crawledResult.rows[0]?.count.toString() || '0');
 
-    // Get total contacts found
+    // Get total contacts found (via contact_sources linking contacts to businesses)
     const contactsResult = await pool.query<{ count: number }>(
       `
       SELECT COUNT(DISTINCT c.id) as count
-      FROM contacts c
-      INNER JOIN businesses b ON b.id = c.business_id
+      FROM contact_sources cs
+      INNER JOIN contacts c ON c.id = cs.contact_id
+      INNER JOIN businesses b ON b.id = cs.business_id
       INNER JOIN datasets d ON d.id = b.dataset_id
       WHERE d.user_id = $1
+        AND c.is_active = TRUE
       `,
       [userId]
     );
