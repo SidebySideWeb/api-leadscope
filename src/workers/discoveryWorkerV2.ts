@@ -330,17 +330,33 @@ export async function discoverBusinessesV2(
     }
 
     // STEP 2: Expand keywords (grid point × keyword = one search)
+    // IMPORTANT: Prioritize completing all keywords for each grid point before moving to next
+    // This ensures comprehensive coverage even if we hit search limits
     const searchTasks: Array<{ gridPoint: GridPoint; keyword: string }> = [];
+    
+    // Strategy: For each grid point, add all keywords before moving to next point
+    // This ensures we don't miss keywords due to search limits
     for (const gridPoint of gridPoints) {
       for (const keyword of industry.discovery_keywords) {
         searchTasks.push({ gridPoint, keyword });
       }
     }
 
-    // Limit total searches
-    const maxSearches = Math.min(searchTasks.length, discoveryConfig.maxSearchesPerDataset);
-    const limitedSearchTasks = searchTasks.slice(0, maxSearches);
-    console.log(`[discoverBusinessesV2] Total search tasks: ${limitedSearchTasks.length} (${gridPoints.length} points × ${industry.discovery_keywords.length} keywords, limited to ${maxSearches})`);
+    // Calculate how many grid points we can fully cover with all keywords
+    const searchesPerGridPoint = industry.discovery_keywords.length;
+    const maxSearches = discoveryConfig.maxSearchesPerDataset;
+    const gridPointsToCover = Math.floor(maxSearches / searchesPerGridPoint);
+    const totalSearchesForFullCoverage = gridPointsToCover * searchesPerGridPoint;
+    
+    // Take enough searches to complete full grid points (all keywords covered)
+    // This ensures we don't partially cover grid points
+    const limitedSearchTasks = searchTasks.slice(0, totalSearchesForFullCoverage);
+    
+    console.log(`[discoverBusinessesV2] Search strategy:`);
+    console.log(`  Total possible searches: ${searchTasks.length} (${gridPoints.length} points × ${industry.discovery_keywords.length} keywords)`);
+    console.log(`  Max searches allowed: ${maxSearches}`);
+    console.log(`  Grid points to fully cover: ${gridPointsToCover} (ensuring all ${industry.discovery_keywords.length} keywords per point)`);
+    console.log(`  Total search tasks: ${limitedSearchTasks.length}`);
 
     // STEP 3: Execute searches with stop conditions
     console.log(`[discoverBusinessesV2] ===== STARTING GOOGLE PLACES SEARCHES =====`);
@@ -362,8 +378,18 @@ export async function discoverBusinessesV2(
         try {
           // CRITICAL FIX: Add city name to query for better results
           // Google Places API works better with contextual queries
+          // Try multiple query formats for better coverage
           const cityName = city?.name || '';
-          const searchQuery = cityName ? `${task.keyword} ${cityName}` : task.keyword;
+          let searchQuery: string;
+          
+          // Use "keyword in city" format for better results (matches how users search)
+          if (cityName) {
+            // Try "keyword in City" format (e.g., "bakery in Athens")
+            searchQuery = `${task.keyword} in ${cityName}`;
+          } else {
+            searchQuery = task.keyword;
+          }
+          
           const radiusMeters = discoveryConfig.gridRadiusKm * 1000; // Convert km to meters
           
           console.log(`[discoverBusinessesV2] Searching: "${searchQuery}" at (${task.gridPoint.lat}, ${task.gridPoint.lng}) radius ${radiusMeters}m`);

@@ -10,7 +10,7 @@ export interface DiscoveryConfig {
   gridDensity: number; // Grid step size in km (default: 1.5km, creates overlapping coverage)
   
   // Search limits
-  maxSearchesPerDataset: number; // Maximum API calls per discovery (default: 500)
+  maxSearchesPerDataset: number; // Maximum API calls per discovery (default: 3000)
   minNewBusinessesPercent: number; // Stop if new businesses < X% (default: 2%)
   
   // Rate limiting
@@ -27,9 +27,9 @@ export interface DiscoveryConfig {
  */
 export const DEFAULT_DISCOVERY_CONFIG: DiscoveryConfig = {
   gridRadiusKm: 1.5, // 1.5km radius per grid point
-  gridDensity: 1.5, // 1.5km step (creates ~50% overlap)
-  maxSearchesPerDataset: 500, // Max API calls per discovery
-  minNewBusinessesPercent: 2, // Stop if <2% new businesses per batch
+  gridDensity: 1.2, // 1.2km step (creates more overlap, better coverage)
+  maxSearchesPerDataset: 3000, // Max API calls per discovery (increased for comprehensive coverage)
+  minNewBusinessesPercent: 1.5, // Stop if <1.5% new businesses per batch (lowered from 2%)
   concurrency: 3, // 3 concurrent requests
   requestDelayMs: 200, // 200ms delay between requests
   retryAttempts: 3, // 3 retries
