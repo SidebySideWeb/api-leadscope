@@ -118,17 +118,48 @@ export async function crawlWebsite(website: Website, crawlJob: CrawlJob): Promis
     try {
       // Add initial pages to crawl
       const baseUrl = new URL(website.url);
+      const baseUrlObj = new URL(website.url);
+      
+      // Always crawl homepage first (includes header and footer)
       urlsToCrawl.push({ url: website.url, pageType: 'homepage' });
       
-      const paths = ['/contact', '/about', '/company'];
-      for (const path of paths) {
+      // Expanded contact page patterns (Greek and English)
+      const contactPaths = [
+        '/contact',
+        '/contacts',
+        '/contact-us',
+        '/contactus',
+        '/επικοινωνια',
+        '/επικοινωνία',
+        '/επικοινωνηστε-μαζι-μα',
+        '/επικοινωνήστε-μαζί-μας',
+        '/epikoinonia',
+        '/epikoinonia-mas',
+        '/about',
+        '/company',
+        '/about-us',
+        '/σχετικα-μας',
+        '/σχετικά-μας'
+      ];
+      
+      for (const path of contactPaths) {
         try {
           const url = new URL(path, baseUrl).toString();
-          urlsToCrawl.push({ url, pageType: path.substring(1) as CrawlResult['pageType'] });
+          // Determine page type based on path
+          let pageType: CrawlResult['pageType'] = 'contact';
+          if (path.includes('about') || path.includes('σχετικ')) {
+            pageType = 'about';
+          } else if (path.includes('company') || path.includes('εταιρ')) {
+            pageType = 'company';
+          }
+          urlsToCrawl.push({ url, pageType });
         } catch {
           // Invalid URL, skip
         }
       }
+      
+      // Also try to find contact pages by crawling homepage and extracting links
+      // This will be done after homepage is crawled (see footer link extraction below)
 
       // Crawl pages
       while (urlsToCrawl.length > 0 && results.length < CRAWLER_MAX_PAGES) {
@@ -148,7 +179,7 @@ export async function crawlWebsite(website: Website, crawlJob: CrawlJob): Promis
           pageType
         });
 
-        // If this is the homepage, extract footer links
+        // If this is the homepage, extract footer links AND find contact-related links
         if (pageType === 'homepage') {
           const footerLinks = extractFooterLinks(html, website.url);
           for (const link of footerLinks) {
@@ -156,6 +187,37 @@ export async function crawlWebsite(website: Website, crawlJob: CrawlJob): Promis
               urlsToCrawl.push({ url: link, pageType: 'footer' });
             }
           }
+          
+          // Also extract contact-related links from navigation and body
+          const contactLinkPatterns = [
+            /contact/i,
+            /επικοινων/i,
+            /epikoinonia/i
+          ];
+          
+          $('a[href]').each((_, element) => {
+            const href = $(element).attr('href');
+            if (!href) return;
+            
+            try {
+              const absoluteUrl = new URL(href, baseUrl).toString();
+              if (new URL(absoluteUrl).hostname !== baseUrlObj.hostname) return;
+              
+              const linkText = $(element).text().toLowerCase();
+              const hrefLower = href.toLowerCase();
+              
+              // Check if link text or href contains contact-related keywords
+              const isContactLink = contactLinkPatterns.some(pattern => 
+                pattern.test(linkText) || pattern.test(hrefLower)
+              );
+              
+              if (isContactLink && !crawledUrls.has(absoluteUrl) && results.length < CRAWLER_MAX_PAGES) {
+                urlsToCrawl.push({ url: absoluteUrl, pageType: 'contact' });
+              }
+            } catch {
+              // Invalid URL, skip
+            }
+          });
         }
       }
 

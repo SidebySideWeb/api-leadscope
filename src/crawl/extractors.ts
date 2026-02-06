@@ -67,12 +67,45 @@ function normalizeEmail(email: string): string {
 /**
  * Extract emails from HTML
  * Checks specific sections: top bar, header, nav, body, footer
+ * Also extracts from schema.org JSON-LD
  */
 export function extractEmails(html: string, url: string, text?: string): ExtractedEmail[] {
   const emails = new Map<string, ExtractedEmail>();
   const $ = cheerio.load(html);
 
-  // Extract from mailto links (check all sections)
+  // STEP 1: Extract from schema.org JSON-LD (LocalBusiness)
+  try {
+    $('script[type="application/ld+json"]').each((_, el) => {
+      const jsonText = $(el).html();
+      if (!jsonText) return;
+      
+      try {
+        const json = JSON.parse(jsonText);
+        const schemas = Array.isArray(json) ? json : [json];
+        
+        for (const schema of schemas) {
+          if (schema['@type'] === 'LocalBusiness' || schema['@type'] === 'Organization') {
+            if (schema.email) {
+              const email = String(schema.email).toLowerCase().trim();
+              if (/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email)) {
+                emails.set(email, {
+                  value: email,
+                  source_url: url,
+                  context: 'schema.org JSON-LD'
+                });
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Invalid JSON, skip
+      }
+    });
+  } catch (e) {
+    // Error parsing JSON-LD, continue
+  }
+
+  // STEP 2: Extract from mailto links (check all sections)
   $('a[href^="mailto:"]').each((_, element) => {
     const href = $(element).attr('href');
     if (!href) return;
@@ -297,15 +330,15 @@ export function extractEmails(html: string, url: string, text?: string): Extract
 }
 
 /**
- * Greek phone patterns
+ * Greek phone patterns (improved)
  */
 const PHONE_PATTERNS = [
   // E.164: +30XXXXXXXXX
   /\b\+30\s*\d{10}\b/g,
   // Greek landlines: 210, 211, 212, etc. (10 digits total)
   /\b(?:210|211|212|213|214|215|216|217|218|219)\s*\d{7}\b/g,
-  // Greek mobiles: 69XXXXXXXX (10 digits)
-  /\b69\d{8}\b/g,
+  // Greek mobiles: 693, 694, 695, 690, 697 (10 digits starting with 69[03457])
+  /\b69[03457]\d{7}\b/g,
   // With spaces/dashes
   /\b(?:\+30|0030)?\s*(\d{2,3})\s*[-.\s]?\s*(\d{3,4})\s*[-.\s]?\s*(\d{4})\b/g
 ];
@@ -343,12 +376,45 @@ function normalizePhone(phone: string): string {
 /**
  * Extract phones from HTML
  * Checks specific sections: top bar, header, nav, body, footer
+ * Also extracts from schema.org JSON-LD
  */
 export function extractPhones(html: string, url: string): ExtractedPhone[] {
   const phones = new Map<string, ExtractedPhone>();
   const $ = cheerio.load(html);
 
-  // Extract from tel links (check all sections)
+  // STEP 1: Extract from schema.org JSON-LD (LocalBusiness)
+  try {
+    $('script[type="application/ld+json"]').each((_, el) => {
+      const jsonText = $(el).html();
+      if (!jsonText) return;
+      
+      try {
+        const json = JSON.parse(jsonText);
+        const schemas = Array.isArray(json) ? json : [json];
+        
+        for (const schema of schemas) {
+          if (schema['@type'] === 'LocalBusiness' || schema['@type'] === 'Organization') {
+            if (schema.telephone) {
+              const phone = String(schema.telephone).trim();
+              const normalized = normalizePhone(phone);
+              if (normalized) {
+                phones.set(normalized, {
+                  value: normalized,
+                  source_url: url
+                });
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Invalid JSON, skip
+      }
+    });
+  } catch (e) {
+    // Error parsing JSON-LD, continue
+  }
+
+  // STEP 2: Extract from tel links (check all sections)
   $('a[href^="tel:"]').each((_, element) => {
     const href = $(element).attr('href');
     if (!href) return;

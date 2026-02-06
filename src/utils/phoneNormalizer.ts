@@ -31,9 +31,18 @@ export function normalizePhone(phone: string): { normalized: string; isMobile: b
   }
 
   // Validate Greek mobile (69xxxxxxxx - 10 digits starting with 69)
-  if (cleaned.length === 10 && cleaned.startsWith('69')) {
+  // Also handle 693, 694, 695, 690, 697 patterns (all valid Greek mobile prefixes)
+  if (cleaned.length === 10 && /^69[03457]\d{7}$/.test(cleaned)) {
     return {
       normalized: `+30${cleaned}`,
+      isMobile: true
+    };
+  }
+  
+  // Also handle 9-digit numbers starting with 69 (missing leading 0)
+  if (cleaned.length === 9 && /^69[03457]\d{6}$/.test(cleaned)) {
+    return {
+      normalized: `+300${cleaned}`,
       isMobile: true
     };
   }

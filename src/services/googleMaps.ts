@@ -302,14 +302,15 @@ class GoogleMapsPlacesService implements GoogleMapsProvider {
 
       // Estimate radius based on city type
       // Larger administrative areas get larger radius
-      let radiusKm = 10; // Default radius
+      // DEFAULT: 15km for all cities (as per user requirement)
+      let radiusKm = 15; // Default radius - increased to 15km
       const types = cityPlace.types || [];
       if (types.includes('administrative_area_level_2')) {
         radiusKm = 20; // Regional unit - larger area
       } else if (types.includes('administrative_area_level_3')) {
         radiusKm = 15; // Municipality - medium area
       } else if (types.includes('locality')) {
-        radiusKm = 12; // City/town - smaller area
+        radiusKm = 15; // City/town - increased to 15km (was 12km)
       }
 
       console.log(`✓ Resolved coordinates for ${cityName}: ${lat}, ${lng} (radius: ${radiusKm}km)`);

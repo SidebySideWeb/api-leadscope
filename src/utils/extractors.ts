@@ -67,10 +67,60 @@ export function extractFromHtmlPage(
   const isFooter =
     lowerHtml.includes('<footer') || lowerHtml.includes('class="footer"');
 
-  // Emails: plain and mailto:
+  // STEP 1: Extract from schema.org JSON-LD (LocalBusiness)
+  try {
+    $('script[type="application/ld+json"]').each((_, el) => {
+      const jsonText = $(el).html();
+      if (!jsonText) return;
+      
+      try {
+        const json = JSON.parse(jsonText);
+        const schemas = Array.isArray(json) ? json : [json];
+        
+        for (const schema of schemas) {
+          if (schema['@type'] === 'LocalBusiness' || schema['@type'] === 'Organization') {
+            // Extract email
+            if (schema.email) {
+              const email = String(schema.email).toLowerCase().trim();
+              if (EMAIL_REGEX.test(email)) {
+                const { normalized: classified } = classifyEmail(email);
+                items.push({
+                  type: 'email',
+                  value: classified,
+                  sourceUrl: url,
+                  confidence: 0.95 // High confidence from structured data
+                });
+              }
+            }
+            
+            // Extract phone
+            if (schema.telephone) {
+              const phone = String(schema.telephone).trim();
+              const normalizedPhone = normalizePhone(phone);
+              if (normalizedPhone) {
+                items.push({
+                  type: 'phone',
+                  value: normalizedPhone.normalized,
+                  sourceUrl: url,
+                  confidence: 0.95 // High confidence from structured data
+                });
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Invalid JSON, skip
+      }
+    });
+  } catch (e) {
+    // Error parsing JSON-LD, continue
+  }
+
+  // STEP 2: Extract emails: plain, mailto:, and @domain patterns
   const emailSet = new Set<string>();
   const obfuscatedSet = new Set<string>();
 
+  // Standard email regex
   const matches = html.match(EMAIL_REGEX) || [];
   for (const raw of matches) {
     const normalized = raw.toLowerCase().trim();
@@ -88,10 +138,10 @@ export function extractFromHtmlPage(
       value: classified,
       sourceUrl: url,
       confidence,
-      // platform unused for email
     });
   }
 
+  // Extract from mailto: links
   $('a[href^="mailto:"]').each((_, el) => {
     const href = $(el).attr('href');
     if (!href) return;
@@ -113,6 +163,29 @@ export function extractFromHtmlPage(
       confidence
     });
   });
+  
+  // Extract @domain patterns (looks like email but might be incomplete)
+  // Pattern: word@domain (where domain looks like a real domain)
+  const atDomainPattern = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/g;
+  const atDomainMatches = html.match(atDomainPattern) || [];
+  for (const raw of atDomainMatches) {
+    const normalized = raw.toLowerCase().trim();
+    if (!normalized) continue;
+    if (emailSet.has(normalized)) continue;
+    emailSet.add(normalized);
+
+    const { normalized: classified } = classifyEmail(normalized);
+    const confidence = scoreConfidence(url, 'email', {
+      isFooter
+    });
+
+    items.push({
+      type: 'email',
+      value: classified,
+      sourceUrl: url,
+      confidence: confidence * 0.9 // Slightly lower confidence for @domain patterns
+    });
+  }
 
   // Obfuscated emails (simple patterns)
   let obMatch: RegExpExecArray | null;
@@ -137,11 +210,33 @@ export function extractFromHtmlPage(
     });
   }
 
-  // Phones (Greek + basic international)
+  // STEP 3: Extract phones (Greek + international)
   const phoneSet = new Set<string>();
 
+  // Extract from tel: links first (highest confidence)
+  $('a[href^="tel:"]').each((_, el) => {
+    const href = $(el).attr('href');
+    if (!href) return;
+    const raw = href.replace(/^tel:/i, '').split('?')[0].trim();
+    if (!raw) return;
+    const normalizedPhone = normalizePhone(raw);
+    if (!normalizedPhone) return;
+    
+    const normalized = normalizedPhone.normalized;
+    if (phoneSet.has(normalized)) return;
+    phoneSet.add(normalized);
+
+    items.push({
+      type: 'phone',
+      value: normalized,
+      sourceUrl: url,
+      confidence: 0.95 // High confidence from tel: links
+    });
+  });
+
+  // Greek phone patterns: +30, 0030, 69X, 210, etc.
   const phoneRegex =
-    /(?:\+?\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)\d{3,4}[\s.-]?\d{3,4}/g;
+    /(?:\+30|0030|30)?[\s.-]?(?:\(?\d{2,4}\)?[\s.-]?)?(?:(?:69[03457]\d{7})|(?:\d{2,3}[\s.-]?\d{3,4}[\s.-]?\d{4}))/g;
   let phoneMatch: RegExpExecArray | null;
 
   while ((phoneMatch = phoneRegex.exec(html)) !== null) {
