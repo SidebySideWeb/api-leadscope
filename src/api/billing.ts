@@ -39,30 +39,53 @@ router.get('/credits', authMiddleware, async (req: AuthRequest, res) => {
 router.get('/usage', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.userId!;
-    const usage = await getCurrentMonthlyUsage(userId);
-    const limits = await getEffectivePlanLimits(userId);
     
-    // Get credit consumption breakdown
-    const creditBreakdown = await pool.query<{
-      reason: string;
-      total_consumed: string;
-    }>(
-      `SELECT 
-        reason,
-        SUM(ABS(amount)) as total_consumed
-      FROM credit_transactions
-      WHERE user_id = $1
-        AND amount < 0
-        AND created_at >= date_trunc('month', CURRENT_DATE)
-      GROUP BY reason
-      ORDER BY total_consumed DESC`,
-      [userId]
-    );
+    let usage, limits;
+    try {
+      usage = await getCurrentMonthlyUsage(userId);
+    } catch (usageError: any) {
+      console.error('[billing] Error getting monthly usage:', usageError);
+      throw new Error(`Failed to get usage: ${usageError.message}`);
+    }
+    
+    try {
+      limits = await getEffectivePlanLimits(userId);
+    } catch (limitsError: any) {
+      console.error('[billing] Error getting plan limits:', limitsError);
+      throw new Error(`Failed to get limits: ${limitsError.message}`);
+    }
+    
+    // Get credit consumption breakdown (handle case where table might not exist)
+    let consumptionByFeature: Array<{ feature: string; credits: number }> = [];
+    try {
+      const creditBreakdown = await pool.query<{
+        reason: string;
+        total_consumed: string;
+      }>(
+        `SELECT 
+          reason,
+          SUM(ABS(amount)) as total_consumed
+        FROM credit_transactions
+        WHERE user_id = $1
+          AND amount < 0
+          AND created_at >= date_trunc('month', CURRENT_DATE)
+        GROUP BY reason
+        ORDER BY total_consumed DESC`,
+        [userId]
+      );
 
-    const consumptionByFeature = creditBreakdown.rows.map(row => ({
-      feature: row.reason,
-      credits: parseInt(row.total_consumed || '0', 10),
-    }));
+      consumptionByFeature = creditBreakdown.rows.map(row => ({
+        feature: row.reason,
+        credits: parseInt(row.total_consumed || '0', 10),
+      }));
+    } catch (creditError: any) {
+      // If credit_transactions table doesn't exist yet, just return empty array
+      console.warn('[billing] Could not fetch credit breakdown (table may not exist):', creditError.message);
+      consumptionByFeature = [];
+    }
+
+    // Convert Number.MAX_SAFE_INTEGER to null for JSON (Infinity is not JSON-serializable)
+    const isUnlimited = (value: number) => value === Number.MAX_SAFE_INTEGER;
 
     res.json({
       usage: {
@@ -71,16 +94,17 @@ router.get('/usage', authMiddleware, async (req: AuthRequest, res) => {
         datasets: usage.datasets,
       },
       limits: {
-        crawls: limits.crawls === Infinity ? null : limits.crawls,
-        exports: limits.exports === Infinity ? null : limits.exports,
-        datasets: limits.datasets === Infinity ? null : limits.datasets,
-        businessesPerDataset: limits.businessesPerDataset === Infinity ? null : limits.businessesPerDataset,
+        crawls: isUnlimited(limits.crawls) ? null : limits.crawls,
+        exports: isUnlimited(limits.exports) ? null : limits.exports,
+        datasets: isUnlimited(limits.datasets) ? null : limits.datasets,
+        businessesPerDataset: isUnlimited(limits.businessesPerDataset) ? null : limits.businessesPerDataset,
       },
       consumptionByFeature,
     });
   } catch (error: any) {
     console.error('[billing] Error fetching usage:', error);
-    res.status(500).json({ error: 'Failed to fetch usage data' });
+    console.error('[billing] Error stack:', error.stack);
+    res.status(500).json({ error: 'Failed to fetch usage data', message: error.message });
   }
 });
 
