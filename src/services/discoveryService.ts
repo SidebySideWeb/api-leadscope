@@ -1,5 +1,5 @@
 import type { DiscoveryJobInput, JobResult } from '../types/jobs.js';
-import { discoverBusinessesVrisko } from '../discovery/vriskoDiscoveryWorker.js';
+import { runVriskoDiscovery } from '../discovery/vriskoWorker.js';
 import { createCrawlJob } from '../db/crawlJobs.js';
 import { pool } from '../config/database.js';
 import type { Website } from '../types/index.js';
@@ -219,57 +219,24 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       throw new Error('Could not resolve industry_id or city_id');
     }
 
-    // Run discovery using vrisko.gr (ONLY source - no Google Maps)
-    console.log(`[runDiscoveryJob] Calling discoverBusinessesVrisko with:`, {
-      industry_id: finalIndustryId,
-      city_id: finalCityId,
-      datasetId: datasetId,
-      discoveryRunId: discoveryRun.id
-    });
+    // Run Vrisko discovery directly (synchronous for now)
+    // This creates discovery_run, crawls vrisko, and stores businesses
+    console.log(`[runDiscoveryJob] Running Vrisko discovery for dataset: ${datasetId}`);
     
-    const discoveryResult = await discoverBusinessesVrisko(
-      finalCityId,
-      finalIndustryId,
-      datasetId,
-      discoveryRun.id
-    );
+    const discoveryResult = await runVriskoDiscovery(datasetId);
     
-    console.log(`[runDiscoveryJob] discoverBusinessesVrisko completed:`, {
+    console.log(`[runDiscoveryJob] Vrisko discovery completed:`, {
       businessesFound: discoveryResult.businessesFound,
       businessesCreated: discoveryResult.businessesCreated,
       businessesUpdated: discoveryResult.businessesUpdated,
       searchesExecuted: discoveryResult.searchesExecuted,
-      errors: discoveryResult.errors.length
+      errors: discoveryResult.errors.length,
     });
 
     // Mark dataset as refreshed after successful discovery
     if (!isReused || discoveryResult.businessesCreated > 0) {
       await markDatasetRefreshed(datasetId);
       console.log(`[runDiscoveryJob] Marked dataset as refreshed: ${datasetId}`);
-    }
-
-    // CRITICAL: Discovery MUST ALWAYS complete
-    // Mark discovery_run as completed after all businesses are processed
-    // Extraction jobs will be processed separately by extraction worker
-    // NOTE: discoveryWorker also marks discovery_run as completed after enqueuing extraction jobs
-    // This is idempotent - both updates will result in 'completed' status
-    const { getExtractionJobsByDiscoveryRunId } = await import('../db/extractionJobs.js');
-    const extractionJobs = await getExtractionJobsByDiscoveryRunId(discoveryRun.id);
-    
-    console.log(`[runDiscoveryJob] Found ${extractionJobs.length} extraction jobs for discovery_run: ${discoveryRun.id}`);
-    
-    // ALWAYS mark discovery_run as completed after processing
-    // Even if 0 businesses were found or 0 extraction jobs were created
-    await updateDiscoveryRun(discoveryRun.id, {
-      status: 'completed',
-      completed_at: new Date()
-    });
-    console.log(`[runDiscoveryJob] Marked discovery_run as completed: ${discoveryRun.id}`);
-    
-    if (extractionJobs.length > 0) {
-      console.log(`[runDiscoveryJob] ${extractionJobs.length} extraction jobs will be processed by extraction worker`);
-    } else {
-      console.log(`[runDiscoveryJob] No extraction jobs created (no new businesses found)`);
     }
 
     // Get count of websites created
@@ -328,8 +295,9 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         businesses_found: discoveryResult.businessesFound,
         businesses_created: discoveryResult.businessesCreated,
         businesses_updated: discoveryResult.businessesUpdated,
-        pages_crawled: discoveryResult.pagesCrawled,
         searches_executed: discoveryResult.searchesExecuted,
+        contacts_created: discoveryResult.contactsCreated,
+        extraction_jobs_created: discoveryResult.extractionJobsCreated,
         // Note: websites_created removed - websites are created in extraction phase
         crawl_jobs_created: crawlJobsCreated,
         duration_seconds: (endTime.getTime() - startTime.getTime()) / 1000,
