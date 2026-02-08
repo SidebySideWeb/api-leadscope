@@ -4,7 +4,8 @@
  * Replaces Google Places API for contact details
  */
 
-import { VriskoCrawler, type VriskoBusiness } from '../crawler/vrisko/vriskoCrawler.js';
+import { VriskoCrawler } from '../crawler/vrisko/vriskoCrawler.js';
+import type { VriskoBusiness } from '../crawler/vrisko/vriskoParser.js';
 import type { GooglePlaceResult } from '../types/index.js';
 import { Logger } from '../crawler/vrisko/utils/logger.js';
 

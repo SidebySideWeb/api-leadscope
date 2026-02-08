@@ -40,7 +40,7 @@ export class VriskoParser {
   /**
    * Parses a single listing from .AdvItemBox
    */
-  private parseListing($: cheerio.CheerioAPI, $listing: cheerio.Cheerio<cheerio.Element>, baseUrl: string): VriskoBusiness | null {
+  private parseListing($: cheerio.CheerioAPI, $listing: cheerio.Cheerio<any>, baseUrl: string): VriskoBusiness | null {
     try {
       // Business Name
       const nameElement = $listing.find('h2.CompanyName a.nav-company');

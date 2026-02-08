@@ -8,6 +8,7 @@
  */
 
 import { pool } from '../config/database.js';
+import type { Business } from '../types/index.js';
 import { shouldCrawlBusiness, getBusinessesNeedingCrawl } from '../db/businessesShared.js';
 
 /**
@@ -26,7 +27,7 @@ export async function shouldCrawlBusinessByTTL(businessId: number): Promise<bool
  */
 export async function getBusinessesNeedingCrawlByTTL(limit: number = 100): Promise<number[]> {
   const businesses = await getBusinessesNeedingCrawl(limit);
-  return businesses.map(b => b.id);
+  return businesses.map((b: Business) => b.id);
 }
 
 /**
