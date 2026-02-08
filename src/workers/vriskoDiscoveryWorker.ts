@@ -350,7 +350,7 @@ export async function processVriskoDiscoveryQueue(): Promise<void> {
 
           if (!claimedJob) {
             // Job was already claimed by another worker
-            logger.debug(`Job ${job.id} already claimed by another worker`);
+            logger.info(`Job ${job.id} already claimed by another worker`);
             return;
           }
 

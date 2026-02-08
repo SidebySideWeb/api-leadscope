@@ -216,3 +216,67 @@ export async function assertCanRunExport(userId: string): Promise<void> {
     throw error;
   }
 }
+
+/**
+ * Get current monthly usage for a user
+ */
+export async function getCurrentMonthlyUsage(userId: string): Promise<{
+  crawls: number;
+  exports: number;
+  datasets: number;
+}> {
+  const usage = await getUserUsage(userId);
+  return {
+    crawls: usage.crawls_this_month || 0,
+    exports: usage.exports_this_month || 0,
+    datasets: usage.datasets_created_this_month || 0,
+  };
+}
+
+/**
+ * Get effective plan limits for a user (bypasses limits for internal users)
+ */
+export async function getEffectivePlanLimits(userId: string): Promise<{
+  credits: number;
+  crawls: number;
+  exports: number;
+  datasets: number;
+  businessesPerDataset: number;
+}> {
+  const isInternal = await isInternalUser(userId);
+  if (isInternal) {
+    return {
+      credits: Number.MAX_SAFE_INTEGER,
+      crawls: Number.MAX_SAFE_INTEGER,
+      exports: Number.MAX_SAFE_INTEGER,
+      datasets: Number.MAX_SAFE_INTEGER,
+      businessesPerDataset: Number.MAX_SAFE_INTEGER,
+    };
+  }
+
+  const permissions = await getUserPermissions(userId);
+  const planLimits = getPlanLimits(permissions.plan);
+  
+  return {
+    credits: planLimits.credits === Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : planLimits.credits,
+    crawls: planLimits.crawls === Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : planLimits.crawls,
+    exports: planLimits.exports === Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : planLimits.exports,
+    datasets: planLimits.datasets === Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : planLimits.datasets,
+    businessesPerDataset: planLimits.businessesPerDataset === 'unlimited' || planLimits.businessesPerDataset === Number.MAX_SAFE_INTEGER 
+      ? Number.MAX_SAFE_INTEGER 
+      : planLimits.businessesPerDataset as number,
+  };
+}
+
+/**
+ * Get current number of businesses in a dataset
+ */
+export async function getDatasetBusinessCount(datasetId: string): Promise<number> {
+  const result = await pool.query<{ count: string }>(
+    `SELECT COUNT(*) as count
+     FROM businesses
+     WHERE dataset_id = $1`,
+    [datasetId]
+  );
+  return parseInt(result.rows[0]?.count || '0', 10);
+}

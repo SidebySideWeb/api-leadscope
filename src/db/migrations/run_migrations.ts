@@ -4,7 +4,7 @@
  * Usage: npm run migrate
  */
 
-import { pool } from '../config/database.js';
+import { pool } from '../../config/database.js';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { fileURLToPath } from 'url';

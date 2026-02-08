@@ -27,7 +27,7 @@ import { VriskoCrawler } from '../crawler/vrisko/vriskoCrawler.js';
 import type { VriskoBusiness } from '../crawler/vrisko/vriskoParser.js';
 import { normalizeBusinessName } from '../utils/normalizeBusinessName.js';
 import { Logger } from '../crawler/vrisko/utils/logger.js';
-import { enforceDiscoveryRun } from '../services/enforcementService.js';
+import { enforceDiscoveryRun, enforceDatasetSize } from '../services/enforcementService.js';
 import { consumeCredits } from '../services/creditService.js';
 import { calculateDiscoveryCost } from '../config/creditCostConfig.js';
 import { incrementCrawls } from '../db/usageTracking.js';
@@ -84,12 +84,6 @@ export async function runVriskoDiscovery(datasetId: string): Promise<VriskoDisco
 
     logger.info(`Created discovery run ${discoveryRun.id}`);
 
-    // STEP 2.5: Enforce limits and estimate credit cost
-    // Estimate businesses (rough estimate: 20 per keyword per city-industry combination)
-    const estimatedBusinesses = cities.length * industries.length * 20;
-    await enforceDiscoveryRun(dataset.user_id, estimatedBusinesses);
-    logger.info(`Enforcement passed: estimated ${estimatedBusinesses} businesses`);
-
     // STEP 3: Load targets (cities and industries)
     const citiesQuery = dataset.city_id
       ? pool.query<{ id: string; name: string; vrisko_search?: string; is_active?: boolean }>(
@@ -114,6 +108,12 @@ export async function runVriskoDiscovery(datasetId: string): Promise<VriskoDisco
     const industries = industriesResult.rows;
 
     logger.info(`Loaded ${cities.length} cities and ${industries.length} industries`);
+
+    // STEP 3.5: Enforce limits and estimate credit cost
+    // Estimate businesses (rough estimate: 20 per keyword per city-industry combination)
+    const estimatedBusinesses = cities.length * industries.length * 20;
+    await enforceDiscoveryRun(dataset.user_id, estimatedBusinesses);
+    logger.info(`Enforcement passed: estimated ${estimatedBusinesses} businesses`);
 
     if (cities.length === 0) {
       throw new Error('No active cities found');
@@ -373,7 +373,7 @@ async function processVriskoBusiness(
       }
     } catch (error: any) {
       // Ignore if columns don't exist - we'll use contacts instead
-      logger.debug(`Could not update business phone/email directly: ${error.message}`);
+      logger.info(`Could not update business phone/email directly: ${error.message}`);
     }
   }
 
