@@ -21,6 +21,7 @@
     "migrate:city-coords": "tsx src/db/migrations/run.ts add_city_coordinates.sql",
     "migrate:job-types": "tsx src/db/migrations/run.ts add_job_types.sql",
     "migrate:vrisko-jobs": "tsx src/db/migrations/run_migrations.ts",
+    "migrate:credit-transactions": "tsx src/db/migrations/run_credit_transactions_migration.ts",
     "refresh": "tsx src/cli/refresh.ts",
     "scheduler:start": "tsx src/cli/scheduler.ts",
     "export": "tsx src/cli/export.ts",
