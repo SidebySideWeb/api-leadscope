@@ -248,15 +248,38 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
       const needsPhone = !foundPhoneFromPages;
       const needsEmail = !foundEmailFromPages;
       
-      // Fallback to Place Details if:
-      // 1. Crawling completely failed (no pages), OR
-      // 2. We didn't find phone (Place Details can provide phone), OR
-      // 3. We didn't find website (Place Details can provide website)
+      // CRITICAL: Check if we already have phone/website in DB from previous runs
+      // This prevents unnecessary Place Details API calls (costs money!)
+      const existingDataCheck = await pool.query<{
+        has_website: boolean;
+        has_phone: boolean;
+      }>(
+        `SELECT 
+          EXISTS(SELECT 1 FROM websites WHERE business_id = $1) as has_website,
+          EXISTS(
+            SELECT 1 FROM contact_sources cs
+            JOIN contacts c ON cs.contact_id = c.id
+            WHERE cs.business_id = $1 AND c.contact_type IN ('phone', 'mobile')
+          ) as has_phone
+        `,
+        [business.id]
+      );
+      
+      const alreadyHasWebsite = existingDataCheck.rows[0]?.has_website === true;
+      const alreadyHasPhone = existingDataCheck.rows[0]?.has_phone === true;
+      
+      // Only call Place Details if:
+      // 1. Crawling completely failed (no pages) AND we don't already have website/phone in DB, OR
+      // 2. We didn't find phone from pages AND we don't already have phone in DB, OR
+      // 3. We didn't find website from pages AND we don't already have website in DB
       // Note: Place Details doesn't provide emails, so if we only need email, we can't get it from Place Details
-      const shouldUsePlaceDetails = crawlingFailed || needsPhone || needsWebsite;
+      const shouldUsePlaceDetails = 
+        (crawlingFailed && (!alreadyHasWebsite || !alreadyHasPhone)) ||
+        (needsPhone && !alreadyHasPhone) ||
+        (needsWebsite && !alreadyHasWebsite);
       
       if (shouldUsePlaceDetails) {
-        console.log(`[processExtractionJob] Falling back to Place Details API for business ${business.id} (crawlingFailed: ${crawlingFailed}, needsWebsite: ${needsWebsite}, needsPhone: ${needsPhone}, needsEmail: ${needsEmail})`);
+        console.log(`[processExtractionJob] Falling back to Place Details API for business ${business.id} (crawlingFailed: ${crawlingFailed}, needsWebsite: ${needsWebsite} [alreadyHas: ${alreadyHasWebsite}], needsPhone: ${needsPhone} [alreadyHas: ${alreadyHasPhone}], needsEmail: ${needsEmail})`);
       
         try {
           const placeDetails = await googleMapsService.getPlaceDetails(business.google_place_id);

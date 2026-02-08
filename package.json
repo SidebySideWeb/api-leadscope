@@ -29,6 +29,8 @@
     "test:e2e": "tsx src/cli/testE2E.ts",
     "test:google-places": "tsx scripts/testGooglePlaces.ts",
     "test:google-places-discovery": "tsx scripts/testGooglePlacesDiscovery.ts",
+    "check:jobs": "tsx scripts/check-running-jobs.ts",
+    "stop:jobs": "tsx scripts/stop-all-jobs.ts",
     "migrate:exports": "tsx src/db/migrations/run.ts create_exports_table.sql",
     "migrate:ownership": "tsx src/db/migrations/run.ts add_business_ownership.sql",
     "migrate:google-place-unique": "tsx src/db/migrations/run.ts add_google_place_unique.sql",
