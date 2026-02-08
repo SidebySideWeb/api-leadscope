@@ -1,20 +1,26 @@
-# Vrisko.gr Integration - Primary Discovery Source
+# Database-First Discovery with Vrisko.gr Fallback
 
 ## Overview
 
-vrisko.gr is now the **PRIMARY** source for business discovery and contact extraction. Google Places API is used only as a **SECONDARY fallback** for business lists and websites.
+The system now uses a **DATABASE-FIRST** approach for discovery:
+1. **Database** → Check existing businesses matching industry + city
+2. **vrisko.gr** → Only if database has < 50 results
+3. **Google Places API** → REMOVED (no longer used)
+
+This eliminates all Google Places API costs and reuses existing data.
 
 ## Architecture Changes
 
-### 1. Discovery Flow (Primary → Fallback)
+### 1. Discovery Flow (Database → Vrisko → Never Google)
 
 **Before:**
 - Google Places API → Primary source
 - High API costs
 
 **After:**
-- **vrisko.gr** → Primary source (FREE)
-- **Google Places API** → Fallback only if vrisko returns no results
+- **Database** → Primary source (FREE, instant)
+- **vrisko.gr** → Secondary source (FREE, only if DB has < 50 results)
+- **Google Places API** → REMOVED (no longer used)
 
 ### 2. Contact Extraction Flow
 
@@ -89,30 +95,35 @@ Discovery automatically uses vrisko.gr first:
 - **Extraction**: Google Place Details ($0.017 per call) for phone/email/website
 
 ### After:
-- **Discovery**: vrisko.gr (FREE) → Google Places (fallback only)
-- **Extraction**: vrisko.gr contacts (FREE) → Website crawling (FREE) → Place Details (websites only, fallback)
+- **Discovery**: Database (FREE, instant) → vrisko.gr (FREE, only if needed)
+- **Extraction**: Database contacts (FREE) → vrisko.gr contacts (FREE) → Website crawling (FREE) → Place Details (websites only, fallback)
 
-**Estimated savings**: 80-90% reduction in Google Places API costs
+**Cost savings**: **100% reduction** in Google Places API costs for discovery. Zero API calls for discovery.
 
 ## Data Flow
 
 ```
-Discovery Request
+Discovery Request (industry_id + city_id)
     ↓
-Try vrisko.gr (keyword + location)
+STEP 1: Check Database
+    ↓
+Found businesses? → YES → Use database businesses (with contacts)
+    ↓ NO (or < 50 results)
+STEP 2: Try vrisko.gr (keyword + location)
     ↓
 Found results? → YES → Use vrisko data (phones, email, website)
     ↓ NO
-Fallback to Google Places API
+Return combined results (DB + vrisko)
     ↓
-Create/Update Business
+Create/Update Business (if new from vrisko)
     ↓
-Extraction Job Created
+Extraction Job Created (only if needed)
     ↓
 Extract contacts from:
-    1. vrisko.gr data (if available)
-    2. Website crawling
-    3. Place Details (websites only, if needed)
+    1. Database (already has contacts)
+    2. vrisko.gr data (if available)
+    3. Website crawling
+    4. Place Details (websites only, if needed)
 ```
 
 ## Future Enhancements

@@ -9,6 +9,124 @@
 import { pool } from '../config/database.js';
 import type { Business } from '../types/index.js';
 import { normalizeBusinessName } from '../utils/normalizeBusinessName.js';
+import type { GooglePlaceResult } from '../types/index.js';
+
+/**
+ * Search businesses in database by industry_id and city_id
+ * Returns businesses in GooglePlaceResult format for compatibility
+ * This is the PRIMARY discovery method - check DB first before external sources
+ */
+export async function searchBusinessesInDatabase(
+  industryId: string,
+  cityId: string,
+  limit?: number
+): Promise<GooglePlaceResult[]> {
+  // Query businesses with aggregated contacts and websites
+  const query = `
+    SELECT DISTINCT ON (b.id)
+      b.id,
+      b.name,
+      b.normalized_name,
+      b.address,
+      b.postal_code,
+      b.city_id,
+      b.industry_id,
+      b.google_place_id,
+      b.latitude,
+      b.longitude,
+      b.rating,
+      b.user_rating_count,
+      (
+        SELECT w.url 
+        FROM websites w 
+        WHERE w.business_id = b.id 
+        LIMIT 1
+      ) as website,
+      (
+        SELECT c.phone 
+        FROM contact_sources cs
+        JOIN contacts c ON c.id = cs.contact_id
+        WHERE cs.business_id = b.id::text 
+          AND c.contact_type IN ('phone', 'mobile')
+          AND c.phone IS NOT NULL
+        LIMIT 1
+      ) as phone,
+      (
+        SELECT c.email 
+        FROM contact_sources cs
+        JOIN contacts c ON c.id = cs.contact_id
+        WHERE cs.business_id = b.id::text 
+          AND c.contact_type = 'email'
+          AND c.email IS NOT NULL
+        LIMIT 1
+      ) as email
+    FROM businesses b
+    WHERE b.industry_id = $1
+      AND b.city_id = $2
+      AND b.is_active = TRUE
+    ORDER BY b.id, b.created_at DESC
+    ${limit ? `LIMIT ${limit}` : ''}
+  `;
+
+  const result = await pool.query(query, [industryId, cityId]);
+  
+  // Convert to GooglePlaceResult format
+  const businesses: GooglePlaceResult[] = [];
+
+  for (const row of result.rows) {
+    // Build address components
+    const addressComponents: Array<{
+      types: string[];
+      long_name: string;
+      short_name: string;
+    }> = [];
+
+    if (row.address) {
+      // Try to parse address into components
+      const addressParts = row.address.split(',');
+      if (addressParts.length > 0) {
+        addressComponents.push({
+          types: ['street_address'],
+          long_name: addressParts[0].trim(),
+          short_name: addressParts[0].trim(),
+        });
+      }
+      if (addressParts.length > 1) {
+        addressComponents.push({
+          types: ['locality'],
+          long_name: addressParts[1].trim(),
+          short_name: addressParts[1].trim(),
+        });
+      }
+    }
+
+    if (row.postal_code) {
+      addressComponents.push({
+        types: ['postal_code'],
+        long_name: row.postal_code,
+        short_name: row.postal_code,
+      });
+    }
+
+    businesses.push({
+      place_id: row.google_place_id || `db_${row.id}`, // Use DB ID if no google_place_id
+      name: row.name,
+      formatted_address: row.address || '',
+      website: row.website || undefined,
+      international_phone_number: row.phone || undefined,
+      address_components: addressComponents.length > 0 ? addressComponents : undefined,
+      rating: row.rating || undefined,
+      user_rating_count: row.user_rating_count || undefined,
+      latitude: row.latitude || undefined,
+      longitude: row.longitude || undefined,
+      // Store DB ID and email for reference
+      _db_id: row.id,
+      _db_email: row.email || undefined,
+    } as GooglePlaceResult & { _db_id?: number; _db_email?: string });
+  }
+
+  return businesses;
+}
 
 /**
  * Get business by Google Place ID (global lookup, not per-dataset)
@@ -21,471 +139,4 @@ export async function getBusinessByGooglePlaceIdGlobal(
     [google_place_id]
   );
   return result.rows[0] || null;
-}
-
-/**
- * Upsert business globally by google_place_id
- * 
- * This is the core function for discovery - it ensures businesses are:
- * - Unique globally (by google_place_id)
- * - Enriched with latest metadata
- * - Never duplicated
- * 
- * Behavior:
- * - If business exists (by google_place_id) → UPDATE metadata, set last_discovered_at
- * - If business is new → INSERT with crawl_status = 'pending'
- * 
- * Discovery MUST NOT:
- * - Trigger crawling
- * - Fetch Place Details
- * - Fetch contact information
- */
-export async function upsertBusinessGlobal(data: {
-  name: string;
-  normalized_name?: string; // Optional - will be generated from name if missing
-  address: string | null;
-  postal_code: string | null;
-  city_id: string; // UUID - REQUIRED (NOT NULL)
-  industry_id: string; // UUID - REQUIRED (NOT NULL)
-  dataset_id: string; // UUID - REQUIRED (NOT NULL)
-  google_place_id: string; // REQUIRED for global deduplication
-  owner_user_id?: string; // UUID - REQUIRED (NOT NULL in DB) - dataset owner user_id
-  discovery_run_id?: string | null; // UUID - Optional - links business to discovery run
-  latitude?: number | null;
-  longitude?: number | null;
-  rating?: number | null;
-  user_rating_count?: number | null;
-}): Promise<{ business: Business; wasUpdated: boolean; wasNew: boolean }> {
-  // CRITICAL: Fail-fast guard - all required fields must be provided from discovery context
-  if (!data.city_id || data.city_id.trim().length === 0) {
-    throw new Error(`Invalid business insert: missing city_id for business "${data.name}" - City ID must be provided from discovery context`);
-  }
-
-  if (!data.industry_id || data.industry_id.trim().length === 0) {
-    throw new Error(`Invalid business insert: missing industry_id for business "${data.name}" - Industry ID must be provided from discovery context`);
-  }
-
-  if (!data.dataset_id || data.dataset_id.trim().length === 0) {
-    throw new Error(`Invalid business insert: missing dataset_id for business "${data.name}" - Dataset ID must be provided from discovery context`);
-  }
-
-  if (!data.owner_user_id || data.owner_user_id.trim().length === 0) {
-    throw new Error(`Invalid business insert: missing owner_user_id for business "${data.name}" - Owner user ID must be provided (typically from dataset.user_id)`);
-  }
-
-  if (!data.google_place_id) {
-    throw new Error('google_place_id is required for global business upsert');
-  }
-
-  // CRITICAL: normalized_name is NOT NULL in database - missing this causes silent rollbacks
-  // If normalized_name is provided → trust it
-  // If missing → generate it internally using name
-  // If both missing → throw a hard error
-  let normalized_name: string;
-  if (data.normalized_name) {
-    // Trust provided normalized_name
-    normalized_name = data.normalized_name;
-  } else {
-    if (!data.name) {
-      throw new Error('Cannot generate normalized_name without name');
-    }
-    normalized_name = normalizeBusinessName(data.name);
-  }
-  
-  // Ensure normalized_name is never empty
-  if (!normalized_name || normalized_name.trim().length === 0) {
-    throw new Error(`Failed to generate normalized_name for business "${data.name}" - this will cause silent insert failures`);
-  }
-
-  // DEBUG: Log database info before insert
-  const dbInfo = await pool.query<{ db: string; user: string }>(
-    `SELECT current_database() as db, current_user as user`
-  );
-  console.log('DB INFO FROM APP', dbInfo.rows[0]);
-
-  // CRITICAL DEBUG: Log all values BEFORE INSERT to identify NOT NULL violations
-  console.log('[upsertBusinessGlobal] ===== BEFORE INSERT =====');
-  console.log('[upsertBusinessGlobal] Function: upsertBusinessGlobal');
-  console.log('[upsertBusinessGlobal] File: src/db/businessesShared.ts');
-  console.log('[upsertBusinessGlobal] name:', data.name);
-  console.log('[upsertBusinessGlobal] normalized_name:', normalized_name);
-  console.log('[upsertBusinessGlobal] city_id:', data.city_id);
-  console.log('[upsertBusinessGlobal] industry_id:', data.industry_id);
-  console.log('[upsertBusinessGlobal] dataset_id:', data.dataset_id);
-  console.log('[upsertBusinessGlobal] google_place_id:', data.google_place_id);
-  console.log('[upsertBusinessGlobal] address:', data.address);
-  console.log('[upsertBusinessGlobal] postal_code:', data.postal_code);
-  console.log('[upsertBusinessGlobal] Full data object:', JSON.stringify({
-    name: data.name,
-    normalized_name,
-    city_id: data.city_id,
-    industry_id: data.industry_id,
-    dataset_id: data.dataset_id,
-    google_place_id: data.google_place_id,
-    address: data.address,
-    postal_code: data.postal_code,
-    latitude: data.latitude,
-    longitude: data.longitude
-  }, null, 2));
-  console.log('[upsertBusinessGlobal] =========================');
-
-  // Prepare parameter values for INSERT
-  const insertValues = [
-    data.name,
-    normalized_name,
-    data.address,
-    data.postal_code,
-    data.city_id,
-    data.industry_id,
-    data.dataset_id,
-    data.google_place_id,
-    data.owner_user_id, // REQUIRED: owner_user_id is NOT NULL in database
-    data.discovery_run_id || null, // Optional: links business to discovery run
-    data.latitude || null,
-    data.longitude || null
-  ];
-
-  // CRITICAL DEBUG: Log actual parameter values being passed to INSERT
-  console.log('[upsertBusinessGlobal] INSERT VALUES ARRAY:');
-  console.log('[upsertBusinessGlobal]   $1 (name):', insertValues[0], typeof insertValues[0]);
-  console.log('[upsertBusinessGlobal]   $2 (normalized_name):', insertValues[1], typeof insertValues[1], insertValues[1] === null ? '⚠️ NULL!' : '', insertValues[1] === undefined ? '⚠️ UNDEFINED!' : '');
-  console.log('[upsertBusinessGlobal]   $3 (address):', insertValues[2], typeof insertValues[2]);
-  console.log('[upsertBusinessGlobal]   $4 (postal_code):', insertValues[3], typeof insertValues[3]);
-  console.log('[upsertBusinessGlobal]   $5 (city_id):', insertValues[4], typeof insertValues[4], insertValues[4] === null ? '⚠️ NULL!' : '', insertValues[4] === undefined ? '⚠️ UNDEFINED!' : '');
-  console.log('[upsertBusinessGlobal]   $6 (industry_id):', insertValues[5], typeof insertValues[5], insertValues[5] === null ? '⚠️ NULL!' : '', insertValues[5] === undefined ? '⚠️ UNDEFINED!' : '');
-  console.log('[upsertBusinessGlobal]   $7 (dataset_id):', insertValues[6], typeof insertValues[6], insertValues[6] === null ? '⚠️ NULL!' : '', insertValues[6] === undefined ? '⚠️ UNDEFINED!' : '');
-  console.log('[upsertBusinessGlobal]   $8 (google_place_id):', insertValues[7], typeof insertValues[7]);
-  console.log('[upsertBusinessGlobal]   $9 (owner_user_id):', insertValues[8], typeof insertValues[8], insertValues[8] === null ? '⚠️ NULL!' : '', insertValues[8] === undefined ? '⚠️ UNDEFINED!' : '');
-  console.log('[upsertBusinessGlobal]   $10 (discovery_run_id):', insertValues[9], typeof insertValues[9]);
-  console.log('[upsertBusinessGlobal]   $11 (latitude):', insertValues[10], typeof insertValues[10]);
-  console.log('[upsertBusinessGlobal]   $12 (longitude):', insertValues[11], typeof insertValues[11]);
-
-  try {
-    // First, try to find existing business by (dataset_id, normalized_name) constraint
-    // This handles the businesses_dataset_normalized_unique constraint
-    const existingByNormalizedName = await pool.query<Business>(
-      `SELECT * FROM businesses 
-       WHERE dataset_id = $1 AND normalized_name = $2 
-       LIMIT 1`,
-      [data.dataset_id, normalized_name]
-    );
-
-    let result;
-    if (existingByNormalizedName.rows.length > 0) {
-      // Business exists with same (dataset_id, normalized_name) - update it
-      const existing = existingByNormalizedName.rows[0];
-      result = await pool.query<Business>(
-        `UPDATE businesses SET
-          name = $1,
-          normalized_name = $2,
-          address = COALESCE($3, address),
-          postal_code = COALESCE($4, postal_code),
-          city_id = $5,
-          industry_id = $6,
-          dataset_id = $7,
-          google_place_id = COALESCE($8, google_place_id),
-          discovery_run_id = COALESCE($9::uuid, discovery_run_id),
-          latitude = COALESCE($10, latitude),
-          longitude = COALESCE($11, longitude),
-          last_discovered_at = NOW(),
-          updated_at = NOW()
-         WHERE id = $12
-         RETURNING *`,
-        [...insertValues.slice(0, 11), existing.id]
-      );
-    } else {
-      // No conflict on (dataset_id, normalized_name), try INSERT with conflict handling
-      // Handle both google_place_id conflict and (dataset_id, normalized_name) constraint
-      try {
-        result = await pool.query<Business>(
-          `INSERT INTO businesses (
-            name, normalized_name, address, postal_code, city_id, 
-            industry_id, dataset_id, google_place_id, owner_user_id, discovery_run_id, latitude, longitude,
-            last_discovered_at, crawl_status, created_at, updated_at
-          )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::uuid, $11, $12, NOW(), 'pending', NOW(), NOW())
-           ON CONFLICT (google_place_id) 
-           DO UPDATE SET
-             name = EXCLUDED.name,
-             normalized_name = EXCLUDED.normalized_name,
-             address = COALESCE(EXCLUDED.address, businesses.address),
-             postal_code = COALESCE(EXCLUDED.postal_code, businesses.postal_code),
-             city_id = EXCLUDED.city_id, -- CRITICAL: Always update city_id (NOT NULL)
-             industry_id = EXCLUDED.industry_id, -- CRITICAL: Always update industry_id (NOT NULL)
-             dataset_id = EXCLUDED.dataset_id, -- CRITICAL: Always update dataset_id (NOT NULL)
-             discovery_run_id = COALESCE(EXCLUDED.discovery_run_id::uuid, businesses.discovery_run_id), -- Update if provided, cast to UUID
-             latitude = COALESCE(EXCLUDED.latitude, businesses.latitude),
-             longitude = COALESCE(EXCLUDED.longitude, businesses.longitude),
-             last_discovered_at = NOW(), -- Always update discovery timestamp
-             updated_at = NOW()
-           RETURNING *`,
-          insertValues
-        );
-      } catch (insertError: any) {
-        // If INSERT fails due to (dataset_id, normalized_name) constraint, update existing business
-        if (insertError.code === '23505' && insertError.constraint === 'businesses_dataset_normalized_unique') {
-          const existingByNormalizedName = await pool.query<Business>(
-            `SELECT * FROM businesses 
-             WHERE dataset_id = $1 AND normalized_name = $2 
-             LIMIT 1`,
-            [data.dataset_id, normalized_name]
-          );
-          
-          if (existingByNormalizedName.rows.length > 0) {
-            const existing = existingByNormalizedName.rows[0];
-            result = await pool.query<Business>(
-              `UPDATE businesses SET
-                name = $1,
-                normalized_name = $2,
-                address = COALESCE($3, address),
-                postal_code = COALESCE($4, postal_code),
-                city_id = $5,
-                industry_id = $6,
-                dataset_id = $7,
-                google_place_id = COALESCE($8, google_place_id),
-                discovery_run_id = COALESCE($9::uuid, discovery_run_id),
-                latitude = COALESCE($10, latitude),
-                longitude = COALESCE($11, longitude),
-                last_discovered_at = NOW(),
-                updated_at = NOW()
-               WHERE id = $12
-               RETURNING *`,
-              [...insertValues.slice(0, 11), existing.id]
-            );
-          } else {
-            throw insertError; // Re-throw if we can't find the business
-          }
-        } else {
-          throw insertError; // Re-throw other errors
-        }
-      }
-    }
-
-    if (result.rows.length === 0) {
-      throw new Error(`Failed to upsert business with google_place_id: ${data.google_place_id}`);
-    }
-
-    const business = result.rows[0];
-    
-    // Check if this was an update or insert
-    const createdAt = new Date(business.created_at).getTime();
-    const updatedAt = new Date(business.updated_at).getTime();
-    const wasUpdated = (updatedAt - createdAt) > 1000; // More than 1 second difference
-    const wasNew = !wasUpdated;
-
-    // Recalculate data completeness score after upsert
-    await recalculateDataCompletenessScore(business.id);
-
-    return { business, wasUpdated, wasNew };
-  } catch (error: any) {
-    // CRITICAL: Log ALL database errors with full context
-    console.error('[upsertBusinessGlobal] ===== DATABASE INSERT ERROR =====');
-    console.error('[upsertBusinessGlobal] Error code:', error.code);
-    console.error('[upsertBusinessGlobal] Error name:', error.name);
-    console.error('[upsertBusinessGlobal] Error message:', error.message);
-    console.error('[upsertBusinessGlobal] Error detail:', error.detail);
-    console.error('[upsertBusinessGlobal] Error constraint:', error.constraint);
-    console.error('[upsertBusinessGlobal] Error table:', error.table);
-    console.error('[upsertBusinessGlobal] Error column:', error.column);
-    console.error('[upsertBusinessGlobal] Failed INSERT VALUES:', insertValues);
-    console.error('[upsertBusinessGlobal] Failed INSERT VALUES (detailed):', {
-      name: insertValues[0],
-      normalized_name: insertValues[1],
-      address: insertValues[2],
-      postal_code: insertValues[3],
-      city_id: insertValues[4],
-      industry_id: insertValues[5],
-      dataset_id: insertValues[6],
-      google_place_id: insertValues[7],
-      owner_user_id: insertValues[8],
-      discovery_run_id: insertValues[9],
-      latitude: insertValues[10],
-      longitude: insertValues[11],
-    });
-    console.error('[upsertBusinessGlobal] Input data:', JSON.stringify(data, null, 2));
-    console.error('[upsertBusinessGlobal] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-    console.error('[upsertBusinessGlobal] ===================================');
-    
-    // Re-throw with enhanced error message
-    const enhancedError = new Error(
-      `Failed to upsert business "${data.name}": ${error.message} (code: ${error.code || 'unknown'})`
-    );
-    (enhancedError as any).originalError = error;
-    (enhancedError as any).code = error.code;
-    throw enhancedError;
-  }
-}
-
-/**
- * Link business to dataset via dataset_businesses junction table
- * 
- * This creates the many-to-many relationship between datasets and businesses.
- * Datasets are views over businesses, not data owners.
- */
-export async function linkBusinessToDataset(
-  businessId: number,
-  datasetId: string,
-  userId?: string
-): Promise<void> {
-  await pool.query(
-    `INSERT INTO dataset_businesses (dataset_id, business_id, added_by_user_id, manually_included)
-     VALUES ($1, $2, $3, true)
-     ON CONFLICT (dataset_id, business_id) DO NOTHING`,
-    [datasetId, businessId, userId || null]
-  );
-}
-
-/**
- * Recalculate data completeness score for a business
- * 
- * Scoring:
- * - Website present: +40
- * - Email present: +30
- * - Phone present: +20
- * - Address present: +10
- * 
- * Total: 0-100
- * 
- * Called after:
- * - Discovery (updates metadata)
- * - Crawling (updates contacts)
- * - Place Details fetch (updates website/phone)
- */
-export async function recalculateDataCompletenessScore(businessId: number): Promise<number> {
-  // Get business data (check both businesses table and related tables)
-  const businessResult = await pool.query<{
-    website: string | null;
-    phone: string | null;
-    address: string | null;
-    emails: any;
-    has_email_from_contacts: boolean;
-  }>(
-    `SELECT 
-      b.website,
-      b.phone,
-      b.address,
-      b.emails,
-      EXISTS (
-        SELECT 1 
-        FROM contact_sources cs
-        JOIN contacts c ON c.id = cs.contact_id
-        WHERE cs.business_id::text = b.id::text
-          AND c.email IS NOT NULL
-      ) as has_email_from_contacts
-     FROM businesses b
-     WHERE b.id = $1`,
-    [businessId]
-  );
-
-  if (businessResult.rows.length === 0) {
-    return 0;
-  }
-
-  const business = businessResult.rows[0];
-  
-  // Calculate score
-  let score = 0;
-  
-  // Website: +40
-  if (business.website) {
-    score += 40;
-  }
-  
-  // Email: +30 (check both businesses.emails JSONB and contacts table)
-  const hasEmail = (business.emails && Array.isArray(business.emails) && business.emails.length > 0) 
-    || business.has_email_from_contacts;
-  if (hasEmail) {
-    score += 30;
-  }
-  
-  // Phone: +20 (check both businesses.phone and contacts table)
-  const phoneResult = await pool.query<{ has_phone: boolean }>(
-    `SELECT EXISTS (
-      SELECT 1 
-      FROM contact_sources cs
-      JOIN contacts c ON c.id = cs.contact_id
-      WHERE cs.business_id::text = $1::text
-        AND (c.phone IS NOT NULL OR c.mobile IS NOT NULL)
-    ) as has_phone`,
-    [businessId]
-  );
-  const hasPhone = business.phone || phoneResult.rows[0]?.has_phone;
-  if (hasPhone) {
-    score += 20;
-  }
-  
-  // Address: +10
-  if (business.address) {
-    score += 10;
-  }
-
-  // Update score
-  await pool.query(
-    'UPDATE businesses SET data_completeness_score = $1 WHERE id = $2',
-    [score, businessId]
-  );
-
-  return score;
-}
-
-/**
- * Check if business needs crawling based on TTL
- * 
- * Crawl if:
- * - website IS NOT NULL
- * - AND (last_crawled_at IS NULL OR last_crawled_at < now() - 45 days)
- */
-export async function shouldCrawlBusiness(businessId: number): Promise<boolean> {
-  const result = await pool.query<{
-    website: string | null;
-    last_crawled_at: Date | null;
-  }>(
-    `SELECT website, last_crawled_at 
-     FROM businesses 
-     WHERE id = $1`,
-    [businessId]
-  );
-
-  if (result.rows.length === 0) {
-    return false;
-  }
-
-  const business = result.rows[0];
-
-  // No website = skip crawling
-  if (!business.website) {
-    return false;
-  }
-
-  // Never crawled = needs crawling
-  if (!business.last_crawled_at) {
-    return true;
-  }
-
-  // Check TTL (45 days)
-  const daysSinceCrawl = (Date.now() - new Date(business.last_crawled_at).getTime()) / (1000 * 60 * 60 * 24);
-  return daysSinceCrawl >= 45;
-}
-
-/**
- * Get businesses that need crawling (TTL-based)
- */
-export async function getBusinessesNeedingCrawl(
-  limit: number = 100
-): Promise<Business[]> {
-  const result = await pool.query<Business>(
-    `SELECT b.*
-     FROM businesses b
-     WHERE b.website IS NOT NULL
-       AND (
-         b.last_crawled_at IS NULL
-         OR b.last_crawled_at < NOW() - INTERVAL '45 days'
-       )
-       AND b.crawl_status != 'skipped'
-     ORDER BY b.last_crawled_at ASC NULLS FIRST
-     LIMIT $1`,
-    [limit]
-  );
-
-  return result.rows;
 }

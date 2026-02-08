@@ -10,19 +10,17 @@
  */
 
 import type { DiscoveryInput, City } from '../types/index.js';
-import { googleMapsService } from '../services/googleMaps.js';
 import { vriskoService } from '../services/vriskoService.js';
 import { getCountryByCode } from '../db/countries.js';
 import { getIndustryByName, getIndustryById } from '../db/industries.js';
 import { getCityByNormalizedName, updateCityCoordinates, getCityById } from '../db/cities.js';
-import { upsertBusinessGlobal, linkBusinessToDataset } from '../db/businessesShared.js';
+import { upsertBusinessGlobal, linkBusinessToDataset, searchBusinessesInDatabase } from '../db/businessesShared.js';
 import { getDatasetById } from '../db/datasets.js';
 import { updateDiscoveryRun } from '../db/discoveryRuns.js';
 import type { GooglePlaceResult } from '../types/index.js';
 import { generateGridPoints, type GridPoint } from '../utils/geo.js';
 import { getDiscoveryConfig, type DiscoveryConfig } from '../config/discoveryConfig.js';
 import { calculateExportEstimates, calculateRefreshEstimates } from '../config/pricing.js';
-import type { VriskoBusiness } from '../crawler/vrisko/vriskoParser.js';
 
 const GREECE_COUNTRY_CODE = 'GR';
 
@@ -276,20 +274,9 @@ export async function discoverBusinessesV2(
         resolvedLongitude = city.longitude;
         resolvedRadiusKm = city.radius_km;
       } else {
-        // City exists but missing coordinates - update them
-        console.log(`[discoverBusinessesV2] Resolving coordinates for existing city: ${input.city}`);
-        const coordinates = await googleMapsService.getCityCoordinates(input.city);
-        
-        if (!coordinates) {
-          throw new Error(`Could not resolve coordinates for city: ${input.city}`);
-        }
-
-        resolvedLatitude = coordinates.lat;
-        resolvedLongitude = coordinates.lng;
-        resolvedRadiusKm = coordinates.radiusKm;
-
-        // Update existing city with coordinates
-        city = await updateCityCoordinates(city.id, coordinates);
+        // City exists but missing coordinates - we can't use Google Maps API anymore
+        // Use default coordinates or throw error
+        throw new Error(`City "${input.city}" exists but has no coordinates. Please add coordinates manually or use a different city.`);
       }
     } else {
       // CRITICAL: Convert string coordinates to numbers if needed
@@ -311,192 +298,88 @@ export async function discoverBusinessesV2(
     }
 
     console.log(`[discoverBusinessesV2] Using city: ${city?.name || 'coordinates'} (${resolvedLatitude}, ${resolvedLongitude}, radius: ${resolvedRadiusKm}km)`);
-    console.log(`[discoverBusinessesV2] Grid config: radius=${discoveryConfig.gridRadiusKm}km, density=${discoveryConfig.gridDensity}km`);
-    console.log(`[discoverBusinessesV2] Coordinate types: lat=${typeof resolvedLatitude}, lng=${typeof resolvedLongitude}, radius=${typeof resolvedRadiusKm}`);
-    console.log(`[discoverBusinessesV2] Coordinate values: lat=${resolvedLatitude}, lng=${resolvedLongitude}, radius=${resolvedRadiusKm}`);
 
-    // STEP 1: Generate grid points covering the city
-    const gridPoints = generateGridPoints(
-      resolvedLatitude,
-      resolvedLongitude,
-      resolvedRadiusKm,
-      discoveryConfig.gridDensity
-    );
-    result.gridPointsGenerated = gridPoints.length;
-    console.log(`[discoverBusinessesV2] Generated ${gridPoints.length} grid points`);
+    // STEP 1: Database-first discovery
+    console.log(`[discoverBusinessesV2] ===== STARTING DATABASE-FIRST DISCOVERY =====`);
+    console.log(`[discoverBusinessesV2] Strategy: Check DB first, then vrisko.gr if needed`);
     
-    if (gridPoints.length === 0) {
-      console.error(`[discoverBusinessesV2] ⚠️⚠️⚠️ GRID GENERATION FAILED ⚠️⚠️⚠️`);
-      console.error(`[discoverBusinessesV2] This will cause 0 businesses to be discovered`);
-      console.error(`[discoverBusinessesV2] Check: coordinates are valid numbers, radius > 0, step > 0`);
-    }
-
-    // STEP 2: Expand keywords (grid point × keyword = one search)
-    // IMPORTANT: Prioritize completing all keywords for each grid point before moving to next
-    // This ensures comprehensive coverage even if we hit search limits
-    const searchTasks: Array<{ gridPoint: GridPoint; keyword: string }> = [];
-    
-    // Strategy: For each grid point, add all keywords before moving to next point
-    // This ensures we don't miss keywords due to search limits
-    for (const gridPoint of gridPoints) {
-      for (const keyword of industry.discovery_keywords) {
-        searchTasks.push({ gridPoint, keyword });
-      }
-    }
-
-    // Calculate how many grid points we can fully cover with all keywords
-    const searchesPerGridPoint = industry.discovery_keywords.length;
-    const maxSearches = discoveryConfig.maxSearchesPerDataset;
-    const gridPointsToCover = Math.floor(maxSearches / searchesPerGridPoint);
-    const totalSearchesForFullCoverage = gridPointsToCover * searchesPerGridPoint;
-    
-    // Take enough searches to complete full grid points (all keywords covered)
-    // This ensures we don't partially cover grid points
-    const limitedSearchTasks = searchTasks.slice(0, totalSearchesForFullCoverage);
-    
-    console.log(`[discoverBusinessesV2] Search strategy:`);
-    console.log(`  Total possible searches: ${searchTasks.length} (${gridPoints.length} points × ${industry.discovery_keywords.length} keywords)`);
-    console.log(`  Max searches allowed: ${maxSearches}`);
-    console.log(`  Grid points to fully cover: ${gridPointsToCover} (ensuring all ${industry.discovery_keywords.length} keywords per point)`);
-    console.log(`  Total search tasks: ${limitedSearchTasks.length}`);
-
-    // STEP 3: Execute searches with stop conditions
-    console.log(`[discoverBusinessesV2] ===== STARTING GOOGLE PLACES SEARCHES =====`);
-    console.log(`[discoverBusinessesV2] Total search tasks: ${limitedSearchTasks.length}`);
-    console.log(`[discoverBusinessesV2] Batch size: ${discoveryConfig.concurrency}`);
+    // FIRST: Check database for existing businesses
+    console.log(`[discoverBusinessesV2] Checking database for businesses with industry_id=${industry.id}, city_id=${finalCityId}`);
+    const dbBusinesses = await searchBusinessesInDatabase(industry.id, finalCityId);
+    console.log(`[discoverBusinessesV2] Found ${dbBusinesses.length} businesses in database`);
     
     const allPlaces: GooglePlaceResult[] = [];
     const seenPlaceIds = new Set<string>();
-    let consecutiveLowYieldBatches = 0;
-    const BATCH_SIZE = discoveryConfig.concurrency;
-    const MIN_NEW_PERCENT = discoveryConfig.minNewBusinessesPercent;
-
-    for (let i = 0; i < limitedSearchTasks.length; i += BATCH_SIZE) {
-      const batch = limitedSearchTasks.slice(i, i + BATCH_SIZE);
-      const batchStartUniqueCount = seenPlaceIds.size;
-
-      // Execute batch
-      const batchPromises = batch.map(async (task) => {
+    
+    // Add database businesses to results
+    for (const business of dbBusinesses) {
+      const placeId = business.place_id || `db_${(business as any)._db_id}`;
+      if (!seenPlaceIds.has(placeId)) {
+        seenPlaceIds.add(placeId);
+        allPlaces.push(business);
+      }
+    }
+    
+    console.log(`[discoverBusinessesV2] Added ${allPlaces.length} businesses from database`);
+    
+    // SECOND: Only use vrisko.gr if we have few results from DB
+    // Use a threshold - if DB has less than 50 businesses, try vrisko.gr
+    const MIN_DB_RESULTS = 50;
+    const shouldUseVrisko = dbBusinesses.length < MIN_DB_RESULTS;
+    
+    if (shouldUseVrisko) {
+      console.log(`[discoverBusinessesV2] Database has ${dbBusinesses.length} businesses (< ${MIN_DB_RESULTS}), trying vrisko.gr for more results`);
+      
+      // Try vrisko.gr for each keyword
+      const vriskoPromises = industry.discovery_keywords.map(async (keyword) => {
         try {
-          // CRITICAL FIX: Add city name to query for better results
-          // Google Places API works better with contextual queries
-          // Try multiple query formats for better coverage
           const cityName = city?.name || '';
-          let searchQuery: string;
-          
-          // Use "keyword in city" format for better results (matches how users search)
-          if (cityName) {
-            // Try "keyword in City" format (e.g., "bakery in Athens")
-            searchQuery = `${task.keyword} in ${cityName}`;
-          } else {
-            searchQuery = task.keyword;
+          if (!cityName) {
+            console.warn(`[discoverBusinessesV2] Cannot search vrisko.gr without city name`);
+            return [];
           }
           
-          const radiusMeters = discoveryConfig.gridRadiusKm * 1000; // Convert km to meters
+          console.log(`[discoverBusinessesV2] Searching vrisko.gr: "${keyword}" in "${cityName}"`);
+          const vriskoResult = await vriskoService.searchBusinesses(keyword, cityName, 5); // Limit to 5 pages per keyword
           
-          console.log(`[discoverBusinessesV2] Searching: "${searchQuery}" at (${task.gridPoint.lat}, ${task.gridPoint.lng}) radius ${radiusMeters}m`);
-          
-          const searchResult = await searchWithRetry(
-            searchQuery,
-            task.gridPoint,
-            radiusMeters,
-            discoveryConfig,
-            city?.name
-          );
-
-          const places = searchResult.places;
-          const source = searchResult.source;
-
-          // CRITICAL DEBUG: Log results from source
-          console.log(`[discoverBusinessesV2] RAW ${source.toUpperCase()} results for "${searchQuery}": ${places.length}`);
-          if (places.length > 0) {
-            console.log(`[discoverBusinessesV2] Sample place IDs: ${places.slice(0, 3).map(p => p.place_id || 'NO_ID').join(', ')}`);
-            console.log(`[discoverBusinessesV2] Sample place names: ${places.slice(0, 3).map(p => p.name || 'NO_NAME').join(', ')}`);
-          } else {
-            console.warn(`[discoverBusinessesV2] WARNING: Search "${searchQuery}" returned ZERO places from ${source}`);
+          if (vriskoResult.businesses.length > 0) {
+            console.log(`[discoverBusinessesV2] vrisko.gr found ${vriskoResult.businesses.length} businesses for "${keyword}"`);
           }
-
+          
           result.searchesExecuted++;
-          return places;
+          return vriskoResult.businesses;
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : String(error);
-          console.error(`[discoverBusinessesV2] Search failed for "${task.keyword}" at (${task.gridPoint.lat}, ${task.gridPoint.lng}): ${errorMsg}`);
-          result.errors.push(`Grid point (${task.gridPoint.lat}, ${task.gridPoint.lng}) keyword "${task.keyword}": ${errorMsg}`);
+          console.error(`[discoverBusinessesV2] vrisko.gr search failed for "${keyword}": ${errorMsg}`);
+          result.errors.push(`vrisko.gr search "${keyword}": ${errorMsg}`);
           return [];
         }
       });
-
-      const batchResults = await Promise.all(batchPromises);
       
-      // CRITICAL DEBUG: Log total places before filtering
-      const totalPlacesBeforeFilter = batchResults.reduce((sum, places) => sum + places.length, 0);
-      console.log(`[discoverBusinessesV2] BEFORE FILTER: ${totalPlacesBeforeFilter} total places from batch`);
-
-      // Deduplicate batch results
-      // TEMPORARILY DISABLED FILTERING FOR DEBUGGING: Accept all places even without place_id
-      let batchNewCount = 0;
-      let batchSkippedNoPlaceId = 0;
-      for (const places of batchResults) {
-        for (const place of places) {
-          // CRITICAL: Check for missing or empty place_id
-          // Empty strings are falsy, so we need to check explicitly
-          if (!place.place_id || place.place_id.trim() === '') {
-            batchSkippedNoPlaceId++;
-            console.warn(`[discoverBusinessesV2] WARNING: Place without valid place_id:`, {
-              name: place.name || 'unnamed',
-              place_id: place.place_id,
-              formatted_address: place.formatted_address,
-              fullPlace: JSON.stringify(place, null, 2)
-            });
-            // Generate a temp ID so we can still track it
-            const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            place.place_id = tempId;
-            console.log(`[discoverBusinessesV2] TEMP: Generated temp ID ${tempId} for place: ${place.name}`);
-          }
-          
-          if (!seenPlaceIds.has(place.place_id!)) {
-            seenPlaceIds.add(place.place_id!);
+      const vriskoResults = await Promise.all(vriskoPromises);
+      
+      // Add vrisko results (deduplicate)
+      for (const vriskoPlaces of vriskoResults) {
+        for (const place of vriskoPlaces) {
+          const placeId = place.place_id || place.name.toLowerCase().trim();
+          if (!seenPlaceIds.has(placeId)) {
+            seenPlaceIds.add(placeId);
             allPlaces.push(place);
-            batchNewCount++;
           }
         }
       }
-
-      // CRITICAL DEBUG: Log after filtering
-      console.log(`[discoverBusinessesV2] AFTER FILTER: ${batchNewCount} new places added (${batchSkippedNoPlaceId} skipped due to no place_id)`);
-
-      const batchEndUniqueCount = seenPlaceIds.size;
-      const batchTotalFound = batchResults.reduce((sum, places) => sum + places.length, 0);
-      const batchNewPercent = batchTotalFound > 0 ? (batchNewCount / batchTotalFound) * 100 : 0;
-
-      console.log(`[discoverBusinessesV2] Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${batchNewCount} new, ${batchTotalFound} total, ${batchSkippedNoPlaceId} skipped (no place_id), ${batchNewPercent.toFixed(1)}% new`);
-
-      // Stop condition: If new businesses < threshold, stop expanding
-      if (batchNewPercent < MIN_NEW_PERCENT && batchTotalFound > 0) {
-        consecutiveLowYieldBatches++;
-        if (consecutiveLowYieldBatches >= 3) {
-          result.stoppedEarly = true;
-          result.stopReason = `Stopped early: ${consecutiveLowYieldBatches} consecutive batches with <${MIN_NEW_PERCENT}% new businesses`;
-          console.log(`[discoverBusinessesV2] ${result.stopReason}`);
-          break;
-        }
-      } else {
-        consecutiveLowYieldBatches = 0;
-      }
-
-      // Rate limiting delay
-      if (i + BATCH_SIZE < limitedSearchTasks.length) {
-        await new Promise(resolve => setTimeout(resolve, discoveryConfig.requestDelayMs));
-      }
+      
+      console.log(`[discoverBusinessesV2] Total businesses after vrisko.gr: ${allPlaces.length}`);
+    } else {
+      console.log(`[discoverBusinessesV2] Database has ${dbBusinesses.length} businesses (>= ${MIN_DB_RESULTS}), skipping vrisko.gr`);
     }
 
     // CRITICAL DEBUG: Log before final deduplication
     console.log(`[discoverBusinessesV2] ===== BEFORE FINAL DEDUP =====`);
-    console.log(`[discoverBusinessesV2] Total places collected from Google: ${allPlaces.length}`);
+    console.log(`[discoverBusinessesV2] Total places collected: ${allPlaces.length} (${dbBusinesses.length} from DB, ${allPlaces.length - dbBusinesses.length} from vrisko.gr)`);
     if (allPlaces.length === 0) {
-      console.error(`[discoverBusinessesV2] ⚠️⚠️⚠️ ZERO PLACES FROM GOOGLE PLACES API ⚠️⚠️⚠️`);
-      console.error(`[discoverBusinessesV2] This means Google Places API returned no results`);
-      console.error(`[discoverBusinessesV2] Check: API key, search queries, location, radius`);
+      console.error(`[discoverBusinessesV2] ⚠️⚠️⚠️ ZERO PLACES FOUND ⚠️⚠️⚠️`);
+      console.error(`[discoverBusinessesV2] Database and vrisko.gr returned no results`);
     } else {
       console.log(`[discoverBusinessesV2] Sample place IDs: ${allPlaces.slice(0, 5).map(p => p.place_id || 'NO_ID').join(', ')}`);
     }
@@ -517,22 +400,21 @@ export async function discoverBusinessesV2(
       console.error(`[discoverBusinessesV2] This means all places were duplicates or invalid`);
     }
 
-    // Calculate coverage score
-    result.coverageScore = result.gridPointsGenerated > 0
-      ? result.uniqueBusinessesDiscovered / result.gridPointsGenerated
-      : 0;
+    // Calculate coverage score (simplified - no grid points needed for DB-first approach)
+    result.coverageScore = result.uniqueBusinessesDiscovered > 0 ? 1 : 0;
 
     // STEP 4.5: Calculate completeness stats from discovered places
-    // Note: Discovery phase doesn't fetch website/phone/email (requires Place Details API)
-    // We estimate based on what's available in the Google Places response
+    // Note: Database businesses may already have contacts, vrisko businesses have contacts in listing
     let withWebsiteCount = 0;
     let withPhoneCount = 0;
-    // Email is never in Google Places response - we estimate based on historical data
-    const estimatedEmailPercent = 25; // Conservative estimate: 25% of businesses have email
+    let withEmailCount = 0;
     
     for (const place of uniquePlaces) {
       if (place.website) withWebsiteCount++;
       if (place.international_phone_number) withPhoneCount++;
+      // Check for email in vrisko data or DB data
+      const dbEmail = (place as any)._db_email;
+      if (dbEmail) withEmailCount++;
     }
     
     const totalPlaces = uniquePlaces.length;
@@ -540,7 +422,9 @@ export async function discoverBusinessesV2(
       withWebsitePercent: totalPlaces > 0 
         ? Math.round((withWebsiteCount / totalPlaces) * 100 * 100) / 100 
         : 0,
-      withEmailPercent: estimatedEmailPercent, // Estimated - requires extraction/crawling
+      withEmailPercent: totalPlaces > 0 
+        ? Math.round((withEmailCount / totalPlaces) * 100 * 100) / 100 
+        : 0,
       withPhonePercent: totalPlaces > 0 
         ? Math.round((withPhoneCount / totalPlaces) * 100 * 100) / 100 
         : 0,
@@ -769,64 +653,6 @@ export async function discoverBusinessesV2(
   return result;
 }
 
-/**
- * Search with vrisko.gr as primary source, Google Places as fallback
- * This reduces API costs by using free vrisko.gr for discovery
- */
-async function searchWithRetry(
-  query: string,
-  location: GridPoint,
-  radiusMeters: number,
-  config: DiscoveryConfig,
-  cityName?: string
-): Promise<{ places: GooglePlaceResult[]; source: 'vrisko' | 'google' }> {
-  // STEP 1: Try vrisko.gr first (PRIMARY - FREE)
-  try {
-    console.log(`[searchWithRetry] Trying vrisko.gr first for "${query}"`);
-    
-    // Extract keyword from query (remove "in City" part if present)
-    const keyword = query.includes(' in ') ? query.split(' in ')[0].trim() : query;
-    const locationStr = cityName || query.includes(' in ') ? query.split(' in ')[1]?.trim() : '';
-    
-    if (locationStr) {
-      const vriskoResult = await vriskoService.searchBusinesses(keyword, locationStr, 5); // Limit to 5 pages per search
-      
-      if (vriskoResult.businesses.length > 0) {
-        console.log(`[searchWithRetry] ✅ vrisko.gr found ${vriskoResult.businesses.length} businesses`);
-        return { places: vriskoResult.businesses, source: 'vrisko' };
-      } else {
-        console.log(`[searchWithRetry] vrisko.gr returned no results, falling back to Google Places`);
-      }
-    } else {
-      console.log(`[searchWithRetry] No location string for vrisko, falling back to Google Places`);
-    }
-  } catch (vriskoError) {
-    console.warn(`[searchWithRetry] vrisko.gr search failed, falling back to Google Places:`, vriskoError);
-  }
-
-  // STEP 2: Fallback to Google Places API (SECONDARY - PAID)
-  console.log(`[searchWithRetry] Using Google Places API as fallback for "${query}"`);
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= config.retryAttempts; attempt++) {
-    try {
-      const places = await googleMapsService.searchPlaces(query, {
-        lat: location.lat,
-        lng: location.lng
-      }, radiusMeters);
-      return { places, source: 'google' };
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      
-      if (attempt < config.retryAttempts) {
-        const delay = config.retryDelayMs * Math.pow(2, attempt - 1); // Exponential backoff
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError || new Error('Search failed after retries');
-}
 
 // processPlace function removed - logic moved inline to main discovery function
 // Discovery now uses upsertBusinessGlobal and linkBusinessToDataset
