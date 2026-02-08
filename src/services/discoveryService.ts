@@ -1,5 +1,5 @@
 import type { DiscoveryJobInput, JobResult } from '../types/jobs.js';
-import { discoverBusinessesV2 } from '../workers/discoveryWorkerV2.js';
+import { discoverBusinessesVrisko } from '../discovery/vriskoDiscoveryWorker.js';
 import { createCrawlJob } from '../db/crawlJobs.js';
 import { pool } from '../config/database.js';
 import type { Website } from '../types/index.js';
@@ -24,10 +24,10 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
   const jobId = `discovery-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   const errors: string[] = [];
 
-  console.log(`\n🔍 Starting DISCOVERY job: ${jobId}`);
-  console.log(`   Industry: ${input.industry}`);
-  console.log(`   City: ${input.city}`);
-  console.log(`   Discovery method: V2 Grid-Based (always uses grid + keyword expansion)`);
+    console.log(`\n🔍 Starting DISCOVERY job: ${jobId}`);
+    console.log(`   Industry: ${input.industry_id || input.industry}`);
+    console.log(`   City: ${input.city_id || input.city}`);
+    console.log(`   Discovery method: Vrisko.gr (ONLY source - no Google Maps)`);
 
   let discoveryRun: Awaited<ReturnType<typeof createDiscoveryRun>> | undefined;
   
@@ -184,32 +184,60 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     });
     console.log(`[runDiscoveryJob] Marked discovery_run as started: ${discoveryRun.id}`);
 
-    // Run discovery using grid-based V2 worker (always uses grid + keyword expansion)
-    // If gated, discovery will still run but we'll mark it in the result
-    console.log(`[runDiscoveryJob] Calling discoverBusinessesV2 with:`, {
-      industry_id: input.industry_id,
-      city_id: input.city_id,
-      latitude: input.latitude,
-      longitude: input.longitude,
-      cityRadiusKm: input.cityRadiusKm,
+    // Validate required fields for vrisko discovery
+    if (!input.industry_id && !input.industry) {
+      throw new Error('industry_id or industry is required for discovery');
+    }
+    if (!input.city_id && !input.city) {
+      throw new Error('city_id or city is required for discovery');
+    }
+
+    // Resolve IDs if names provided
+    let finalIndustryId = input.industry_id;
+    let finalCityId = input.city_id;
+
+    if (!finalIndustryId && input.industry) {
+      const { getIndustryByName } = await import('../db/industries.js');
+      const industry = await getIndustryByName(input.industry);
+      if (!industry) {
+        throw new Error(`Industry "${input.industry}" not found`);
+      }
+      finalIndustryId = industry.id;
+    }
+
+    if (!finalCityId && input.city) {
+      const { getCityByNormalizedName } = await import('../db/cities.js');
+      const { normalizeCityName } = await import('../utils/cityNormalizer.js');
+      const city = await getCityByNormalizedName(normalizeCityName(input.city));
+      if (!city) {
+        throw new Error(`City "${input.city}" not found`);
+      }
+      finalCityId = city.id;
+    }
+
+    if (!finalIndustryId || !finalCityId) {
+      throw new Error('Could not resolve industry_id or city_id');
+    }
+
+    // Run discovery using vrisko.gr (ONLY source - no Google Maps)
+    console.log(`[runDiscoveryJob] Calling discoverBusinessesVrisko with:`, {
+      industry_id: finalIndustryId,
+      city_id: finalCityId,
       datasetId: datasetId,
       discoveryRunId: discoveryRun.id
     });
     
-    const discoveryResult = await discoverBusinessesV2({
-      industry: input.industry, // Legacy support
-      industry_id: input.industry_id, // Preferred
-      city: input.city, // Legacy support
-      city_id: input.city_id, // Preferred
-      latitude: input.latitude,
-      longitude: input.longitude,
-      cityRadiusKm: input.cityRadiusKm,
-      datasetId: datasetId
-    }, discoveryRun.id);
+    const discoveryResult = await discoverBusinessesVrisko(
+      finalCityId,
+      finalIndustryId,
+      datasetId,
+      discoveryRun.id
+    );
     
-    console.log(`[runDiscoveryJob] discoverBusinessesV2 completed:`, {
+    console.log(`[runDiscoveryJob] discoverBusinessesVrisko completed:`, {
       businessesFound: discoveryResult.businessesFound,
       businessesCreated: discoveryResult.businessesCreated,
+      businessesUpdated: discoveryResult.businessesUpdated,
       searchesExecuted: discoveryResult.searchesExecuted,
       errors: discoveryResult.errors.length
     });
@@ -299,10 +327,9 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         city: input.city,
         businesses_found: discoveryResult.businessesFound,
         businesses_created: discoveryResult.businessesCreated,
-        grid_points_generated: discoveryResult.gridPointsGenerated,
+        businesses_updated: discoveryResult.businessesUpdated,
+        pages_crawled: discoveryResult.pagesCrawled,
         searches_executed: discoveryResult.searchesExecuted,
-        coverage_score: discoveryResult.coverageScore,
-        stopped_early: discoveryResult.stoppedEarly,
         // Note: websites_created removed - websites are created in extraction phase
         crawl_jobs_created: crawlJobsCreated,
         duration_seconds: (endTime.getTime() - startTime.getTime()) / 1000,

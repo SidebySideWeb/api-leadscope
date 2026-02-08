@@ -9,6 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "discover": "tsx src/cli/discover.ts",
+    "discover:vrisko": "tsx src/cli/runVriskoDiscovery.ts",
     "crawl": "tsx src/cli/crawl.ts",
     "sync:businesses": "tsx src/cli/syncBusinesses.ts",
     "check:crawl-results": "tsx src/cli/checkCrawlResults.ts",

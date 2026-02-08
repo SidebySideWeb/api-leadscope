@@ -1,3 +1,12 @@
+/**
+ * @deprecated This service uses Google Places API for grid-based discovery.
+ * 
+ * REPLACED BY: src/discovery/vriskoDiscoveryWorker.ts
+ * 
+ * All discovery now uses vrisko.gr only. This file is kept for reference
+ * but should NOT be used for discovery.
+ */
+
 import PQueue from 'p-queue';
 import type { GooglePlaceResult } from '../types/index.js';
 import { googleMapsService } from './googleMaps.js';

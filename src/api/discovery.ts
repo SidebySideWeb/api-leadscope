@@ -228,7 +228,7 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
     }, null, 2));
 
     // Run discovery job asynchronously (don't wait for completion)
-    // Uses V2 grid-based discovery (always uses grid + keyword expansion)
+    // Uses vrisko.gr as the ONLY discovery source (no Google Maps/Places API)
     // Extraction will happen in the background via extraction worker
     console.log('[API] Starting discovery job asynchronously...');
     console.log('[API] Discovery job params:', {
