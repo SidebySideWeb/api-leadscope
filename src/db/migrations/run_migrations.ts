@@ -25,6 +25,7 @@ async function runMigration(filename: string): Promise<void> {
 async function main() {
   const migrations = [
     'create_vrisko_discovery_jobs.sql',
+    'create_credit_transactions.sql',
   ];
 
   try {

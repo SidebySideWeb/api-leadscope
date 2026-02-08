@@ -330,6 +330,9 @@ export async function upsertBusinessGlobal(data: {
 
 /**
  * Link business to dataset via dataset_businesses junction table
+ * 
+ * Note: Enforcement for dataset size should be done BEFORE calling this function
+ * Use enforceDatasetSize() from enforcementService if needed
  */
 export async function linkBusinessToDataset(
   businessId: number,

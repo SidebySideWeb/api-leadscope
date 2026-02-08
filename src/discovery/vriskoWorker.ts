@@ -27,6 +27,10 @@ import { VriskoCrawler } from '../crawler/vrisko/vriskoCrawler.js';
 import type { VriskoBusiness } from '../crawler/vrisko/vriskoParser.js';
 import { normalizeBusinessName } from '../utils/normalizeBusinessName.js';
 import { Logger } from '../crawler/vrisko/utils/logger.js';
+import { enforceDiscoveryRun } from '../services/enforcementService.js';
+import { consumeCredits } from '../services/creditService.js';
+import { calculateDiscoveryCost } from '../config/creditCostConfig.js';
+import { incrementCrawls } from '../db/usageTracking.js';
 
 const logger = new Logger('VriskoWorker');
 
@@ -79,6 +83,12 @@ export async function runVriskoDiscovery(datasetId: string): Promise<VriskoDisco
     result.discoveryRunId = discoveryRun.id;
 
     logger.info(`Created discovery run ${discoveryRun.id}`);
+
+    // STEP 2.5: Enforce limits and estimate credit cost
+    // Estimate businesses (rough estimate: 20 per keyword per city-industry combination)
+    const estimatedBusinesses = cities.length * industries.length * 20;
+    await enforceDiscoveryRun(dataset.user_id, estimatedBusinesses);
+    logger.info(`Enforcement passed: estimated ${estimatedBusinesses} businesses`);
 
     // STEP 3: Load targets (cities and industries)
     const citiesQuery = dataset.city_id
@@ -188,6 +198,20 @@ export async function runVriskoDiscovery(datasetId: string): Promise<VriskoDisco
             }
           }
 
+          // Enforce dataset size before processing businesses
+          if (seenBusinesses.size > 0) {
+            try {
+              await enforceDatasetSize(dataset.user_id, dataset.id, seenBusinesses.size);
+            } catch (error: any) {
+              if (error.code === 'DATASET_SIZE_LIMIT_REACHED') {
+                logger.warn(`Dataset size limit reached, skipping ${seenBusinesses.size} businesses`);
+                result.errors.push(`Dataset size limit reached: ${error.message}`);
+                continue; // Skip this city-industry combination
+              }
+              throw error;
+            }
+          }
+
           // STEP 7: Process businesses
           for (const vriskoBusiness of seenBusinesses.values()) {
             try {
@@ -217,7 +241,31 @@ export async function runVriskoDiscovery(datasetId: string): Promise<VriskoDisco
       }
     }
 
-    // STEP 9: Mark discovery run as completed
+    // STEP 9: Consume credits based on businesses found
+    const creditCost = calculateDiscoveryCost(result.businessesFound);
+    if (creditCost > 0) {
+      try {
+        await consumeCredits(
+          dataset.user_id,
+          creditCost,
+          `Discovery run: ${result.businessesFound} businesses found`,
+          discoveryRun.id
+        );
+        logger.info(`Consumed ${creditCost} credits for discovery run`);
+      } catch (error: any) {
+        logger.error(`Failed to consume credits: ${error.message}`);
+        result.errors.push(`Credit consumption failed: ${error.message}`);
+      }
+    }
+
+    // Increment crawl usage
+    try {
+      await incrementCrawls(dataset.user_id);
+    } catch (error: any) {
+      logger.warn(`Failed to increment crawl usage: ${error.message}`);
+    }
+
+    // STEP 10: Mark discovery run as completed
     await updateDiscoveryRun(discoveryRun.id, {
       status: 'completed',
       completed_at: new Date(),
@@ -343,7 +391,7 @@ async function processVriskoBusiness(
         contact_id: phoneContact.id,
         business_id: business.id.toString(),
         source_url: vriskoBusiness.listing_url,
-        page_type: 'vrisko_listing',
+        page_type: 'homepage', // Using 'homepage' as vrisko listing is the source page
         html_hash: '',
       });
 
@@ -366,7 +414,7 @@ async function processVriskoBusiness(
         contact_id: emailContact.id,
         business_id: business.id.toString(),
         source_url: vriskoBusiness.listing_url,
-        page_type: 'vrisko_listing',
+        page_type: 'homepage', // Using 'homepage' as vrisko listing is the source page
         html_hash: '',
       });
 

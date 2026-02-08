@@ -11,6 +11,7 @@ import discoveryRoutes from './api/discovery.js';
 import businessesRoutes from './api/businesses.js';
 import refreshRoutes from './api/refresh.js';
 import extractionJobsRoutes from './api/extractionJobs.js';
+import stripeWebhooksRoutes from './api/stripeWebhooks.js';
 
 const app = express();
 
@@ -50,6 +51,9 @@ app.use('/refresh', refreshRoutes);
 
 // Extraction jobs routes (requires authentication)
 app.use('/extraction-jobs', extractionJobsRoutes);
+
+// Stripe webhooks (no auth - uses webhook signature verification)
+app.use('/webhooks', stripeWebhooksRoutes);
 
 // Health endpoint - enhanced for diagnostics
 app.get('/health', async (req, res) => {

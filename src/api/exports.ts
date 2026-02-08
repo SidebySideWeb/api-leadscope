@@ -3,6 +3,10 @@ import { authMiddleware, type AuthRequest } from '../middleware/auth.js';
 import { pool } from '../config/database.js';
 import { runDatasetExport } from '../workers/exportWorker.js';
 import { verifyDatasetOwnership } from '../db/datasets.js';
+import { enforceExport } from '../services/enforcementService.js';
+import { consumeCredits } from '../services/creditService.js';
+import { calculateExportCost } from '../config/creditCostConfig.js';
+import { incrementExports } from '../db/usageTracking.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -276,6 +280,29 @@ router.post('/run', authMiddleware, async (req: AuthRequest, res): Promise<void>
     if (!ownsDataset) {
       res.status(403).json({ error: 'Dataset not found or access denied' });
       return;
+    }
+
+    // Estimate row count for enforcement
+    const countResult = await pool.query<{ count: number }>(
+      'SELECT COUNT(*) as count FROM businesses WHERE dataset_id = $1',
+      [datasetId]
+    );
+    const estimatedRows = parseInt(countResult.rows[0]?.count.toString() || '0');
+
+    // Enforce export limits and credits
+    try {
+      await enforceExport(userId, estimatedRows);
+    } catch (error: any) {
+      if (error.code === 'EXPORT_LIMIT_REACHED' || error.code === 'CREDIT_LIMIT_REACHED') {
+        res.status(403).json({
+          error: error.message,
+          code: error.code,
+          current: error.current,
+          limit: error.limit,
+        });
+        return;
+      }
+      throw error;
     }
 
     // Get user's plan to determine tier

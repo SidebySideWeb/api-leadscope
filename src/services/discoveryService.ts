@@ -10,6 +10,7 @@ import { getUserPermissions, checkPermission } from '../db/permissions.js';
 import { getUserUsage, incrementUsage } from '../persistence/index.js';
 import { logDiscoveryAction } from '../utils/actionLogger.js';
 import { createDiscoveryRun, updateDiscoveryRun } from '../db/discoveryRuns.js';
+import { enforceDatasetCreation } from './enforcementService.js';
 
 /**
  * Run a discovery job
@@ -80,6 +81,9 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
           upgrade_hint: usageCheck.upgrade_hint,
         };
       }
+
+      // Enforce dataset creation limit before resolving
+      await enforceDatasetCreation(input.userId);
 
       // Resolve dataset - prefer IDs, fallback to names (must exist, won't create)
       const resolverResult = await resolveDataset({

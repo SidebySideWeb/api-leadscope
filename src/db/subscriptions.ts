@@ -68,15 +68,13 @@ export async function getActiveSubscriptionForUser(
 /**
  * Check if user is an internal user (bypasses all limits)
  * Server-side only - never trusts client input
+ * Checks users.is_internal_user field
  */
 export async function isInternalUser(userId: string): Promise<boolean> {
   const result = await pool.query<{ is_internal_user: boolean }>(
     `SELECT COALESCE(is_internal_user, false) as is_internal_user
-     FROM subscriptions
-     WHERE user_id = $1
-       AND status IN ('active', 'trialing')
-     ORDER BY created_at DESC
-     LIMIT 1`,
+     FROM users
+     WHERE id = $1`,
     [userId]
   );
   return result.rows[0]?.is_internal_user || false;
