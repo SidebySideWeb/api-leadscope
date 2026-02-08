@@ -238,49 +238,39 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
       console.log(`[processExtractionJob] No crawl pages found for business ${business.id}`);
     }
 
-    // STEP 2: Fetch from Google Place Details API as fallback if:
-    // - Crawling failed (no pages found), OR
-    // - We didn't find contact details (email/phone) from crawling
-    // This is a paid API, so we use it as fallback when crawling fails or doesn't yield results
+    // STEP 2: Fetch from Google Place Details API ONLY for websites (fallback)
+    // NOTE: We NO LONGER use Place Details for contacts (phone/email)
+    // Contacts should come from vrisko.gr (primary) or website crawling
+    // Place Details is ONLY used as a last resort for websites if crawling fails
     if (business.google_place_id) {
       const crawlingFailed = pages.length === 0;
       const needsWebsite = !foundWebsiteFromPages;
-      const needsPhone = !foundPhoneFromPages;
-      const needsEmail = !foundEmailFromPages;
       
-      // CRITICAL: Check if we already have phone/website in DB from previous runs
+      // CRITICAL: Check if we already have website in DB from previous runs
       // This prevents unnecessary Place Details API calls (costs money!)
       const existingDataCheck = await pool.query<{
         has_website: boolean;
-        has_phone: boolean;
       }>(
         `SELECT 
-          EXISTS(SELECT 1 FROM websites WHERE business_id = $1) as has_website,
-          EXISTS(
-            SELECT 1 FROM contact_sources cs
-            JOIN contacts c ON cs.contact_id = c.id
-            WHERE cs.business_id = $1 AND c.contact_type IN ('phone', 'mobile')
-          ) as has_phone
+          EXISTS(SELECT 1 FROM websites WHERE business_id = $1) as has_website
         `,
         [business.id]
       );
       
       const alreadyHasWebsite = existingDataCheck.rows[0]?.has_website === true;
-      const alreadyHasPhone = existingDataCheck.rows[0]?.has_phone === true;
       
-      // Only call Place Details if:
-      // 1. Crawling completely failed (no pages) AND we don't already have website/phone in DB, OR
-      // 2. We didn't find phone from pages AND we don't already have phone in DB, OR
-      // 3. We didn't find website from pages AND we don't already have website in DB
-      // Note: Place Details doesn't provide emails, so if we only need email, we can't get it from Place Details
+      // Only call Place Details for websites if:
+      // 1. Crawling completely failed (no pages) AND we don't already have website in DB, OR
+      // 2. We didn't find website from pages AND we don't already have website in DB
+      // NOTE: We do NOT use Place Details for phone/email anymore - vrisko.gr is the primary source
       const shouldUsePlaceDetails = 
-        (crawlingFailed && (!alreadyHasWebsite || !alreadyHasPhone)) ||
-        (needsPhone && !alreadyHasPhone) ||
+        (crawlingFailed && !alreadyHasWebsite) ||
         (needsWebsite && !alreadyHasWebsite);
       
       if (shouldUsePlaceDetails) {
-        console.log(`[processExtractionJob] Falling back to Place Details API for business ${business.id} (crawlingFailed: ${crawlingFailed}, needsWebsite: ${needsWebsite} [alreadyHas: ${alreadyHasWebsite}], needsPhone: ${needsPhone} [alreadyHas: ${alreadyHasPhone}], needsEmail: ${needsEmail})`);
-      
+        console.log(`[processExtractionJob] Falling back to Place Details API for WEBSITE ONLY for business ${business.id} (crawlingFailed: ${crawlingFailed}, needsWebsite: ${needsWebsite} [alreadyHas: ${alreadyHasWebsite}])`);
+        console.log(`[processExtractionJob] NOTE: Place Details is NOT used for contacts - vrisko.gr is the primary source for phone/email`);
+        
         try {
           const placeDetails = await googleMapsService.getPlaceDetails(business.google_place_id);
           
@@ -316,43 +306,9 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
               }
             }
 
-            // Create phone contact if missing and Place Details has phone
-            if (!foundPhoneFromPages && placeDetails.international_phone_number) {
-              try {
-                console.log(`[processExtractionJob] Creating phone contact from Place Details for business ${business.id}: ${placeDetails.international_phone_number}`);
-                
-                const phoneContact = await getOrCreateContact({
-                  phone: placeDetails.international_phone_number,
-                  contact_type: 'phone',
-                  is_generic: false
-                });
-                
-                console.log(`[processExtractionJob] Contact created/found with id: ${phoneContact.id}, now creating contact_source...`);
-                
-                // Link contact to business via source with business_id
-                // Convert business.id to string (UUID) to match contact_sources.business_id type
-                await createContactSource({
-                  contact_id: phoneContact.id,
-                  business_id: business.id.toString(), // Convert to string (UUID) - businesses.id is UUID in DB
-                  source_url: `https://maps.google.com/?cid=${business.google_place_id}`,
-                  page_type: 'homepage',
-                  html_hash: ''
-                });
-                
-                console.log(`[processExtractionJob] Successfully created phone contact from Place Details: ${placeDetails.international_phone_number}`);
-              } catch (error: any) {
-                console.error(`[processExtractionJob] CRITICAL ERROR creating phone contact from Place Details:`, {
-                  error_code: error.code,
-                  error_message: error.message,
-                  error_detail: error.detail,
-                  error_hint: error.hint,
-                  error_constraint: error.constraint,
-                  business_id: business.id,
-                  phone: placeDetails.international_phone_number,
-                  stack: error.stack
-                });
-              }
-            }
+            // NOTE: We NO LONGER extract phone from Place Details
+            // Phone should come from vrisko.gr (primary) or website crawling
+            console.log(`[processExtractionJob] Skipping phone extraction from Place Details - use vrisko.gr or website crawling instead`);
           } else {
             console.log(`[processExtractionJob] Place Details API returned no data for business ${business.id}`);
           }
@@ -361,7 +317,7 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
           // Don't fail the extraction job if Place Details fetch fails
         }
       } else {
-        console.log(`[processExtractionJob] Skipping Place Details API - crawling succeeded and found all needed data (website: ${foundWebsiteFromPages}, phone: ${foundPhoneFromPages}, email: ${foundEmailFromPages})`);
+        console.log(`[processExtractionJob] Skipping Place Details API - website already exists or not needed`);
       }
     } else {
       console.log(`[processExtractionJob] Business ${business.id} has no google_place_id - cannot fetch Place Details`);

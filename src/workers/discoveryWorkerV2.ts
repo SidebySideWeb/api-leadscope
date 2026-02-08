@@ -11,6 +11,7 @@
 
 import type { DiscoveryInput, City } from '../types/index.js';
 import { googleMapsService } from '../services/googleMaps.js';
+import { vriskoService } from '../services/vriskoService.js';
 import { getCountryByCode } from '../db/countries.js';
 import { getIndustryByName, getIndustryById } from '../db/industries.js';
 import { getCityByNormalizedName, updateCityCoordinates, getCityById } from '../db/cities.js';
@@ -21,6 +22,7 @@ import type { GooglePlaceResult } from '../types/index.js';
 import { generateGridPoints, type GridPoint } from '../utils/geo.js';
 import { getDiscoveryConfig, type DiscoveryConfig } from '../config/discoveryConfig.js';
 import { calculateExportEstimates, calculateRefreshEstimates } from '../config/pricing.js';
+import type { VriskoBusiness } from '../crawler/vrisko/vriskoParser.js';
 
 const GREECE_COUNTRY_CODE = 'GR';
 
@@ -394,20 +396,24 @@ export async function discoverBusinessesV2(
           
           console.log(`[discoverBusinessesV2] Searching: "${searchQuery}" at (${task.gridPoint.lat}, ${task.gridPoint.lng}) radius ${radiusMeters}m`);
           
-          const places = await searchWithRetry(
+          const searchResult = await searchWithRetry(
             searchQuery,
             task.gridPoint,
             radiusMeters,
-            discoveryConfig
+            discoveryConfig,
+            city?.name
           );
 
-          // CRITICAL DEBUG: Log raw Google results
-          console.log(`[discoverBusinessesV2] RAW GOOGLE PLACES for "${searchQuery}": ${places.length}`);
+          const places = searchResult.places;
+          const source = searchResult.source;
+
+          // CRITICAL DEBUG: Log results from source
+          console.log(`[discoverBusinessesV2] RAW ${source.toUpperCase()} results for "${searchQuery}": ${places.length}`);
           if (places.length > 0) {
             console.log(`[discoverBusinessesV2] Sample place IDs: ${places.slice(0, 3).map(p => p.place_id || 'NO_ID').join(', ')}`);
             console.log(`[discoverBusinessesV2] Sample place names: ${places.slice(0, 3).map(p => p.name || 'NO_NAME').join(', ')}`);
           } else {
-            console.warn(`[discoverBusinessesV2] WARNING: Search "${searchQuery}" returned ZERO places`);
+            console.warn(`[discoverBusinessesV2] WARNING: Search "${searchQuery}" returned ZERO places from ${source}`);
           }
 
           result.searchesExecuted++;
@@ -764,22 +770,51 @@ export async function discoverBusinessesV2(
 }
 
 /**
- * Search with retry logic
+ * Search with vrisko.gr as primary source, Google Places as fallback
+ * This reduces API costs by using free vrisko.gr for discovery
  */
 async function searchWithRetry(
   query: string,
   location: GridPoint,
   radiusMeters: number,
-  config: DiscoveryConfig
-): Promise<GooglePlaceResult[]> {
+  config: DiscoveryConfig,
+  cityName?: string
+): Promise<{ places: GooglePlaceResult[]; source: 'vrisko' | 'google' }> {
+  // STEP 1: Try vrisko.gr first (PRIMARY - FREE)
+  try {
+    console.log(`[searchWithRetry] Trying vrisko.gr first for "${query}"`);
+    
+    // Extract keyword from query (remove "in City" part if present)
+    const keyword = query.includes(' in ') ? query.split(' in ')[0].trim() : query;
+    const locationStr = cityName || query.includes(' in ') ? query.split(' in ')[1]?.trim() : '';
+    
+    if (locationStr) {
+      const vriskoResult = await vriskoService.searchBusinesses(keyword, locationStr, 5); // Limit to 5 pages per search
+      
+      if (vriskoResult.businesses.length > 0) {
+        console.log(`[searchWithRetry] ✅ vrisko.gr found ${vriskoResult.businesses.length} businesses`);
+        return { places: vriskoResult.businesses, source: 'vrisko' };
+      } else {
+        console.log(`[searchWithRetry] vrisko.gr returned no results, falling back to Google Places`);
+      }
+    } else {
+      console.log(`[searchWithRetry] No location string for vrisko, falling back to Google Places`);
+    }
+  } catch (vriskoError) {
+    console.warn(`[searchWithRetry] vrisko.gr search failed, falling back to Google Places:`, vriskoError);
+  }
+
+  // STEP 2: Fallback to Google Places API (SECONDARY - PAID)
+  console.log(`[searchWithRetry] Using Google Places API as fallback for "${query}"`);
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= config.retryAttempts; attempt++) {
     try {
-      return await googleMapsService.searchPlaces(query, {
+      const places = await googleMapsService.searchPlaces(query, {
         lat: location.lat,
         lng: location.lng
       }, radiusMeters);
+      return { places, source: 'google' };
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       
