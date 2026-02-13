@@ -379,7 +379,7 @@ export async function importGemiCompaniesToDatabase(
 
       // Get city_id from municipality (for backward compatibility)
       // Use provided cityId if available, otherwise try to match by municipality
-      // If still null, use Athens as default (required by NOT NULL constraint)
+      // city_id is now nullable, so we don't need a default
       let finalCityId = cityId || null;
       if (!finalCityId && municipalityId) {
         // Try to find matching city by municipality name
@@ -391,25 +391,9 @@ export async function importGemiCompaniesToDatabase(
           [municipalityId]
         );
         finalCityId = cityResult.rows[0]?.id || null;
-      }
-      
-      // If still no city_id, use Athens as default (required by NOT NULL constraint)
-      if (!finalCityId) {
-        const athensResult = await pool.query(
-          `SELECT id FROM cities 
-           WHERE name ILIKE '%athens%' OR name ILIKE '%αθήνα%' OR normalized_name ILIKE '%athens%'
-           LIMIT 1`
-        );
-        finalCityId = athensResult.rows[0]?.id || null;
         if (finalCityId && i < 5) {
-          console.log(`[GEMI] Using default city (Athens) for company ${company.ar_gemi}: ${finalCityId}`);
+          console.log(`[GEMI] Found matching city for municipality: ${finalCityId}`);
         }
-      }
-      
-      if (!finalCityId) {
-        console.error(`[GEMI] ❌ Could not find default city (Athens) in database. Cannot insert business ${company.ar_gemi} without city_id.`);
-        skipped++;
-        continue;
       }
 
       // Prepare insert values
