@@ -132,23 +132,17 @@ export async function enrichBusiness(businessId: string): Promise<{
       return { emailsFound: 0, phonesFound: 0, success: false };
     }
 
-    // Check if business already has email or phone
+    // Check if business already has email or phone directly on businesses table
     const existingContactsResult = await pool.query<{
-      has_email: boolean;
-      has_phone: boolean;
+      email: string | null;
+      phone: string | null;
     }>(
-      `SELECT 
-         EXISTS(SELECT 1 FROM contacts c 
-                JOIN contact_sources cs ON cs.contact_id = c.id 
-                WHERE cs.business_id = $1 AND c.email IS NOT NULL) as has_email,
-         EXISTS(SELECT 1 FROM contacts c 
-                JOIN contact_sources cs ON cs.contact_id = c.id 
-                WHERE cs.business_id = $1 AND (c.phone IS NOT NULL OR c.mobile IS NOT NULL)) as has_phone`,
+      `SELECT email, phone FROM businesses WHERE id = $1`,
       [businessId]
     );
 
-    const hasEmail = existingContactsResult.rows[0]?.has_email || false;
-    const hasPhone = existingContactsResult.rows[0]?.has_phone || false;
+    const hasEmail = !!existingContactsResult.rows[0]?.email;
+    const hasPhone = !!existingContactsResult.rows[0]?.phone;
 
     // Skip if already has both
     if (hasEmail && hasPhone) {
@@ -173,91 +167,51 @@ export async function enrichBusiness(businessId: string): Promise<{
       result = await scrapeWithPlaywright(url);
     }
 
-    // Save found contacts
+    // Save found contacts directly to businesses table
     let emailsFound = 0;
     let phonesFound = 0;
+    let emailToSave: string | null = null;
+    let phoneToSave: string | null = null;
 
-    for (const email of result.emails) {
-      if (hasEmail) continue; // Skip if already has email
-
-      try {
-        // Check if contact exists, insert if not
-        let contactId: string;
-        const existingEmail = await pool.query<{ id: string }>(
-          'SELECT id FROM contacts WHERE email = $1 LIMIT 1',
-          [email]
-        );
-        if (existingEmail.rows.length > 0) {
-          contactId = existingEmail.rows[0].id;
-        } else {
-          const insertResult = await pool.query<{ id: string }>(
-            `INSERT INTO contacts (email, contact_type, created_at)
-             VALUES ($1, 'email', NOW())
-             RETURNING id`,
-            [email]
-          );
-          contactId = insertResult.rows[0]?.id;
-        }
-
-        if (contactId) {
-          // Check if contact_sources link already exists
-          const existingSource = await pool.query(
-            'SELECT id FROM contact_sources WHERE business_id = $1 AND contact_id = $2 LIMIT 1',
-            [businessId, contactId]
-          );
-          if (existingSource.rows.length === 0) {
-            await pool.query(
-              `INSERT INTO contact_sources (business_id, contact_id, source_url, page_type, found_at)
-               VALUES ($1, $2, $3, 'website_scrape', NOW())`,
-              [businessId, contactId, url]
-            );
-          }
-          emailsFound++;
-        }
-      } catch (error) {
-        console.error(`[Enrichment] Error saving email ${email}:`, error);
-      }
+    // Get first email if business doesn't have one
+    if (!hasEmail && result.emails.length > 0) {
+      emailToSave = result.emails[0]; // Use first email found
+      emailsFound = 1;
     }
 
-    for (const phone of result.phones) {
-      if (hasPhone) continue; // Skip if already has phone
+    // Get first phone if business doesn't have one
+    if (!hasPhone && result.phones.length > 0) {
+      phoneToSave = result.phones[0]; // Use first phone found
+      phonesFound = 1;
+    }
 
-      try {
-        // Check if contact exists, insert if not
-        let contactId: string;
-        const existingPhone = await pool.query<{ id: string }>(
-          'SELECT id FROM contacts WHERE phone = $1 LIMIT 1',
-          [phone]
+    // Update businesses table with found contacts
+    if (emailToSave || phoneToSave) {
+      const updateFields: string[] = [];
+      const updateValues: any[] = [];
+      let paramIndex = 1;
+
+      if (emailToSave) {
+        updateFields.push(`email = $${paramIndex}`);
+        updateValues.push(emailToSave);
+        paramIndex++;
+      }
+
+      if (phoneToSave) {
+        updateFields.push(`phone = $${paramIndex}`);
+        updateValues.push(phoneToSave);
+        paramIndex++;
+      }
+
+      if (updateFields.length > 0) {
+        updateValues.push(businessId);
+        await pool.query(
+          `UPDATE businesses 
+           SET ${updateFields.join(', ')}, updated_at = NOW()
+           WHERE id = $${paramIndex}`,
+          updateValues
         );
-        if (existingPhone.rows.length > 0) {
-          contactId = existingPhone.rows[0].id;
-        } else {
-          const insertResult = await pool.query<{ id: string }>(
-            `INSERT INTO contacts (phone, contact_type, created_at)
-             VALUES ($1, 'phone', NOW())
-             RETURNING id`,
-            [phone]
-          );
-          contactId = insertResult.rows[0]?.id;
-        }
-
-        if (contactId) {
-          // Check if contact_sources link already exists
-          const existingSource = await pool.query(
-            'SELECT id FROM contact_sources WHERE business_id = $1 AND contact_id = $2 LIMIT 1',
-            [businessId, contactId]
-          );
-          if (existingSource.rows.length === 0) {
-            await pool.query(
-              `INSERT INTO contact_sources (business_id, contact_id, source_url, page_type, found_at)
-               VALUES ($1, $2, $3, 'website_scrape', NOW())`,
-              [businessId, contactId, url]
-            );
-          }
-          phonesFound++;
-        }
-      } catch (error) {
-        console.error(`[Enrichment] Error saving phone ${phone}:`, error);
+        console.log(`[Enrichment] Updated business ${businessId}: email=${emailToSave || 'none'}, phone=${phoneToSave || 'none'}`);
       }
     }
 
