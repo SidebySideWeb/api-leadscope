@@ -148,13 +148,15 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       isInternalUser = false;
     }
 
-    // Count cities in this dataset
-    const citiesResult = await pool.query<{ count: string }>(
-      `SELECT COUNT(DISTINCT city_id) as count
+    // Count municipalities in this dataset (city_id column removed)
+    const municipalitiesResult = await pool.query<{ count: string }>(
+      `SELECT COUNT(DISTINCT municipality_id) as count
        FROM businesses
        WHERE dataset_id = $1`,
       [datasetId]
     );
+    
+    const citiesResult = municipalitiesResult; // Keep variable name for compatibility
     const currentCities = parseInt(citiesResult.rows[0]?.count || '0', 10);
     const requestedCities = currentCities + 1; // Adding one more city
 
@@ -234,8 +236,8 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     // Resolve municipality_id from municipality_gemi_id if needed
     let finalMunicipalityId = input.municipality_id;
     let finalMunicipalityGemiId = input.municipality_gemi_id;
-    let finalCityId = input.city_id;
 
+    // Resolve municipality_id from municipality_gemi_id if needed (city_id column removed)
     if (input.municipality_gemi_id && !finalMunicipalityId) {
       const municipalityResult = await pool.query<{ id: string; gemi_id: string }>(
         'SELECT id, gemi_id FROM municipalities WHERE gemi_id = $1',
@@ -258,23 +260,13 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       }
     }
 
-    if (!finalCityId && input.city) {
-      const { getCityByNormalizedName } = await import('../db/cities.js');
-      const { normalizeCityName } = await import('../utils/cityNormalizer.js');
-      const city = await getCityByNormalizedName(normalizeCityName(input.city));
-      if (!city) {
-        throw new Error(`City "${input.city}" not found`);
-      }
-      finalCityId = city.id;
-    }
-
     if (!finalIndustryId) {
       throw new Error('Could not resolve industry_id');
     }
     
-    // municipality_gemi_id is preferred for GEMI discovery
-    if (!finalMunicipalityGemiId && !finalMunicipalityId && !finalCityId) {
-      throw new Error('Could not resolve municipality_gemi_id, municipality_id, or city_id');
+    // municipality_gemi_id is preferred for GEMI discovery (city_id column removed)
+    if (!finalMunicipalityGemiId && !finalMunicipalityId) {
+      throw new Error('Could not resolve municipality_gemi_id or municipality_id (city_id column has been removed)');
     }
 
     // STEP 1: Check local database first for existing businesses
@@ -289,15 +281,6 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
            AND municipality_id = $2
            AND industry_id = $3`,
         [datasetId, finalMunicipalityId, finalIndustryId]
-      );
-    } else if (finalCityId) {
-      existingBusinessesResult = await pool.query<{ count: string }>(
-        `SELECT COUNT(*) as count
-         FROM businesses
-         WHERE dataset_id = $1
-           AND city_id = $2
-           AND industry_id = $3`,
-        [datasetId, finalCityId, finalIndustryId]
       );
     } else {
       throw new Error('Either city_id or municipality_id is required');
@@ -343,40 +326,8 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         }
         
         municipalityGemiId = parseInt(municipalityResult.rows[0].gemi_id, 10);
-      } else if (finalCityId) {
-        // Legacy: Get city info to find municipality
-        const cityResult = await pool.query<{ name: string; normalized_name: string }>(
-          'SELECT name, normalized_name FROM cities WHERE id = $1',
-          [finalCityId]
-        );
-        const city = cityResult.rows[0];
-        
-        if (!city) {
-          throw new Error(`City with id ${finalCityId} not found`);
-        }
-
-        // Find municipality by matching city name (try both English and Greek)
-        const municipalityResult = await pool.query<{ id: string; gemi_id: string }>(
-          `SELECT id, gemi_id FROM municipalities 
-           WHERE descr ILIKE $1 OR descr_en ILIKE $1 OR descr ILIKE $2 OR descr_en ILIKE $2
-           LIMIT 1`,
-          [city.name, city.normalized_name]
-        );
-        
-        if (municipalityResult.rows.length === 0) {
-          console.warn(`[runDiscoveryJob] No municipality found for city ${city.name}, skipping GEMI fetch`);
-          discoveryResult = {
-            businessesFound: 0,
-            businessesCreated: 0,
-            businessesUpdated: 0,
-            searchesExecuted: 0,
-            errors: [`No municipality found for city: ${city.name}`],
-          };
-        } else {
-          municipalityGemiId = parseInt(municipalityResult.rows[0].gemi_id, 10);
-        }
       } else {
-        throw new Error('Either city_id or municipality_id is required for GEMI discovery');
+        throw new Error('municipality_id or municipality_gemi_id is required for GEMI discovery (city_id column has been removed)');
       }
       
       if (municipalityGemiId !== undefined) {
@@ -404,12 +355,11 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
 
           console.log(`[runDiscoveryJob] Fetched ${companies.length} companies from GEMI API`);
 
-          // Import companies to database (pass city_id and discoveryRunId if available)
+          // Import companies to database (pass discoveryRunId if available)
           const importResult = await importGemiCompaniesToDatabase(
             companies,
             datasetId,
             input.userId || 'system',
-            finalCityId || undefined, // Pass cityId if available
             input.discoveryRunId || undefined // Pass discoveryRunId to link businesses
           );
 

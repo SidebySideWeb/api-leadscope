@@ -277,7 +277,6 @@ export async function importGemiCompaniesToDatabase(
   companies: GemiCompany[],
   datasetId: string,
   userId: string,
-  cityId?: string, // Optional city_id to use if municipality mapping fails
   discoveryRunId?: string // Optional discovery_run_id to link businesses to discovery run
 ): Promise<{ inserted: number; updated: number; skipped: number }> {
   let inserted = 0;
@@ -289,7 +288,6 @@ export async function importGemiCompaniesToDatabase(
   console.log(`[GEMI] Dataset ID: ${datasetId}`);
   console.log(`[GEMI] User ID: ${userId}`);
   console.log(`[GEMI] Discovery Run ID: ${discoveryRunId || 'none'}`);
-  console.log(`[GEMI] City ID: ${cityId || 'none'}`);
   
   if (companies.length === 0) {
     console.warn(`[GEMI] ⚠️  No companies to import!`);
@@ -377,26 +375,10 @@ export async function importGemiCompaniesToDatabase(
         }
       }
 
-      // Get city_id from municipality (for backward compatibility)
-      // Use provided cityId if available, otherwise try to match by municipality
-      // city_id is now nullable, so we don't need a default
-      let finalCityId = cityId || null;
-      if (!finalCityId && municipalityId) {
-        // Try to find matching city by municipality name
-        const cityResult = await pool.query(
-          `SELECT c.id FROM cities c
-           JOIN municipalities m ON m.descr = c.name OR m.descr_en = c.name OR m.descr ILIKE c.name
-           WHERE m.id = $1
-           LIMIT 1`,
-          [municipalityId]
-        );
-        finalCityId = cityResult.rows[0]?.id || null;
-        if (finalCityId && i < 5) {
-          console.log(`[GEMI] Found matching city for municipality: ${finalCityId}`);
-        }
-      }
+      // city_id column has been removed from businesses table
+      // We only use municipality_id and prefecture_id now
 
-      // Prepare insert values
+      // Prepare insert values (city_id removed)
       const insertValues = [
         company.ar_gemi,
         company.name || company.legal_name || 'Unknown',
@@ -404,7 +386,6 @@ export async function importGemiCompaniesToDatabase(
         company.postal_code || null,
         municipalityId,
         prefectureId,
-        finalCityId,
         industryId,
         company.website_url || null,
         datasetId,
@@ -418,20 +399,20 @@ export async function importGemiCompaniesToDatabase(
           name: insertValues[1],
           municipality_id: insertValues[4],
           prefecture_id: insertValues[5],
-          industry_id: insertValues[8],
-          dataset_id: insertValues[9],
-          discovery_run_id: insertValues[11],
+          industry_id: insertValues[6],
+          dataset_id: insertValues[8],
+          discovery_run_id: insertValues[10],
         });
       }
 
-      // Upsert business using ar_gemi as unique constraint
+      // Upsert business using ar_gemi as unique constraint (city_id column removed)
       const result = await pool.query(
         `INSERT INTO businesses (
           ar_gemi, name, address, postal_code, 
-          municipality_id, prefecture_id, city_id, industry_id,
+          municipality_id, prefecture_id, industry_id,
           website_url, dataset_id, owner_user_id, discovery_run_id, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
         ON CONFLICT (ar_gemi) 
         DO UPDATE SET
           name = EXCLUDED.name,
@@ -439,7 +420,6 @@ export async function importGemiCompaniesToDatabase(
           postal_code = COALESCE(EXCLUDED.postal_code, businesses.postal_code),
           municipality_id = COALESCE(EXCLUDED.municipality_id, businesses.municipality_id),
           prefecture_id = COALESCE(EXCLUDED.prefecture_id, businesses.prefecture_id),
-          city_id = COALESCE(EXCLUDED.city_id, businesses.city_id),
           industry_id = COALESCE(EXCLUDED.industry_id, businesses.industry_id),
           website_url = COALESCE(EXCLUDED.website_url, businesses.website_url),
           discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id),
