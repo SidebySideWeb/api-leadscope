@@ -43,6 +43,7 @@
     "migrate:gemi-tables": "tsx src/db/migrations/run.ts create_gemi_tables.sql",
     "migrate:drop-normalized-unique": "tsx src/db/migrations/run.ts drop_businesses_dataset_normalized_unique.sql",
     "migrate:ensure-ar-gemi-unique": "tsx src/db/migrations/run.ts ensure_ar_gemi_unique.sql",
+    "migrate:ensure-ar-gemi-unique-v2": "tsx src/db/migrations/run.ts ensure_ar_gemi_unique_v2.sql",
     "migrate:remove-normalized-name-requirement": "tsx src/db/migrations/run.ts remove_normalized_name_requirement.sql",
     "migrate:drop-normalized-name-column": "tsx src/db/migrations/run.ts drop_normalized_name_column.sql",
     "migrate:add-phone-email": "tsx src/db/migrations/run.ts add_phone_email_to_businesses.sql",
