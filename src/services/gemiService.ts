@@ -210,10 +210,13 @@ export async function fetchGemiCompaniesForMunicipality(
           }
         }
 
+        // Get business name from coNamesEn (English) or coNameEl (Greek)
+        const businessName = c.coNamesEn || c.coNameEl || c.name || c.companyName || c.legalName || 'Unknown';
+
         return {
           ar_gemi: c.arGemi || c.ar_gemi || c.ar || String(c.arGemi || c.ar_gemi || c.ar || ''),
-          name: c.name || c.companyName || c.legalName || 'Unknown',
-          legal_name: c.legalName || c.legal_name || c.name,
+          name: businessName,
+          legal_name: c.legalName || c.legal_name || businessName,
           municipality_id: municipalityId,
           prefecture_id: prefectureId,
           address: c.address || c.fullAddress || null,
@@ -368,9 +371,10 @@ export async function importGemiCompaniesToDatabase(
       }
 
       // Prepare insert values (city_id and industry_id removed)
+      // Use company.name which should already have coNamesEn or coNameEl from mapping
       const insertValues = [
         company.ar_gemi,
-        company.name || company.legal_name || 'Unknown',
+        company.name || 'Unknown',
         company.address || null,
         company.postal_code || null,
         municipalityId,
