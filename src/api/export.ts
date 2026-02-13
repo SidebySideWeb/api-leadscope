@@ -122,41 +122,8 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
 
     const result = await pool.query(query, params);
 
-    // Get contacts for businesses
-    const businessIds = result.rows.map((b: any) => b.id);
-    const contactsMap = new Map<string, { emails: string[]; phones: string[] }>();
-
-    if (businessIds.length > 0) {
-      const contactsResult = await pool.query<{
-        business_id: string;
-        email: string | null;
-        phone: string | null;
-      }>(
-        `SELECT 
-           cs.business_id,
-           c.email,
-           COALESCE(c.phone, c.mobile) as phone
-         FROM contacts c
-         JOIN contact_sources cs ON cs.contact_id = c.id
-         WHERE cs.business_id = ANY($1)
-           AND (c.email IS NOT NULL OR c.phone IS NOT NULL OR c.mobile IS NOT NULL)
-         ORDER BY cs.business_id, cs.found_at ASC`,
-        [businessIds]
-      );
-
-      contactsResult.rows.forEach((c) => {
-        if (!contactsMap.has(c.business_id)) {
-          contactsMap.set(c.business_id, { emails: [], phones: [] });
-        }
-        const contact = contactsMap.get(c.business_id)!;
-        if (c.email && !contact.emails.includes(c.email)) {
-          contact.emails.push(c.email);
-        }
-        if (c.phone && !contact.phones.includes(c.phone)) {
-          contact.phones.push(c.phone);
-        }
-      });
-    }
+    // Phone, email, and website_url are now directly on businesses table
+    // No need to join with contacts or websites tables
 
     // Create Excel workbook
     const workbook = new ExcelJS.Workbook();
