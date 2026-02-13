@@ -95,6 +95,7 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     // Get businesses with pagination (industry_id and city_id columns removed)
+    // Include phone, email, and website_url directly from businesses table
     const query = `
       SELECT 
         b.id,
@@ -103,6 +104,8 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
         b.postal_code,
         b.ar_gemi,
         b.website_url,
+        b.phone,
+        b.email,
         COALESCE(m.descr_en, m.descr) as municipality_name,
         COALESCE(p.descr_en, p.descr) as prefecture_name,
         i.name as industry_name
@@ -181,9 +184,8 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       fgColor: { argb: 'FFE0E0E0' },
     };
 
-    // Add data rows
+    // Add data rows - phone, email, and website_url are directly on businesses table
     result.rows.forEach((business: any) => {
-      const contact = contactsMap.get(business.id) || { emails: [], phones: [] };
       worksheet.addRow({
         ar_gemi: business.ar_gemi || '',
         name: business.name || '',
@@ -193,8 +195,8 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
         prefecture: business.prefecture_name || '',
         industry: business.industry_name || '',
         website: business.website_url || '',
-        email: contact.emails.join('; ') || '',
-        phone: contact.phones.join('; ') || '',
+        email: business.email || '',
+        phone: business.phone || '',
       });
     });
 

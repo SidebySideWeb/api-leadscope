@@ -63,6 +63,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     const totalCount = parseInt(countResult.rows[0]?.total || '0', 10);
 
     // Get businesses with pagination (industry_id and city_id columns removed)
+    // Include phone, email, and website_url directly from businesses table
     const query = `
       SELECT 
         b.id,
@@ -73,6 +74,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         b.municipality_id,
         b.prefecture_id,
         b.website_url,
+        b.phone,
+        b.email,
         b.dataset_id,
         b.created_at,
         b.updated_at,

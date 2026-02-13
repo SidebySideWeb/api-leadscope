@@ -45,6 +45,7 @@
     "migrate:ensure-ar-gemi-unique": "tsx src/db/migrations/run.ts ensure_ar_gemi_unique.sql",
     "migrate:remove-normalized-name-requirement": "tsx src/db/migrations/run.ts remove_normalized_name_requirement.sql",
     "migrate:drop-normalized-name-column": "tsx src/db/migrations/run.ts drop_normalized_name_column.sql",
+    "migrate:add-phone-email": "tsx src/db/migrations/run.ts add_phone_email_to_businesses.sql",
     "seed:gemi-metadata": "node scripts/seed-gemi-metadata.js",
     "create-super-admin": "tsx src/cli/createSuperAdmin.ts"
   },

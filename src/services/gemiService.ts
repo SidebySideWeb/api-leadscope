@@ -384,6 +384,7 @@ export async function importGemiCompaniesToDatabase(
 
       // Prepare insert values (city_id and industry_id removed)
       // Use company.name which should already have coNamesEn or coNameEl from mapping
+      // Include phone, email, and website_url directly on business record
       const insertValues = [
         company.ar_gemi,
         company.name || 'Unknown',
@@ -392,6 +393,8 @@ export async function importGemiCompaniesToDatabase(
         municipalityId,
         prefectureId,
         company.website_url || null,
+        company.phone || null,
+        company.email || null,
         datasetId,
         userId,
         discoveryRunId || null,
@@ -403,21 +406,24 @@ export async function importGemiCompaniesToDatabase(
           name: insertValues[1],
           municipality_id: insertValues[4],
           prefecture_id: insertValues[5],
-          dataset_id: insertValues[7],
-          discovery_run_id: insertValues[9],
+          website_url: insertValues[6],
+          phone: insertValues[7],
+          email: insertValues[8],
+          dataset_id: insertValues[9],
+          discovery_run_id: insertValues[11],
         });
       }
 
       // Upsert business using ar_gemi as unique constraint
-      // Minimum required fields only: ar_gemi, name, dataset_id, owner_user_id
-      // Optional fields: address, postal_code, municipality_id, prefecture_id, website_url, discovery_run_id
+      // Store phone, email, and website_url directly on business record
       const result = await pool.query(
         `INSERT INTO businesses (
           ar_gemi, name, address, postal_code, 
           municipality_id, prefecture_id,
-          website_url, dataset_id, owner_user_id, discovery_run_id, created_at, updated_at
+          website_url, phone, email,
+          dataset_id, owner_user_id, discovery_run_id, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
         ON CONFLICT (ar_gemi) 
         DO UPDATE SET
           name = EXCLUDED.name,
@@ -426,6 +432,8 @@ export async function importGemiCompaniesToDatabase(
           municipality_id = COALESCE(EXCLUDED.municipality_id, businesses.municipality_id),
           prefecture_id = COALESCE(EXCLUDED.prefecture_id, businesses.prefecture_id),
           website_url = COALESCE(EXCLUDED.website_url, businesses.website_url),
+          phone = COALESCE(EXCLUDED.phone, businesses.phone),
+          email = COALESCE(EXCLUDED.email, businesses.email),
           discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id),
           updated_at = NOW()
         RETURNING id, (xmax = 0) AS inserted`,
