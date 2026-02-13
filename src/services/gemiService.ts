@@ -121,18 +121,49 @@ export async function fetchGemiCompaniesForMunicipality(
 
       console.log(`[GEMI] Fetching page at offset ${resultsOffset}...`);
 
-      const response = await gemiClient.get<GemiCompaniesResponse>('/companies', { params });
+      const response = await gemiClient.get<any>('/companies', { params });
 
-      const companies = response.data.data || [];
-      totalCount = response.data.totalCount || companies.length;
+      // Log response structure for debugging
+      if (resultsOffset === 0 && response.data) {
+        console.log(`[GEMI] API Response structure:`, JSON.stringify(Object.keys(response.data), null, 2));
+        if (response.data.data && response.data.data.length > 0) {
+          console.log(`[GEMI] First company structure:`, JSON.stringify(Object.keys(response.data.data[0]), null, 2));
+          console.log(`[GEMI] First company sample:`, JSON.stringify(response.data.data[0], null, 2));
+        }
+      }
+
+      // Map API response to our interface (handle both camelCase and snake_case)
+      const rawCompanies = response.data.data || response.data || [];
+      const companies: GemiCompany[] = rawCompanies.map((c: any) => ({
+        ar_gemi: c.arGemi || c.ar_gemi || c.ar || null,
+        name: c.name || c.companyName || c.legalName || 'Unknown',
+        legal_name: c.legalName || c.legal_name || c.name,
+        municipality_id: c.municipalityId || c.municipality_id || c.municipality || null,
+        prefecture_id: c.prefectureId || c.prefecture_id || c.prefecture || null,
+        address: c.address || c.fullAddress || null,
+        postal_code: c.postalCode || c.postal_code || c.zipCode || null,
+        website_url: c.websiteUrl || c.website_url || c.website || null,
+        email: c.email || null,
+        phone: c.phone || c.telephone || null,
+        activity_id: c.activityId || c.activity_id || c.activity || null,
+        ...c, // Include any other fields
+      }));
+
+      // Filter out companies without ar_gemi (required)
+      const validCompanies = companies.filter(c => c.ar_gemi);
+      if (validCompanies.length < companies.length) {
+        console.warn(`[GEMI] Filtered out ${companies.length - validCompanies.length} companies without ar_gemi`);
+      }
+
+      totalCount = response.data.totalCount || response.data.total || validCompanies.length;
       
-      allCompanies.push(...companies);
+      allCompanies.push(...validCompanies);
 
       // Check if there are more results
-      resultsOffset += companies.length;
-      hasMore = companies.length > 0 && resultsOffset < totalCount;
+      resultsOffset += validCompanies.length;
+      hasMore = validCompanies.length > 0 && resultsOffset < totalCount;
 
-      console.log(`[GEMI] Fetched ${companies.length} companies (total: ${allCompanies.length}/${totalCount})`);
+      console.log(`[GEMI] Fetched ${validCompanies.length} companies (total: ${allCompanies.length}/${totalCount})`);
 
       // Safety check to prevent infinite loops
       if (resultsOffset >= 10000) {
@@ -167,8 +198,17 @@ export async function importGemiCompaniesToDatabase(
   let updated = 0;
   let skipped = 0;
 
+  console.log(`[GEMI] Starting import of ${companies.length} companies to database...`);
+  
   for (const company of companies) {
     try {
+      // Validate required field
+      if (!company.ar_gemi) {
+        console.warn(`[GEMI] Skipping company without ar_gemi:`, JSON.stringify(company));
+        skipped++;
+        continue;
+      }
+
       // Get municipality_id and prefecture_id from GEMI IDs
       let municipalityId = null;
       let prefectureId = null;
@@ -182,6 +222,8 @@ export async function importGemiCompaniesToDatabase(
         if (municipalityResult.rows.length > 0) {
           municipalityId = municipalityResult.rows[0].id;
           prefectureId = municipalityResult.rows[0].prefecture_id;
+        } else {
+          console.warn(`[GEMI] Municipality with gemi_id ${company.municipality_id} not found in database`);
         }
       }
 
@@ -192,6 +234,8 @@ export async function importGemiCompaniesToDatabase(
         );
         if (industryResult.rows.length > 0) {
           industryId = industryResult.rows[0].id;
+        } else {
+          console.warn(`[GEMI] Industry with gemi_id ${company.activity_id} not found in database`);
         }
       }
 
@@ -247,11 +291,20 @@ export async function importGemiCompaniesToDatabase(
         ]
       );
 
-      const businessId = result.rows[0].id;
-      const wasInserted = result.rows[0].inserted;
+      const businessId = result.rows[0]?.id;
+      const wasInserted = result.rows[0]?.inserted;
+
+      if (!businessId) {
+        console.error(`[GEMI] Failed to insert/update business with ar_gemi: ${company.ar_gemi}`);
+        skipped++;
+        continue;
+      }
 
       if (wasInserted) {
         inserted++;
+        if (inserted % 10 === 0) {
+          console.log(`[GEMI] Imported ${inserted} businesses so far...`);
+        }
       } else {
         updated++;
       }
@@ -305,10 +358,16 @@ export async function importGemiCompaniesToDatabase(
         });
       }
     } catch (error: any) {
-      console.error(`[GEMI] Error importing company ${company.ar_gemi}:`, error.message);
-      skipped++;
+      console.error(`[GEMI] Error importing company ${company.ar_gemi || 'unknown'}:`, error.message);
+      if (error.code === '23505') { // Unique constraint violation
+        console.warn(`[GEMI] Duplicate ar_gemi detected: ${company.ar_gemi}`);
+        updated++; // Count as update instead of skip
+      } else {
+        skipped++;
+      }
     }
   }
 
+  console.log(`[GEMI] Import completed: ${inserted} inserted, ${updated} updated, ${skipped} skipped`);
   return { inserted, updated, skipped };
 }
