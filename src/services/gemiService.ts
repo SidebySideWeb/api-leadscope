@@ -393,6 +393,8 @@ export async function importGemiCompaniesToDatabase(
       }
 
       // Upsert business using ar_gemi as unique constraint (city_id and industry_id columns removed)
+      // Note: ar_gemi should never be null for GEMI companies, so ON CONFLICT (ar_gemi) should work
+      // If the unique index doesn't exist, this will fail - run ensure_ar_gemi_unique.sql migration
       const result = await pool.query(
         `INSERT INTO businesses (
           ar_gemi, name, address, postal_code, 
