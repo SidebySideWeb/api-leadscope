@@ -69,12 +69,15 @@ export async function findReusableDataset(
  */
 export async function getOrCreateDataset(
   userId: string,
-  cityId: string, // UUID
+  cityId: string | null, // UUID or null (null when using municipality_gemi_id)
   industryId: string, // UUID
   datasetName?: string
 ): Promise<Dataset> {
-  // Try to find reusable dataset
-  const existing = await findReusableDataset(userId, cityId, industryId);
+  // Try to find reusable dataset (only if cityId is provided)
+  let existing: Dataset | null = null;
+  if (cityId) {
+    existing = await findReusableDataset(userId, cityId, industryId);
+  }
   
   if (existing) {
     console.log(`[getOrCreateDataset] Reusing existing dataset: ${existing.id} (refreshed ${existing.last_refreshed_at})`);
@@ -82,7 +85,7 @@ export async function getOrCreateDataset(
   }
 
   // Create new dataset
-  const name = datasetName || `Dataset ${cityId}-${industryId}-${Date.now()}`;
+  const name = datasetName || (cityId ? `Dataset ${cityId}-${industryId}-${Date.now()}` : `Dataset ${industryId}-${Date.now()}`);
   
   const result = await pool.query<Dataset>(
     `
@@ -94,7 +97,7 @@ export async function getOrCreateDataset(
   );
 
   const newDataset = result.rows[0];
-  console.log(`[getOrCreateDataset] Created new dataset: ${newDataset.id}`);
+  console.log(`[getOrCreateDataset] Created new dataset: ${newDataset.id} (city_id: ${cityId || 'null'})`);
   
   return newDataset;
 }

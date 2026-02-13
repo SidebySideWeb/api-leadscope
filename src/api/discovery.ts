@@ -392,18 +392,44 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     // If dataset doesn't exist yet, create it synchronously so we can link discovery_run to it
     if (!finalDatasetId) {
       console.log('[API] Creating new dataset...');
-      const { resolveDataset } = await import('../services/datasetResolver.js');
       
+      // When using municipality_gemi_id, we can create dataset with null city_id
+      // Try to find a city if possible, but don't require it
       if (!datasetCityId) {
-        throw new Error('Cannot create dataset: city_id is required. Please provide city_id or municipality_id.');
+        console.log('[API] No city_id found, trying to use default city (Athens)...');
+        const cities = await getCities();
+        const athens = cities.find(c => 
+          c.name.toLowerCase().includes('athens') || 
+          c.name.toLowerCase().includes('αθήνα')
+        );
+        if (athens) {
+          datasetCityId = athens.id;
+          console.log(`[API] Using default city (Athens) for dataset: ${datasetCityId}`);
+        } else {
+          console.log('[API] Athens not found. Creating dataset with null city_id (using municipality_gemi_id directly).');
+        }
       }
       
-      const resolverResult = await resolveDataset({
-        userId,
-        cityId: datasetCityId,
-        industryId: industry.id,
-      });
-      finalDatasetId = resolverResult.dataset.id;
+      // Create dataset - city_id can be null when using municipality_gemi_id
+      if (datasetCityId) {
+        const { resolveDataset } = await import('../services/datasetResolver.js');
+        const resolverResult = await resolveDataset({
+          userId,
+          cityId: datasetCityId,
+          industryId: industry.id,
+        });
+        finalDatasetId = resolverResult.dataset.id;
+      } else {
+        // Create dataset directly with null city_id (bypassing resolver which requires cityId)
+        const { getOrCreateDataset } = await import('../db/datasets.js');
+        const dataset = await getOrCreateDataset(
+          userId,
+          null, // city_id is null when using municipality_gemi_id directly
+          industry.id,
+          `Dataset ${municipality_gemi_id || municipality_id || 'unknown'}-${industry.id}`
+        );
+        finalDatasetId = dataset.id;
+      }
       console.log('[API] Created dataset for discovery_run:', finalDatasetId);
     }
     
