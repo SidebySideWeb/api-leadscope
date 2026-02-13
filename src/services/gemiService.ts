@@ -491,53 +491,88 @@ export async function importGemiCompaniesToDatabase(
         }
       }
 
-      // Insert website if provided
+      // Insert website if provided (manual check to avoid ON CONFLICT)
       if (company.website_url) {
-        await pool.query(
-          `INSERT INTO websites (business_id, url, created_at)
-           VALUES ($1, $2, NOW())
-           ON CONFLICT (business_id, url) DO NOTHING`,
+        const existingWebsite = await pool.query(
+          'SELECT id FROM websites WHERE business_id = $1 AND url = $2 LIMIT 1',
           [businessId, company.website_url]
         );
+        if (existingWebsite.rows.length === 0) {
+          await pool.query(
+            `INSERT INTO websites (business_id, url, created_at)
+             VALUES ($1, $2, NOW())`,
+            [businessId, company.website_url]
+          );
+        }
       }
 
-      // Insert contacts if provided
+      // Insert contacts if provided (manual check to avoid ON CONFLICT)
       if (company.email) {
-        await pool.query(
-          `INSERT INTO contacts (email, contact_type, created_at)
-           VALUES ($1, 'email', NOW())
-           ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
-           RETURNING id`,
+        let contactId: string;
+        const existingEmail = await pool.query<{ id: string }>(
+          'SELECT id FROM contacts WHERE email = $1 LIMIT 1',
           [company.email]
-        ).then(async (contactResult) => {
-          if (contactResult.rows.length > 0) {
+        );
+        if (existingEmail.rows.length > 0) {
+          contactId = existingEmail.rows[0].id;
+        } else {
+          const insertResult = await pool.query<{ id: string }>(
+            `INSERT INTO contacts (email, contact_type, created_at)
+             VALUES ($1, 'email', NOW())
+             RETURNING id`,
+            [company.email]
+          );
+          contactId = insertResult.rows[0]?.id;
+        }
+        
+        if (contactId) {
+          // Check if contact_sources link already exists
+          const existingSource = await pool.query(
+            'SELECT id FROM contact_sources WHERE business_id = $1 AND contact_id = $2 LIMIT 1',
+            [businessId, contactId]
+          );
+          if (existingSource.rows.length === 0) {
             await pool.query(
               `INSERT INTO contact_sources (business_id, contact_id, source_url, page_type, found_at)
-               VALUES ($1, $2, $3, 'gemi_api', NOW())
-               ON CONFLICT DO NOTHING`,
-              [businessId, contactResult.rows[0].id, company.website_url || 'gemi_api']
+               VALUES ($1, $2, $3, 'gemi_api', NOW())`,
+              [businessId, contactId, company.website_url || 'gemi_api']
             );
           }
-        });
+        }
       }
 
       if (company.phone) {
-        await pool.query(
-          `INSERT INTO contacts (phone, contact_type, created_at)
-           VALUES ($1, 'phone', NOW())
-           ON CONFLICT (phone) DO UPDATE SET phone = EXCLUDED.phone
-           RETURNING id`,
+        let contactId: string;
+        const existingPhone = await pool.query<{ id: string }>(
+          'SELECT id FROM contacts WHERE phone = $1 LIMIT 1',
           [company.phone]
-        ).then(async (contactResult) => {
-          if (contactResult.rows.length > 0) {
+        );
+        if (existingPhone.rows.length > 0) {
+          contactId = existingPhone.rows[0].id;
+        } else {
+          const insertResult = await pool.query<{ id: string }>(
+            `INSERT INTO contacts (phone, contact_type, created_at)
+             VALUES ($1, 'phone', NOW())
+             RETURNING id`,
+            [company.phone]
+          );
+          contactId = insertResult.rows[0]?.id;
+        }
+        
+        if (contactId) {
+          // Check if contact_sources link already exists
+          const existingSource = await pool.query(
+            'SELECT id FROM contact_sources WHERE business_id = $1 AND contact_id = $2 LIMIT 1',
+            [businessId, contactId]
+          );
+          if (existingSource.rows.length === 0) {
             await pool.query(
               `INSERT INTO contact_sources (business_id, contact_id, source_url, page_type, found_at)
-               VALUES ($1, $2, $3, 'gemi_api', NOW())
-               ON CONFLICT DO NOTHING`,
-              [businessId, contactResult.rows[0].id, company.website_url || 'gemi_api']
+               VALUES ($1, $2, $3, 'gemi_api', NOW())`,
+              [businessId, contactId, company.website_url || 'gemi_api']
             );
           }
-        });
+        }
       }
     } catch (error: any) {
       console.error(`[GEMI] ❌ Error importing company [${i + 1}/${companies.length}] ${company.ar_gemi || 'unknown'}:`, error.message);
