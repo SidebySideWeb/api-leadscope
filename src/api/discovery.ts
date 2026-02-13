@@ -45,10 +45,12 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     console.log('[discovery] req.body keys:', Object.keys(req.body || {}));
     console.log('[discovery] req.body values:', req.body);
     
-    // CRITICAL: Accept snake_case payload (industry_id, city_id, dataset_id)
+    // CRITICAL: Accept snake_case payload (industry_id, city_id OR municipality_id, dataset_id)
     // Support camelCase with auto-conversion and warning (for frontend compatibility)
+    // Also support municipality_id as an alternative to city_id
     let industry_id: string | undefined;
     let city_id: string | undefined;
+    let municipality_id: string | undefined;
     let dataset_id: string | undefined;
     
     // Prefer snake_case, fallback to camelCase with warning
@@ -59,11 +61,26 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       console.warn('[discovery] WARNING: Received camelCase industryId, converted to industry_id. Please use snake_case in future requests.');
     }
     
+    // Accept city_id, municipality_id, or cityId/municipalityId
     if (req.body.city_id) {
       city_id = req.body.city_id;
     } else if (req.body.cityId) {
       city_id = req.body.cityId;
       console.warn('[discovery] WARNING: Received camelCase cityId, converted to city_id. Please use snake_case in future requests.');
+    }
+    
+    if (req.body.municipality_id) {
+      municipality_id = req.body.municipality_id;
+    } else if (req.body.municipalityId) {
+      municipality_id = req.body.municipalityId;
+      console.warn('[discovery] WARNING: Received camelCase municipalityId, converted to municipality_id. Please use snake_case in future requests.');
+    }
+    
+    // If city_id looks like a municipality ID (starts with "mun-"), treat it as municipality_id
+    if (city_id && city_id.startsWith('mun-')) {
+      console.log('[discovery] city_id looks like municipality ID, converting to municipality_id');
+      municipality_id = city_id;
+      city_id = undefined;
     }
     
     if (req.body.dataset_id) {
@@ -73,29 +90,79 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       console.warn('[discovery] WARNING: Received camelCase datasetId, converted to dataset_id. Please use snake_case in future requests.');
     }
     
-    console.log('[discovery] payload:', { industry_id, city_id, dataset_id });
+    console.log('[discovery] payload:', { industry_id, city_id, municipality_id, dataset_id });
     
-    // CRITICAL: Explicit validation - industry_id and city_id are required
+    // CRITICAL: Explicit validation - industry_id and (city_id OR municipality_id) are required
     // dataset_id is optional and will be auto-resolved if missing
-    if (!industry_id || !city_id) {
+    if (!industry_id || (!city_id && !municipality_id)) {
       const missing = [];
       if (!industry_id) missing.push('industry_id (or industryId)');
-      if (!city_id) missing.push('city_id (or cityId)');
+      if (!city_id && !municipality_id) missing.push('city_id (or cityId) OR municipality_id (or municipalityId)');
       
-      const errorMsg = `Invalid discovery request: missing required fields: ${missing.join(', ')}. Expected: industry_id, city_id (dataset_id is optional). Received body keys: ${Object.keys(req.body || {}).join(', ') || 'none'}`;
+      const errorMsg = `Invalid discovery request: missing required fields: ${missing.join(', ')}. Expected: industry_id, city_id OR municipality_id (dataset_id is optional). Received body keys: ${Object.keys(req.body || {}).join(', ') || 'none'}`;
       console.error('[API] Validation failed:', errorMsg);
       console.error('[API] Full req.body:', JSON.stringify(req.body, null, 2));
       throw new Error(errorMsg);
     }
 
-    // Validate UUID format for required IDs (industry_id and city_id)
+    // Validate UUID format for industry_id
     const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
     if (!uuidRegex.test(industry_id!)) {
       throw new Error(`Invalid discovery request: industry_id must be a valid UUID, got: ${industry_id}`);
     }
-    if (!uuidRegex.test(city_id!)) {
-      throw new Error(`Invalid discovery request: city_id must be a valid UUID, got: ${city_id}`);
+    
+    // If municipality_id is provided, map it to city_id
+    if (municipality_id && !city_id) {
+      console.log(`[discovery] Mapping municipality_id ${municipality_id} to city_id...`);
+      
+      // Find municipality by ID (could be "mun-XXXXX" format or UUID)
+      const municipalityResult = await pool.query<{ id: string; descr: string; descr_en: string }>(
+        `SELECT id, descr, descr_en FROM municipalities 
+         WHERE id = $1 OR gemi_id = $2`,
+        [municipality_id, municipality_id.replace('mun-', '')]
+      );
+      
+      if (municipalityResult.rows.length === 0) {
+        throw new Error(`Municipality with ID ${municipality_id} not found`);
+      }
+      
+      const municipality = municipalityResult.rows[0];
+      console.log(`[discovery] Found municipality: ${municipality.descr} (${municipality.descr_en})`);
+      
+      // Find matching city by name (try both Greek and English names)
+      const cityResult = await pool.query<{ id: string; name: string }>(
+        `SELECT id, name FROM cities 
+         WHERE name ILIKE $1 OR name ILIKE $2 OR normalized_name ILIKE $1 OR normalized_name ILIKE $2
+         LIMIT 1`,
+        [municipality.descr, municipality.descr_en]
+      );
+      
+      if (cityResult.rows.length === 0) {
+        // If no exact match, try to find by municipality name similarity
+        const cityResult2 = await pool.query<{ id: string; name: string }>(
+          `SELECT id, name FROM cities 
+           WHERE name ILIKE $1 OR normalized_name ILIKE $1
+           LIMIT 1`,
+          [`%${municipality.descr}%`]
+        );
+        
+        if (cityResult2.rows.length === 0) {
+          throw new Error(`No matching city found for municipality ${municipality.descr}. Please provide city_id directly.`);
+        }
+        
+        city_id = cityResult2.rows[0].id;
+        console.log(`[discovery] Mapped municipality to city: ${cityResult2.rows[0].name} (${city_id})`);
+      } else {
+        city_id = cityResult.rows[0].id;
+        console.log(`[discovery] Mapped municipality to city: ${cityResult.rows[0].name} (${city_id})`);
+      }
     }
+    
+    // Validate city_id is UUID after mapping
+    if (city_id && !uuidRegex.test(city_id)) {
+      throw new Error(`Invalid discovery request: city_id must be a valid UUID after mapping, got: ${city_id}`);
+    }
+    
     // dataset_id is optional, but if provided, must be valid UUID
     if (dataset_id && !uuidRegex.test(dataset_id)) {
       throw new Error(`Invalid discovery request: dataset_id must be a valid UUID, got: ${dataset_id}`);
@@ -118,9 +185,8 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     console.log('[API] Available cities:', cities.map(c => ({ id: c.id, name: c.name })).slice(0, 10)); // Log first 10
 
     // Both industries and cities use UUIDs (strings), so compare as strings
-    // TypeScript: industry_id and city_id are guaranteed to be strings here due to validation above
     const industry = industries.find((i) => String(i.id) === String(industry_id!));
-    const city = cities.find((c) => String(c.id) === String(city_id!));
+    const city = city_id ? cities.find((c) => String(c.id) === String(city_id)) : undefined;
 
     if (!industry) {
       const availableIds = industries.map(i => i.id).join(', ');
