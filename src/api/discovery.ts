@@ -189,27 +189,24 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
         }
       }
       
-      // Strategy 5: Use Athens as ultimate fallback (most municipalities are in Attica)
-      if (cityResult.rows.length === 0) {
-        console.log(`[discovery] No city match found, using Athens as fallback...`);
-        cityResult = await pool.query<{ id: string; name: string }>(
-          `SELECT id, name FROM cities 
-           WHERE name ILIKE '%ΑΘΗΝΑ%' OR name ILIKE '%Athens%' OR normalized_name ILIKE '%athens%'
-           LIMIT 1`
-        );
+      // If no city match found, that's OK - we'll use municipality_id directly
+      // Don't throw error, just log and proceed with municipality_id
+      if (cityResult.rows.length > 0) {
+        city_id = cityResult.rows[0].id;
+        console.log(`[discovery] Mapped municipality "${municipality.descr}" to city: ${cityResult.rows[0].name} (${city_id})`);
+      } else {
+        console.log(`[discovery] No city match found for municipality "${municipality.descr}". Will use municipality_id directly.`);
       }
-      
-      if (cityResult.rows.length === 0) {
-        throw new Error(`No matching city found for municipality ${municipality.descr}. Please provide city_id directly.`);
-      }
-      
-      city_id = cityResult.rows[0].id;
-      console.log(`[discovery] Mapped municipality "${municipality.descr}" to city: ${cityResult.rows[0].name} (${city_id})`);
     }
     
-    // Validate city_id is UUID after mapping
+    // Validate city_id is UUID after mapping (if provided)
     if (city_id && !uuidRegex.test(city_id)) {
       throw new Error(`Invalid discovery request: city_id must be a valid UUID after mapping, got: ${city_id}`);
+    }
+    
+    // If we have municipality_id but no city_id, that's fine - we'll use municipality directly
+    if (municipality_id && !city_id) {
+      console.log(`[discovery] Using municipality_id ${municipality_id} directly (no city mapping needed)`);
     }
     
     // dataset_id is optional, but if provided, must be valid UUID
@@ -224,18 +221,9 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     );
     const userPlan = (userResult.rows[0]?.plan || 'demo') as string;
 
-    // Get industry and city names from IDs
-    const [industries, cities] = await Promise.all([
-      getIndustries(),
-      getCities(),
-    ]);
-
-    console.log('[API] Available industries:', industries.map(i => ({ id: i.id, name: i.name })));
-    console.log('[API] Available cities:', cities.map(c => ({ id: c.id, name: c.name })).slice(0, 10)); // Log first 10
-
-    // Both industries and cities use UUIDs (strings), so compare as strings
+    // Get industry and municipality info
+    const industries = await getIndustries();
     const industry = industries.find((i) => String(i.id) === String(industry_id!));
-    const city = city_id ? cities.find((c) => String(c.id) === String(city_id)) : undefined;
 
     if (!industry) {
       const availableIds = industries.map(i => i.id).join(', ');
@@ -244,32 +232,56 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       throw new Error(errorMsg);
     }
 
-    if (!city) {
-      const errorMsg = `City with ID ${city_id} not found`;
-      console.error(`[API] ${errorMsg}`);
-      throw new Error(errorMsg);
+    // Get municipality info if municipality_id is provided
+    let municipalityName = 'Unknown';
+    if (municipality_id) {
+      const municipalityResult = await pool.query<{ descr: string; descr_en: string }>(
+        `SELECT descr, descr_en FROM municipalities WHERE id = $1 OR gemi_id = $2`,
+        [municipality_id, municipality_id.replace('mun-', '')]
+      );
+      if (municipalityResult.rows.length > 0) {
+        municipalityName = municipalityResult.rows[0].descr || municipalityResult.rows[0].descr_en || 'Unknown';
+      }
     }
 
-    console.log('[API] Starting discovery job for:', { industry: industry.name, city: city.name });
+    // Get city name if city_id is provided (for logging)
+    let cityName = 'Unknown';
+    if (city_id) {
+      const cities = await getCities();
+      const city = cities.find((c) => String(c.id) === String(city_id));
+      if (city) {
+        cityName = city.name;
+      }
+    }
+
+    console.log('[API] Starting discovery job for:', { 
+      industry: industry.name, 
+      municipality: municipalityName,
+      city: cityName || 'N/A (using municipality directly)'
+    });
 
     // Find or resolve dataset ID FIRST (before creating discovery_run)
     // dataset_id is optional - if not provided, find or create one
+    // Note: If using municipality_id, we'll use a default city_id for dataset (or make it optional)
     let finalDatasetId = dataset_id;
     if (!finalDatasetId) {
       console.log('[API] dataset_id not provided, attempting to find existing dataset...');
-      // Try to find existing dataset first
-      const existingDataset = await pool.query<{ id: string }>(
-        `
-        SELECT id FROM datasets
-        WHERE user_id = $1
-          AND city_id = $2
-          AND industry_id = $3
-        ORDER BY created_at DESC
-        LIMIT 1
-        `,
-        [userId, city_id!, industry_id!]
-      );
-      finalDatasetId = existingDataset.rows[0]?.id;
+      
+      // If we have city_id, use it for dataset lookup
+      if (city_id) {
+        const existingDataset = await pool.query<{ id: string }>(
+          `
+          SELECT id FROM datasets
+          WHERE user_id = $1
+            AND city_id = $2
+            AND industry_id = $3
+          ORDER BY created_at DESC
+          LIMIT 1
+          `,
+          [userId, city_id, industry_id!]
+        );
+        finalDatasetId = existingDataset.rows[0]?.id;
+      }
       
       if (finalDatasetId) {
         console.log('[API] Found existing dataset:', finalDatasetId);
@@ -280,10 +292,28 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     if (!finalDatasetId) {
       console.log('[API] Creating new dataset...');
       const { resolveDataset } = await import('../services/datasetResolver.js');
+      
+      // Use city_id if available, otherwise use a default (Athens) or make city_id optional
+      let datasetCityId = city_id;
+      if (!datasetCityId) {
+        // Find Athens as default city for municipality-based discovery
+        const cities = await getCities();
+        const athens = cities.find(c => 
+          c.name.toLowerCase().includes('athens') || 
+          c.name.toLowerCase().includes('αθήνα')
+        );
+        datasetCityId = athens?.id;
+        console.log(`[API] Using default city (Athens) for dataset: ${datasetCityId}`);
+      }
+      
+      if (!datasetCityId) {
+        throw new Error('Cannot create dataset: city_id is required. Please provide city_id or ensure Athens exists in cities table.');
+      }
+      
       const resolverResult = await resolveDataset({
         userId,
-        cityId: city.id, // Use city ID instead of name to prevent city creation
-        industryId: industry.id, // Use industry ID instead of name to prevent industry creation
+        cityId: datasetCityId,
+        industryId: industry.id,
       });
       finalDatasetId = resolverResult.dataset.id;
       console.log('[API] Created dataset for discovery_run:', finalDatasetId);
@@ -305,19 +335,34 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       throw new Error(errorMsg);
     }
     
-    // CRITICAL: Verify dataset matches requested city and industry
-    // This prevents using wrong datasets when city_id/industry_id don't match
-    if (dataset.city_id !== city.id || dataset.industry_id !== industry.id) {
-      console.error(`[API] Dataset mismatch detected:`);
-      console.error(`[API]   Requested: city_id=${city.id} (${city.name}), industry_id=${industry.id} (${industry.name})`);
-      console.error(`[API]   Dataset: city_id=${dataset.city_id}, industry_id=${dataset.industry_id}`);
+    // CRITICAL: Verify dataset matches requested industry
+    // Note: city_id matching is relaxed when using municipality_id
+    if (dataset.industry_id !== industry.id) {
+      console.error(`[API] Dataset industry mismatch detected:`);
+      console.error(`[API]   Requested: industry_id=${industry.id} (${industry.name})`);
+      console.error(`[API]   Dataset: industry_id=${dataset.industry_id}`);
       console.error(`[API]   Creating new dataset instead of reusing mismatched one...`);
       
       // Create a new dataset that matches the request
       const { resolveDataset: resolveDatasetForMismatch } = await import('../services/datasetResolver.js');
+      
+      let datasetCityId = city_id;
+      if (!datasetCityId) {
+        const cities = await getCities();
+        const athens = cities.find(c => 
+          c.name.toLowerCase().includes('athens') || 
+          c.name.toLowerCase().includes('αθήνα')
+        );
+        datasetCityId = athens?.id;
+      }
+      
+      if (!datasetCityId) {
+        throw new Error('Cannot create dataset: city_id is required.');
+      }
+      
       const resolverResult = await resolveDatasetForMismatch({
         userId,
-        cityId: city.id,
+        cityId: datasetCityId,
         industryId: industry.id,
       });
       finalDatasetId = resolverResult.dataset.id;
@@ -364,10 +409,11 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     const jobPromise = runDiscoveryJob({
       userId,
       industry_id: industry.id, // Use industry_id for keyword-based discovery
-      city_id: city.id, // Use city_id for coordinate-based discovery
-      latitude: city.latitude || undefined,
-      longitude: city.longitude || undefined,
-      cityRadiusKm: city.radius_km || undefined,
+      city_id: city_id || undefined, // Use city_id if available (for backward compatibility)
+      municipality_id: municipality_id || undefined, // Use municipality_id for GEMI discovery
+      latitude: undefined, // Not needed for GEMI-based discovery
+      longitude: undefined, // Not needed for GEMI-based discovery
+      cityRadiusKm: undefined, // Not needed for GEMI-based discovery
       datasetId: finalDatasetId, // Use provided dataset ID
       discoveryRunId: discoveryRun.id, // Pass discovery_run_id to link businesses
     });

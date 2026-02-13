@@ -4,7 +4,8 @@ export interface DiscoveryJobInput {
   industry?: string; // Legacy: industry name (for backward compatibility)
   industry_id?: string; // Preferred: industry UUID
   city?: string; // Legacy: city name (for backward compatibility)
-  city_id?: string; // Preferred: city UUID
+  city_id?: string; // Legacy: city UUID (for backward compatibility)
+  municipality_id?: string; // Preferred: municipality ID (GEMI-based discovery)
   latitude?: number;
   longitude?: number;
   cityRadiusKm?: number;
