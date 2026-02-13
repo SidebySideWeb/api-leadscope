@@ -126,14 +126,56 @@ export async function fetchGemiCompaniesForMunicipality(
       // Log response structure for debugging
       if (resultsOffset === 0 && response.data) {
         console.log(`[GEMI] API Response structure:`, JSON.stringify(Object.keys(response.data), null, 2));
-        if (response.data.data && response.data.data.length > 0) {
-          console.log(`[GEMI] First company structure:`, JSON.stringify(Object.keys(response.data.data[0]), null, 2));
-          console.log(`[GEMI] First company sample:`, JSON.stringify(response.data.data[0], null, 2));
+        console.log(`[GEMI] Full response sample (first 500 chars):`, JSON.stringify(response.data).substring(0, 500));
+      }
+
+      // Handle different API response structures
+      // Structure 1: { data: [...], totalCount: ... }
+      // Structure 2: { searchResults: [...], searchMetadata: {...} }
+      // Structure 3: Direct array [...]
+      let rawCompanies: any[] = [];
+      
+      if (Array.isArray(response.data)) {
+        // Direct array
+        rawCompanies = response.data;
+        console.log(`[GEMI] Response is direct array with ${rawCompanies.length} items`);
+      } else if (response.data?.data && Array.isArray(response.data.data)) {
+        // Nested data array
+        rawCompanies = response.data.data;
+        totalCount = response.data.totalCount || response.data.total || rawCompanies.length;
+        console.log(`[GEMI] Response has nested data array with ${rawCompanies.length} items, totalCount: ${totalCount}`);
+      } else if (response.data?.searchResults && Array.isArray(response.data.searchResults)) {
+        // searchResults structure
+        rawCompanies = response.data.searchResults;
+        if (response.data.searchMetadata) {
+          totalCount = response.data.searchMetadata.totalCount || response.data.searchMetadata.total || rawCompanies.length;
+          console.log(`[GEMI] Response has searchResults with ${rawCompanies.length} items, totalCount: ${totalCount}`);
+        }
+      } else if (response.data && typeof response.data === 'object') {
+        // Try to find any array property
+        const arrayKeys = Object.keys(response.data).filter(key => Array.isArray(response.data[key]));
+        if (arrayKeys.length > 0) {
+          rawCompanies = response.data[arrayKeys[0]];
+          console.log(`[GEMI] Found array in key '${arrayKeys[0]}' with ${rawCompanies.length} items`);
+        } else {
+          console.error(`[GEMI] ❌ Could not find array in response:`, JSON.stringify(Object.keys(response.data)));
+          throw new Error('Invalid API response structure: no array found');
         }
       }
 
+      if (rawCompanies.length === 0) {
+        console.warn(`[GEMI] ⚠️  No companies found in response at offset ${resultsOffset}`);
+        hasMore = false;
+        break;
+      }
+
+      // Log first company structure for debugging
+      if (resultsOffset === 0 && rawCompanies.length > 0) {
+        console.log(`[GEMI] First company structure:`, JSON.stringify(Object.keys(rawCompanies[0]), null, 2));
+        console.log(`[GEMI] First company sample:`, JSON.stringify(rawCompanies[0], null, 2));
+      }
+
       // Map API response to our interface (handle both camelCase and snake_case)
-      const rawCompanies = response.data.data || response.data || [];
       const companies: GemiCompany[] = rawCompanies.map((c: any) => ({
         ar_gemi: c.arGemi || c.ar_gemi || c.ar || null,
         name: c.name || c.companyName || c.legalName || 'Unknown',
@@ -159,9 +201,18 @@ export async function fetchGemiCompaniesForMunicipality(
       
       allCompanies.push(...validCompanies);
 
+      // Update totalCount if we got it from response
+      if (response.data?.searchMetadata?.totalCount) {
+        totalCount = response.data.searchMetadata.totalCount;
+      } else if (response.data?.totalCount) {
+        totalCount = response.data.totalCount;
+      } else if (response.data?.total) {
+        totalCount = response.data.total;
+      }
+
       // Check if there are more results
       resultsOffset += validCompanies.length;
-      hasMore = validCompanies.length > 0 && resultsOffset < totalCount;
+      hasMore = validCompanies.length > 0 && (totalCount === 0 || resultsOffset < totalCount);
 
       console.log(`[GEMI] Fetched ${validCompanies.length} companies (total: ${allCompanies.length}/${totalCount})`);
 

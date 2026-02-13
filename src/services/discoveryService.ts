@@ -1,5 +1,4 @@
 import type { DiscoveryJobInput, JobResult } from '../types/jobs.js';
-import { runVriskoDiscovery } from '../discovery/vriskoWorker.js';
 import { createCrawlJob } from '../db/crawlJobs.js';
 import { pool } from '../config/database.js';
 import type { Website } from '../types/index.js';
@@ -28,7 +27,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     console.log(`\n🔍 Starting DISCOVERY job: ${jobId}`);
     console.log(`   Industry: ${input.industry_id || input.industry}`);
     console.log(`   City: ${input.city_id || input.city}`);
-    console.log(`   Discovery method: Vrisko.gr (ONLY source - no Google Maps)`);
+    console.log(`   Discovery method: GEMI API (official Greek business registry)`);
 
   let discoveryRun: Awaited<ReturnType<typeof createDiscoveryRun>> | undefined;
   
@@ -458,7 +457,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       };
     }
     
-    console.log(`[runDiscoveryJob] Vrisko discovery completed:`, {
+    console.log(`[runDiscoveryJob] GEMI discovery completed:`, {
       businessesFound: discoveryResult.businessesFound,
       businessesCreated: discoveryResult.businessesCreated,
       businessesUpdated: discoveryResult.businessesUpdated,
