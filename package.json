@@ -41,6 +41,7 @@
     "migrate:google-place-unique": "tsx src/db/migrations/run.ts add_google_place_unique.sql",
     "migrate:users": "tsx src/db/migrations/run.ts create_users_table.sql",
     "migrate:gemi-tables": "tsx src/db/migrations/run.ts create_gemi_tables.sql",
+    "migrate:drop-normalized-unique": "tsx src/db/migrations/run.ts drop_businesses_dataset_normalized_unique.sql",
     "seed:gemi-metadata": "node scripts/seed-gemi-metadata.js",
     "create-super-admin": "tsx src/cli/createSuperAdmin.ts"
   },

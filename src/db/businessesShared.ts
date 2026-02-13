@@ -267,7 +267,14 @@ export async function upsertBusinessGlobal(data: {
           insertValues
         );
       } catch (insertError: any) {
-        if (insertError.code === '23505' && insertError.constraint === 'businesses_dataset_normalized_unique') {
+        // Note: businesses_dataset_normalized_unique constraint has been removed
+        // If you see this error, the constraint still exists in the database
+        // Run migration: drop_businesses_dataset_normalized_unique.sql
+        if (insertError.code === '23505' && 
+            (insertError.constraint === 'businesses_dataset_normalized_unique' || 
+             insertError.constraint === 'unique_business_dataset_name')) {
+          console.warn(`[businessesShared] Constraint ${insertError.constraint} still exists. Please run migration to drop it.`);
+          // Try to find existing business by normalized_name and update it
           const existingByNormalizedName = await pool.query<Business>(
             `SELECT * FROM businesses 
              WHERE dataset_id = $1 AND normalized_name = $2 
