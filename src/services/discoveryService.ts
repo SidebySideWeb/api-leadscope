@@ -270,7 +270,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     }
 
     // STEP 1: Check local database first for existing businesses
-    // Use municipality_id if available, otherwise use city_id
+    // Filter by dataset_id and municipality_id (industry_id and city_id columns removed)
     console.log(`[runDiscoveryJob] Checking local database for existing businesses...`);
     let existingBusinessesResult;
     if (finalMunicipalityId) {
@@ -278,12 +278,11 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         `SELECT COUNT(*) as count
          FROM businesses
          WHERE dataset_id = $1
-           AND municipality_id = $2
-           AND industry_id = $3`,
-        [datasetId, finalMunicipalityId, finalIndustryId]
+           AND municipality_id = $2`,
+        [datasetId, finalMunicipalityId]
       );
     } else {
-      throw new Error('Either city_id or municipality_id is required');
+      throw new Error('municipality_id is required (city_id and industry_id columns have been removed)');
     }
     
     const existingCount = parseInt(existingBusinessesResult.rows[0]?.count || '0', 10);
