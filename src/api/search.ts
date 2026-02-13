@@ -95,52 +95,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 
     const result = await pool.query(query, params);
 
-    // Get websites and contacts for businesses
-    const businessIds = result.rows.map((b: any) => b.id);
-    const websitesMap = new Map<string, string>();
-    const contactsMap = new Map<string, { email: string | null; phone: string | null }>();
-
-    if (businessIds.length > 0) {
-      // Get websites
-      const websitesResult = await pool.query<{ business_id: string; url: string }>(
-        'SELECT business_id, url FROM websites WHERE business_id = ANY($1)',
-        [businessIds]
-      );
-      websitesResult.rows.forEach((w) => {
-        websitesMap.set(w.business_id, w.url);
-      });
-
-      // Get contacts
-      const contactsResult = await pool.query<{
-        business_id: string;
-        email: string | null;
-        phone: string | null;
-      }>(
-        `SELECT DISTINCT ON (cs.business_id, c.contact_type)
-           cs.business_id,
-           CASE WHEN c.contact_type = 'email' THEN c.email ELSE NULL END as email,
-           CASE WHEN c.contact_type = 'phone' THEN COALESCE(c.phone, c.mobile) ELSE NULL END as phone
-         FROM contacts c
-         JOIN contact_sources cs ON cs.contact_id = c.id
-         WHERE cs.business_id = ANY($1)
-           AND (c.email IS NOT NULL OR c.phone IS NOT NULL OR c.mobile IS NOT NULL)
-         ORDER BY cs.business_id, c.contact_type, cs.found_at ASC`,
-        [businessIds]
-      );
-
-      contactsResult.rows.forEach((c) => {
-        if (!contactsMap.has(c.business_id)) {
-          contactsMap.set(c.business_id, { email: null, phone: null });
-        }
-        const contact = contactsMap.get(c.business_id)!;
-        if (c.email && !contact.email) contact.email = c.email;
-        if (c.phone && !contact.phone) contact.phone = c.phone;
-      });
-    }
-
-    // Format response
+    // Format response - phone, email, and website_url are now directly on businesses table
     const businesses = result.rows.map((b: any) => {
-      const contact = contactsMap.get(b.id) || { email: null, phone: null };
       return {
         id: b.id,
         name: b.name,
@@ -150,9 +106,9 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         municipality: b.municipality_name,
         prefecture: b.prefecture_name,
         industry: b.industry_name,
-        website: websitesMap.get(b.id) || b.website_url || null,
-        email: contact.email,
-        phone: contact.phone,
+        website: b.website_url || null,
+        email: b.email || null,
+        phone: b.phone || null,
         created_at: b.created_at instanceof Date ? b.created_at.toISOString() : b.created_at,
         updated_at: b.updated_at instanceof Date ? b.updated_at.toISOString() : b.updated_at,
       };
