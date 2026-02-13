@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Response } from 'express';
 import { authMiddleware, type AuthRequest } from '../middleware/auth.js';
 import { runDiscoveryJob } from '../services/discoveryService.js';
 import { getIndustries } from '../db/industries.js';
@@ -10,11 +10,12 @@ import { getDatasetById, verifyDatasetOwnership } from '../db/datasets.js';
 const router = express.Router();
 
 /**
- * POST /discovery/businesses
+ * POST /api/discovery (root handler for frontend compatibility)
+ * POST /api/discovery/businesses (explicit path)
  * Discover businesses for a given industry and city
  * Requires authentication
  */
-router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
+const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
   console.log('\n[API] ===== DISCOVERY API ENDPOINT CALLED =====');
   console.log('[API] Request method:', req.method);
   console.log('[API] Request path:', req.path);
@@ -321,10 +322,14 @@ router.post('/businesses', authMiddleware, async (req: AuthRequest, res) => {
       },
     });
   }
-});
+};
+
+// Register handler for both root and /businesses paths
+router.post('/', authMiddleware, handleDiscoveryRequest);
+router.post('/businesses', authMiddleware, handleDiscoveryRequest);
 
 /**
- * GET /discovery/runs/:runId/results
+ * GET /api/discovery/runs/:runId/results
  * Get discovery results with cost estimates for a specific discovery run
  * Requires authentication and dataset ownership
  */

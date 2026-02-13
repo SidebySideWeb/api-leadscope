@@ -45,7 +45,7 @@ app.use('/dashboard', dashboardRoutes);
 app.use('/exports', exportsRoutes);
 
 // Discovery routes (requires authentication)
-app.use('/discovery', discoveryRoutes);
+app.use('/api/discovery', discoveryRoutes);
 
 // Businesses routes (requires authentication)
 app.use('/businesses', businessesRoutes);
