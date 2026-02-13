@@ -670,7 +670,23 @@ router.get('/runs/:runId/results', authMiddleware, async (req: AuthRequest, res)
     );
     const userPlan = (userResult.rows[0]?.plan || 'demo') as string;
 
-    // Return discovery results with cost estimates
+    // Get business counts for this discovery run
+    const businessCounts = await pool.query<{ 
+      total: string; 
+      created: string;
+    }>(
+      `SELECT 
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE created_at >= $1) as created
+      FROM businesses 
+      WHERE discovery_run_id = $2`,
+      [discoveryRun.created_at, runId]
+    );
+
+    const businessesFound = parseInt(businessCounts.rows[0]?.total || '0', 10);
+    const businessesCreated = parseInt(businessCounts.rows[0]?.created || '0', 10);
+
+    // Return discovery results with business counts and cost estimates
     // IMPORTANT: These are ESTIMATES ONLY - no billing occurs
     return res.json({
       data: {
@@ -682,6 +698,8 @@ router.get('/runs/:runId/results', authMiddleware, async (req: AuthRequest, res)
         completed_at: discoveryRun.completed_at instanceof Date 
           ? discoveryRun.completed_at.toISOString() 
           : discoveryRun.completed_at,
+        businesses_found: businessesFound,
+        businesses_created: businessesCreated,
         // Cost estimation data (ESTIMATES ONLY - no billing occurs)
         cost_estimates: discoveryRun.cost_estimates || null,
       },
@@ -690,9 +708,9 @@ router.get('/runs/:runId/results', authMiddleware, async (req: AuthRequest, res)
         gated: false,
         total_available: 1,
         total_returned: 1,
-        message: discoveryRun.cost_estimates 
-          ? 'Cost estimates are available. These are estimates only, not guarantees.'
-          : 'Discovery is still running or estimates are not yet available.',
+        message: discoveryRun.status === 'completed'
+          ? `Discovery completed: ${businessesFound} businesses found, ${businessesCreated} created.`
+          : 'Discovery is still running...',
       },
     });
   } catch (error: any) {

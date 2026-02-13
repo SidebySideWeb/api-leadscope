@@ -165,7 +165,8 @@ export async function importGemiCompaniesToDatabase(
   companies: GemiCompany[],
   datasetId: string,
   userId: string,
-  cityId?: string // Optional city_id to use if municipality mapping fails
+  cityId?: string, // Optional city_id to use if municipality mapping fails
+  discoveryRunId?: string // Optional discovery_run_id to link businesses to discovery run
 ): Promise<{ inserted: number; updated: number; skipped: number }> {
   let inserted = 0;
   let updated = 0;
@@ -219,9 +220,9 @@ export async function importGemiCompaniesToDatabase(
         `INSERT INTO businesses (
           ar_gemi, name, address, postal_code, 
           municipality_id, prefecture_id, city_id, industry_id,
-          website_url, dataset_id, owner_user_id, created_at, updated_at
+          website_url, dataset_id, owner_user_id, discovery_run_id, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
         ON CONFLICT (ar_gemi) 
         DO UPDATE SET
           name = EXCLUDED.name,
@@ -232,6 +233,7 @@ export async function importGemiCompaniesToDatabase(
           city_id = COALESCE(EXCLUDED.city_id, businesses.city_id),
           industry_id = COALESCE(EXCLUDED.industry_id, businesses.industry_id),
           website_url = COALESCE(EXCLUDED.website_url, businesses.website_url),
+          discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id),
           updated_at = NOW()
         RETURNING id, (xmax = 0) AS inserted`,
         [
@@ -246,6 +248,7 @@ export async function importGemiCompaniesToDatabase(
           company.website_url || null,
           datasetId,
           userId,
+          discoveryRunId || null,
         ]
       );
 

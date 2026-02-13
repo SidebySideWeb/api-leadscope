@@ -405,12 +405,13 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
 
           console.log(`[runDiscoveryJob] Fetched ${companies.length} companies from GEMI API`);
 
-          // Import companies to database (pass city_id if available, otherwise undefined)
+          // Import companies to database (pass city_id and discoveryRunId if available)
           const importResult = await importGemiCompaniesToDatabase(
             companies,
             datasetId,
             input.userId || 'system',
-            finalCityId || undefined // Pass cityId if available
+            finalCityId || undefined, // Pass cityId if available
+            input.discoveryRunId || undefined // Pass discoveryRunId to link businesses
           );
 
           discoveryResult = {
