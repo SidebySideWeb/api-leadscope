@@ -45,42 +45,50 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     console.log('[discovery] req.body keys:', Object.keys(req.body || {}));
     console.log('[discovery] req.body values:', req.body);
     
-    // CRITICAL: Accept snake_case payload (industry_id, city_id OR municipality_id, dataset_id)
-    // Support camelCase with auto-conversion and warning (for frontend compatibility)
-    // Also support municipality_id as an alternative to city_id
+    // CRITICAL: Accept gemi_id values (preferred) or internal IDs (for backward compatibility)
+    // Support both municipality_gemi_id/industry_gemi_id (preferred) and municipality_id/industry_id (legacy)
+    let industry_gemi_id: number | undefined;
     let industry_id: string | undefined;
-    let city_id: string | undefined;
+    let municipality_gemi_id: number | undefined;
     let municipality_id: string | undefined;
+    let city_id: string | undefined;
     let dataset_id: string | undefined;
     
-    // Prefer snake_case, fallback to camelCase with warning
-    if (req.body.industry_id) {
+    // Accept industry_gemi_id (preferred) or industry_id (legacy)
+    if (req.body.industry_gemi_id !== undefined) {
+      industry_gemi_id = typeof req.body.industry_gemi_id === 'number' 
+        ? req.body.industry_gemi_id 
+        : parseInt(req.body.industry_gemi_id, 10);
+    } else if (req.body.industry_id) {
       industry_id = req.body.industry_id;
     } else if (req.body.industryId) {
       industry_id = req.body.industryId;
-      console.warn('[discovery] WARNING: Received camelCase industryId, converted to industry_id. Please use snake_case in future requests.');
+      console.warn('[discovery] WARNING: Received camelCase industryId, converted to industry_id. Please use industry_gemi_id in future requests.');
     }
     
-    // Accept city_id, municipality_id, or cityId/municipalityId
-    if (req.body.city_id) {
-      city_id = req.body.city_id;
-    } else if (req.body.cityId) {
-      city_id = req.body.cityId;
-      console.warn('[discovery] WARNING: Received camelCase cityId, converted to city_id. Please use snake_case in future requests.');
-    }
-    
-    if (req.body.municipality_id) {
+    // Accept municipality_gemi_id (preferred) or municipality_id/city_id (legacy)
+    if (req.body.municipality_gemi_id !== undefined) {
+      municipality_gemi_id = typeof req.body.municipality_gemi_id === 'number'
+        ? req.body.municipality_gemi_id
+        : parseInt(req.body.municipality_gemi_id, 10);
+    } else if (req.body.municipality_id) {
       municipality_id = req.body.municipality_id;
     } else if (req.body.municipalityId) {
       municipality_id = req.body.municipalityId;
-      console.warn('[discovery] WARNING: Received camelCase municipalityId, converted to municipality_id. Please use snake_case in future requests.');
-    }
-    
-    // If city_id looks like a municipality ID (starts with "mun-"), treat it as municipality_id
-    if (city_id && city_id.startsWith('mun-')) {
-      console.log('[discovery] city_id looks like municipality ID, converting to municipality_id');
-      municipality_id = city_id;
-      city_id = undefined;
+      console.warn('[discovery] WARNING: Received camelCase municipalityId, converted to municipality_id. Please use municipality_gemi_id in future requests.');
+    } else if (req.body.city_id) {
+      const tempCityId = req.body.city_id;
+      // If city_id looks like a municipality ID (starts with "mun-"), treat it as municipality_id
+      if (tempCityId && tempCityId.startsWith('mun-')) {
+        console.log('[discovery] city_id looks like municipality ID, converting to municipality_id');
+        municipality_id = tempCityId;
+        city_id = undefined;
+      } else {
+        city_id = tempCityId;
+      }
+    } else if (req.body.cityId) {
+      city_id = req.body.cityId;
+      console.warn('[discovery] WARNING: Received camelCase cityId, converted to city_id. Please use municipality_gemi_id in future requests.');
     }
     
     if (req.body.dataset_id) {
@@ -90,28 +98,61 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       console.warn('[discovery] WARNING: Received camelCase datasetId, converted to dataset_id. Please use snake_case in future requests.');
     }
     
-    console.log('[discovery] payload:', { industry_id, city_id, municipality_id, dataset_id });
+    if (req.body.dataset_id) {
+      dataset_id = req.body.dataset_id;
+    } else if (req.body.datasetId) {
+      dataset_id = req.body.datasetId;
+      console.warn('[discovery] WARNING: Received camelCase datasetId, converted to dataset_id. Please use snake_case in future requests.');
+    }
     
-    // CRITICAL: Explicit validation - industry_id and (city_id OR municipality_id) are required
+    console.log('[discovery] payload:', { industry_gemi_id, industry_id, municipality_gemi_id, municipality_id, city_id, dataset_id });
+    
+    // CRITICAL: Explicit validation - (industry_gemi_id OR industry_id) and (municipality_gemi_id OR municipality_id OR city_id) are required
     // dataset_id is optional and will be auto-resolved if missing
-    if (!industry_id || (!city_id && !municipality_id)) {
+    if ((!industry_gemi_id && !industry_id) || (!municipality_gemi_id && !municipality_id && !city_id)) {
       const missing = [];
-      if (!industry_id) missing.push('industry_id (or industryId)');
-      if (!city_id && !municipality_id) missing.push('city_id (or cityId) OR municipality_id (or municipalityId)');
+      if (!industry_gemi_id && !industry_id) missing.push('industry_gemi_id OR industry_id');
+      if (!municipality_gemi_id && !municipality_id && !city_id) missing.push('municipality_gemi_id OR municipality_id OR city_id');
       
-      const errorMsg = `Invalid discovery request: missing required fields: ${missing.join(', ')}. Expected: industry_id, city_id OR municipality_id (dataset_id is optional). Received body keys: ${Object.keys(req.body || {}).join(', ') || 'none'}`;
+      const errorMsg = `Invalid discovery request: missing required fields: ${missing.join(', ')}. Expected: (industry_gemi_id OR industry_id), (municipality_gemi_id OR municipality_id OR city_id). Received body keys: ${Object.keys(req.body || {}).join(', ') || 'none'}`;
       console.error('[API] Validation failed:', errorMsg);
       console.error('[API] Full req.body:', JSON.stringify(req.body, null, 2));
       throw new Error(errorMsg);
     }
 
-    // Validate UUID format for industry_id
-    const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    if (!uuidRegex.test(industry_id!)) {
-      throw new Error(`Invalid discovery request: industry_id must be a valid UUID, got: ${industry_id}`);
+    // Resolve industry_id from industry_gemi_id if needed
+    if (industry_gemi_id && !industry_id) {
+      const industryResult = await pool.query<{ id: string }>(
+        'SELECT id FROM industries WHERE gemi_id = $1',
+        [industry_gemi_id]
+      );
+      if (industryResult.rows.length === 0) {
+        throw new Error(`Industry with gemi_id ${industry_gemi_id} not found`);
+      }
+      industry_id = industryResult.rows[0].id;
+      console.log(`[discovery] Resolved industry_gemi_id ${industry_gemi_id} to industry_id ${industry_id}`);
+    } else if (industry_id) {
+      // Validate UUID format for industry_id (only if not using gemi_id)
+      const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+      if (!uuidRegex.test(industry_id)) {
+        throw new Error(`Invalid discovery request: industry_id must be a valid UUID, got: ${industry_id}`);
+      }
     }
     
-    // If municipality_id is provided, map it to city_id
+    // Resolve municipality_id from municipality_gemi_id if needed
+    if (municipality_gemi_id && !municipality_id) {
+      const municipalityResult = await pool.query<{ id: string }>(
+        'SELECT id FROM municipalities WHERE gemi_id = $1',
+        [municipality_gemi_id.toString()]
+      );
+      if (municipalityResult.rows.length === 0) {
+        throw new Error(`Municipality with gemi_id ${municipality_gemi_id} not found`);
+      }
+      municipality_id = municipalityResult.rows[0].id;
+      console.log(`[discovery] Resolved municipality_gemi_id ${municipality_gemi_id} to municipality_id ${municipality_id}`);
+    }
+    
+    // If municipality_id is provided, map it to city_id (for dataset creation)
     if (municipality_id && !city_id) {
       console.log(`[discovery] Mapping municipality_id ${municipality_id} to city_id...`);
       
@@ -200,6 +241,7 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     }
     
     // Validate city_id is UUID after mapping (if provided)
+    const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
     if (city_id && !uuidRegex.test(city_id)) {
       throw new Error(`Invalid discovery request: city_id must be a valid UUID after mapping, got: ${city_id}`);
     }
@@ -432,8 +474,10 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     console.log('[API] Discovery job params:', {
       userId,
       industry_id: industry.id,
-      city_id: city_id || undefined,
+      industry_gemi_id: industry_gemi_id,
+      municipality_gemi_id: municipality_gemi_id,
       municipality_id: municipality_id || undefined,
+      city_id: city_id || undefined,
       datasetId: finalDatasetId,
       discoveryRunId: discoveryRun.id
     });
@@ -443,9 +487,11 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     
     const jobPromise = runDiscoveryJob({
       userId,
-      industry_id: industry.id, // Use industry_id for keyword-based discovery
+      industry_id: industry.id, // Internal industry_id (resolved from gemi_id if needed)
+      industry_gemi_id: industry_gemi_id, // GEMI industry ID (preferred)
       city_id: city_id || undefined, // Use city_id if available (for backward compatibility)
-      municipality_id: municipality_id || undefined, // Use municipality_id for GEMI discovery
+      municipality_id: municipality_id || undefined, // Internal municipality_id (resolved from gemi_id if needed)
+      municipality_gemi_id: municipality_gemi_id, // GEMI municipality ID (preferred)
       latitude: undefined, // Not needed for GEMI-based discovery
       longitude: undefined, // Not needed for GEMI-based discovery
       cityRadiusKm: undefined, // Not needed for GEMI-based discovery

@@ -2,10 +2,12 @@ export type JobType = 'discovery' | 'refresh';
 
 export interface DiscoveryJobInput {
   industry?: string; // Legacy: industry name (for backward compatibility)
-  industry_id?: string; // Preferred: industry UUID
+  industry_id?: string; // Legacy: industry UUID (for backward compatibility)
+  industry_gemi_id?: number; // Preferred: industry GEMI ID
   city?: string; // Legacy: city name (for backward compatibility)
   city_id?: string; // Legacy: city UUID (for backward compatibility)
-  municipality_id?: string; // Preferred: municipality ID (GEMI-based discovery)
+  municipality_id?: string; // Legacy: municipality internal ID (for backward compatibility)
+  municipality_gemi_id?: number; // Preferred: municipality GEMI ID
   latitude?: number;
   longitude?: number;
   cityRadiusKm?: number;

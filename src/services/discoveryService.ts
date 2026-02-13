@@ -189,17 +189,39 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     console.log(`[runDiscoveryJob] Marked discovery_run as started: ${discoveryRun.id}`);
 
     // Validate required fields for discovery
-    if (!input.industry_id && !input.industry) {
-      throw new Error('industry_id or industry is required for discovery');
+    // Prefer gemi_id values, fallback to internal IDs
+    if (!input.industry_gemi_id && !input.industry_id && !input.industry) {
+      throw new Error('industry_gemi_id, industry_id, or industry is required for discovery');
     }
-    if (!input.city_id && !input.city && !input.municipality_id) {
-      throw new Error('city_id, city, or municipality_id is required for discovery');
+    if (!input.municipality_gemi_id && !input.municipality_id && !input.city_id && !input.city) {
+      throw new Error('municipality_gemi_id, municipality_id, city_id, or city is required for discovery');
     }
 
-    // Resolve IDs if names provided
+    // Resolve industry_id from industry_gemi_id if needed
     let finalIndustryId = input.industry_id;
-    let finalCityId = input.city_id;
-    let finalMunicipalityId = input.municipality_id;
+    let finalIndustryGemiId = input.industry_gemi_id;
+    
+    if (input.industry_gemi_id && !finalIndustryId) {
+      const industryResult = await pool.query<{ id: string; gemi_id: number }>(
+        'SELECT id, gemi_id FROM industries WHERE gemi_id = $1',
+        [input.industry_gemi_id]
+      );
+      if (industryResult.rows.length === 0) {
+        throw new Error(`Industry with gemi_id ${input.industry_gemi_id} not found`);
+      }
+      finalIndustryId = industryResult.rows[0].id;
+      finalIndustryGemiId = industryResult.rows[0].gemi_id;
+      console.log(`[runDiscoveryJob] Resolved industry_gemi_id ${input.industry_gemi_id} to industry_id ${finalIndustryId}`);
+    } else if (finalIndustryId && !finalIndustryGemiId) {
+      // Get gemi_id from industry_id
+      const industryResult = await pool.query<{ gemi_id: number }>(
+        'SELECT gemi_id FROM industries WHERE id = $1',
+        [finalIndustryId]
+      );
+      if (industryResult.rows.length > 0) {
+        finalIndustryGemiId = industryResult.rows[0].gemi_id;
+      }
+    }
 
     if (!finalIndustryId && input.industry) {
       const { getIndustryByName } = await import('../db/industries.js');
@@ -208,6 +230,33 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         throw new Error(`Industry "${input.industry}" not found`);
       }
       finalIndustryId = industry.id;
+    }
+
+    // Resolve municipality_id from municipality_gemi_id if needed
+    let finalMunicipalityId = input.municipality_id;
+    let finalMunicipalityGemiId = input.municipality_gemi_id;
+    let finalCityId = input.city_id;
+
+    if (input.municipality_gemi_id && !finalMunicipalityId) {
+      const municipalityResult = await pool.query<{ id: string; gemi_id: string }>(
+        'SELECT id, gemi_id FROM municipalities WHERE gemi_id = $1',
+        [input.municipality_gemi_id.toString()]
+      );
+      if (municipalityResult.rows.length === 0) {
+        throw new Error(`Municipality with gemi_id ${input.municipality_gemi_id} not found`);
+      }
+      finalMunicipalityId = municipalityResult.rows[0].id;
+      finalMunicipalityGemiId = parseInt(municipalityResult.rows[0].gemi_id, 10);
+      console.log(`[runDiscoveryJob] Resolved municipality_gemi_id ${input.municipality_gemi_id} to municipality_id ${finalMunicipalityId}`);
+    } else if (finalMunicipalityId && !finalMunicipalityGemiId) {
+      // Get gemi_id from municipality_id
+      const municipalityResult = await pool.query<{ gemi_id: string }>(
+        'SELECT gemi_id FROM municipalities WHERE id = $1',
+        [finalMunicipalityId]
+      );
+      if (municipalityResult.rows.length > 0) {
+        finalMunicipalityGemiId = parseInt(municipalityResult.rows[0].gemi_id, 10);
+      }
     }
 
     if (!finalCityId && input.city) {
@@ -224,9 +273,9 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       throw new Error('Could not resolve industry_id');
     }
     
-    // municipality_id is preferred for GEMI discovery, city_id is for backward compatibility
-    if (!finalMunicipalityId && !finalCityId) {
-      throw new Error('Could not resolve city_id or municipality_id');
+    // municipality_gemi_id is preferred for GEMI discovery
+    if (!finalMunicipalityGemiId && !finalMunicipalityId && !finalCityId) {
+      throw new Error('Could not resolve municipality_gemi_id, municipality_id, or city_id');
     }
 
     // STEP 1: Check local database first for existing businesses
@@ -278,8 +327,12 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       
       let municipalityGemiId: number | undefined;
       
-      // If municipality_id is provided directly, use it
-      if (finalMunicipalityId) {
+      // Use municipality_gemi_id directly if available (preferred)
+      if (finalMunicipalityGemiId) {
+        municipalityGemiId = finalMunicipalityGemiId;
+        console.log(`[runDiscoveryJob] Using municipality_gemi_id directly: ${municipalityGemiId}`);
+      } else if (finalMunicipalityId) {
+        // Fallback: get gemi_id from municipality_id
         const municipalityResult = await pool.query<{ gemi_id: string }>(
           `SELECT gemi_id FROM municipalities 
            WHERE id = $1 OR gemi_id = $2`,
@@ -328,12 +381,15 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       }
       
       if (municipalityGemiId !== undefined) {
-        // Get industry gemi_id
-        const industryResult = await pool.query<{ gemi_id: number }>(
-          'SELECT gemi_id FROM industries WHERE id = $1',
-          [finalIndustryId]
-        );
-        const industryGemiId = industryResult.rows[0]?.gemi_id || undefined;
+        // Use industry_gemi_id directly if available (preferred), otherwise get from industry_id
+        let industryGemiId = finalIndustryGemiId;
+        if (!industryGemiId) {
+          const industryResult = await pool.query<{ gemi_id: number }>(
+            'SELECT gemi_id FROM industries WHERE id = $1',
+            [finalIndustryId]
+          );
+          industryGemiId = industryResult.rows[0]?.gemi_id || undefined;
+        }
 
         console.log(`[runDiscoveryJob] Fetching from GEMI API: municipality_gemi_id=${municipalityGemiId}, activity_id=${industryGemiId}`);
 
