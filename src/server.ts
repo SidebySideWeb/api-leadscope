@@ -13,6 +13,9 @@ import refreshRoutes from './api/refresh.js';
 import extractionJobsRoutes from './api/extractionJobs.js';
 import stripeWebhooksRoutes from './api/stripeWebhooks.js';
 import billingRoutes from './api/billing.js';
+import searchRoutes from './api/search.js';
+import exportRoutes from './api/export.js';
+import metadataRoutes from './api/metadata.js';
 
 const app = express();
 
@@ -58,6 +61,15 @@ app.use('/webhooks', stripeWebhooksRoutes);
 
 // Billing routes (requires authentication)
 app.use('/billing', billingRoutes);
+
+// Search routes (requires authentication)
+app.use('/api/search', searchRoutes);
+
+// Export routes (requires authentication)
+app.use('/api/export', exportRoutes);
+
+// Metadata routes (requires authentication)
+app.use('/api/metadata', metadataRoutes);
 
 // Health endpoint - enhanced for diagnostics
 app.get('/health', async (req, res) => {

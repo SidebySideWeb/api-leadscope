@@ -223,11 +223,124 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       throw new Error('Could not resolve industry_id or city_id');
     }
 
-    // Run Vrisko discovery directly (synchronous for now)
-    // This creates discovery_run, crawls vrisko, and stores businesses
-    console.log(`[runDiscoveryJob] Running Vrisko discovery for dataset: ${datasetId}`);
+    // STEP 1: Check local database first for existing businesses
+    console.log(`[runDiscoveryJob] Checking local database for existing businesses...`);
+    const existingBusinessesResult = await pool.query<{ count: string }>(
+      `SELECT COUNT(*) as count
+       FROM businesses
+       WHERE dataset_id = $1
+         AND city_id = $2
+         AND industry_id = $3`,
+      [datasetId, finalCityId, finalIndustryId]
+    );
+    const existingCount = parseInt(existingBusinessesResult.rows[0]?.count || '0', 10);
     
-    const discoveryResult = await runVriskoDiscovery(datasetId);
+    console.log(`[runDiscoveryJob] Found ${existingCount} existing businesses in local database`);
+
+    let discoveryResult: {
+      businessesFound: number;
+      businessesCreated: number;
+      businessesUpdated: number;
+      searchesExecuted: number;
+      errors: string[];
+    };
+
+    // STEP 2: If no results found, fetch from GEMI API
+    if (existingCount === 0) {
+      console.log(`[runDiscoveryJob] No existing businesses found, fetching from GEMI API...`);
+      
+      // Get city info to find municipality
+      const cityResult = await pool.query<{ name: string; normalized_name: string }>(
+        'SELECT name, normalized_name FROM cities WHERE id = $1',
+        [finalCityId]
+      );
+      const city = cityResult.rows[0];
+      
+      if (!city) {
+        throw new Error(`City with id ${finalCityId} not found`);
+      }
+
+      // Find municipality by matching city name (try both English and Greek)
+      const municipalityResult = await pool.query<{ id: string; gemi_id: string }>(
+        `SELECT id, gemi_id FROM municipalities 
+         WHERE descr ILIKE $1 OR descr_en ILIKE $1 OR descr ILIKE $2 OR descr_en ILIKE $2
+         LIMIT 1`,
+        [city.name, city.normalized_name]
+      );
+      
+      if (municipalityResult.rows.length === 0) {
+        console.warn(`[runDiscoveryJob] No municipality found for city ${city.name}, skipping GEMI fetch`);
+        discoveryResult = {
+          businessesFound: 0,
+          businessesCreated: 0,
+          businessesUpdated: 0,
+          searchesExecuted: 0,
+          errors: [`No municipality found for city: ${city.name}`],
+        };
+      } else {
+        const municipality = municipalityResult.rows[0];
+        const municipalityGemiId = parseInt(municipalityResult.rows[0].gemi_id, 10);
+        
+        // Get industry gemi_id
+        const industryResult = await pool.query<{ gemi_id: number }>(
+          'SELECT gemi_id FROM industries WHERE id = $1',
+          [finalIndustryId]
+        );
+        const industryGemiId = industryResult.rows[0]?.gemi_id || undefined;
+
+        console.log(`[runDiscoveryJob] Fetching from GEMI API: municipality_gemi_id=${municipalityGemiId}, activity_id=${industryGemiId}`);
+
+        // Import GEMI service functions
+        const { fetchGemiCompaniesForMunicipality, importGemiCompaniesToDatabase } = await import('./gemiService.js');
+        
+        try {
+          // Fetch companies from GEMI API
+          const companies = await fetchGemiCompaniesForMunicipality(
+            municipalityGemiId,
+            industryGemiId
+          );
+
+          console.log(`[runDiscoveryJob] Fetched ${companies.length} companies from GEMI API`);
+
+          // Import companies to database (pass city_id for better mapping)
+          const importResult = await importGemiCompaniesToDatabase(
+            companies,
+            datasetId,
+            input.userId || 'system',
+            finalCityId // Pass the city_id we already have
+          );
+
+          discoveryResult = {
+            businessesFound: companies.length,
+            businessesCreated: importResult.inserted,
+            businessesUpdated: importResult.updated,
+            searchesExecuted: 1, // One GEMI API call
+            errors: [],
+          };
+
+          console.log(`[runDiscoveryJob] GEMI import completed: ${importResult.inserted} inserted, ${importResult.updated} updated`);
+        } catch (error: any) {
+          console.error(`[runDiscoveryJob] GEMI API error:`, error.message);
+          discoveryResult = {
+            businessesFound: 0,
+            businessesCreated: 0,
+            businessesUpdated: 0,
+            searchesExecuted: 0,
+            errors: [error.message || 'Failed to fetch from GEMI API'],
+          };
+        }
+      }
+    } else {
+      // Businesses already exist in local DB, no need to fetch from GEMI
+      console.log(`[runDiscoveryJob] Using existing businesses from local database`);
+      discoveryResult = {
+        businessesFound: existingCount,
+        businessesCreated: 0,
+        businessesUpdated: 0,
+        searchesExecuted: 0,
+        errors: [],
+      };
+    }
     
     console.log(`[runDiscoveryJob] Vrisko discovery completed:`, {
       businessesFound: discoveryResult.businessesFound,
