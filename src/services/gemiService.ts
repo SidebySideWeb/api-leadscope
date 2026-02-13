@@ -307,9 +307,8 @@ export async function importGemiCompaniesToDatabase(
   for (let i = 0; i < companies.length; i++) {
     const company = companies[i];
     // Declare variables in outer scope for error handling
-    let municipalityId: string | null = null;
-    let prefectureId: string | null = null;
-    let industryId: string | null = null;
+      let municipalityId: string | null = null;
+      let prefectureId: string | null = null;
     
     try {
       // Validate required field
@@ -507,7 +506,6 @@ export async function importGemiCompaniesToDatabase(
         console.error(`[GEMI] ❌ Foreign key violation for ${company.ar_gemi}:`, {
           municipality_id: municipalityId,
           prefecture_id: prefectureId,
-          industry_id: industryId,
           dataset_id: datasetId,
         });
         skipped++;
