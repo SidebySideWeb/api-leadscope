@@ -211,7 +211,19 @@ export async function fetchGemiCompaniesForMunicipality(
         }
 
         // Get business name from coNamesEn (English) or coNameEl (Greek)
-        const businessName = c.coNamesEn || c.coNameEl || c.name || c.companyName || c.legalName || 'Unknown';
+        // Handle arrays - take first element if it's an array
+        let businessName = 'Unknown';
+        if (c.coNamesEn) {
+          businessName = Array.isArray(c.coNamesEn) ? (c.coNamesEn[0] || 'Unknown') : c.coNamesEn;
+        } else if (c.coNameEl) {
+          businessName = Array.isArray(c.coNameEl) ? (c.coNameEl[0] || 'Unknown') : c.coNameEl;
+        } else if (c.name) {
+          businessName = Array.isArray(c.name) ? (c.name[0] || 'Unknown') : c.name;
+        } else if (c.companyName) {
+          businessName = Array.isArray(c.companyName) ? (c.companyName[0] || 'Unknown') : c.companyName;
+        } else if (c.legalName) {
+          businessName = Array.isArray(c.legalName) ? (c.legalName[0] || 'Unknown') : c.legalName;
+        }
 
         return {
           ar_gemi: c.arGemi || c.ar_gemi || c.ar || String(c.arGemi || c.ar_gemi || c.ar || ''),
@@ -396,9 +408,9 @@ export async function importGemiCompaniesToDatabase(
         });
       }
 
-      // Upsert business using ar_gemi as unique constraint (city_id and industry_id columns removed)
-      // Note: ar_gemi should never be null for GEMI companies, so ON CONFLICT (ar_gemi) should work
-      // If the unique index doesn't exist, this will fail - run ensure_ar_gemi_unique.sql migration
+      // Upsert business using ar_gemi as unique constraint
+      // Minimum required fields only: ar_gemi, name, dataset_id, owner_user_id
+      // Optional fields: address, postal_code, municipality_id, prefecture_id, website_url, discovery_run_id
       const result = await pool.query(
         `INSERT INTO businesses (
           ar_gemi, name, address, postal_code, 

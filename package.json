@@ -43,6 +43,7 @@
     "migrate:gemi-tables": "tsx src/db/migrations/run.ts create_gemi_tables.sql",
     "migrate:drop-normalized-unique": "tsx src/db/migrations/run.ts drop_businesses_dataset_normalized_unique.sql",
     "migrate:ensure-ar-gemi-unique": "tsx src/db/migrations/run.ts ensure_ar_gemi_unique.sql",
+    "migrate:remove-normalized-name-requirement": "tsx src/db/migrations/run.ts remove_normalized_name_requirement.sql",
     "seed:gemi-metadata": "node scripts/seed-gemi-metadata.js",
     "create-super-admin": "tsx src/cli/createSuperAdmin.ts"
   },
