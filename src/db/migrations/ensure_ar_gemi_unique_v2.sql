@@ -12,11 +12,12 @@ BEGIN
   END IF;
 END $$;
 
--- Drop any existing partial unique index (we'll create a proper constraint)
-DROP INDEX IF EXISTS businesses_ar_gemi_unique;
-
--- Drop any existing constraint with this name
+-- IMPORTANT: Drop constraint FIRST (it may own the index), then drop index
+-- Drop any existing constraint with this name (CASCADE will drop dependent index)
 ALTER TABLE businesses DROP CONSTRAINT IF EXISTS businesses_ar_gemi_unique CASCADE;
+
+-- Drop existing index if it still exists (in case it wasn't owned by constraint)
+DROP INDEX IF EXISTS businesses_ar_gemi_unique;
 
 -- Create a proper unique constraint (not a partial index)
 -- PostgreSQL allows multiple NULLs in unique constraints, so this is safe
