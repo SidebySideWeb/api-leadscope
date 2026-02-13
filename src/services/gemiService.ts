@@ -414,38 +414,67 @@ export async function importGemiCompaniesToDatabase(
         });
       }
 
-      // Upsert business using ar_gemi as unique constraint
-      // Store phone, email, and website_url directly on business record
-      const result = await pool.query(
-        `INSERT INTO businesses (
-          ar_gemi, name, address, postal_code, 
-          municipality_id, prefecture_id,
-          website_url, phone, email,
-          dataset_id, owner_user_id, discovery_run_id, created_at, updated_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
-        ON CONFLICT (ar_gemi) 
-        DO UPDATE SET
-          name = EXCLUDED.name,
-          address = COALESCE(EXCLUDED.address, businesses.address),
-          postal_code = COALESCE(EXCLUDED.postal_code, businesses.postal_code),
-          municipality_id = COALESCE(EXCLUDED.municipality_id, businesses.municipality_id),
-          prefecture_id = COALESCE(EXCLUDED.prefecture_id, businesses.prefecture_id),
-          website_url = COALESCE(EXCLUDED.website_url, businesses.website_url),
-          phone = COALESCE(EXCLUDED.phone, businesses.phone),
-          email = COALESCE(EXCLUDED.email, businesses.email),
-          discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id),
-          updated_at = NOW()
-        RETURNING id, (xmax = 0) AS inserted`,
-        insertValues
+      // Upsert business using ar_gemi - manual check/insert/update approach
+      // This works even if the unique constraint doesn't exist
+      // First, check if business with this ar_gemi already exists
+      const existingResult = await pool.query<{ id: string }>(
+        'SELECT id FROM businesses WHERE ar_gemi = $1 LIMIT 1',
+        [company.ar_gemi]
       );
 
-      const businessId = result.rows[0]?.id;
-      const wasInserted = result.rows[0]?.inserted;
+      let businessId: string;
+      let wasInserted: boolean;
+
+      if (existingResult.rows.length > 0) {
+        // Update existing business
+        businessId = existingResult.rows[0].id;
+        wasInserted = false;
+        
+        await pool.query(
+          `UPDATE businesses SET
+            name = $1,
+            address = COALESCE($2, address),
+            postal_code = COALESCE($3, postal_code),
+            municipality_id = COALESCE($4, municipality_id),
+            prefecture_id = COALESCE($5, prefecture_id),
+            website_url = COALESCE($6, website_url),
+            phone = COALESCE($7, phone),
+            email = COALESCE($8, email),
+            discovery_run_id = COALESCE($9, discovery_run_id),
+            updated_at = NOW()
+          WHERE id = $10`,
+          [
+            insertValues[1], // name
+            insertValues[2], // address
+            insertValues[3], // postal_code
+            insertValues[4], // municipality_id
+            insertValues[5], // prefecture_id
+            insertValues[6], // website_url
+            insertValues[7], // phone
+            insertValues[8], // email
+            insertValues[11], // discovery_run_id
+            businessId
+          ]
+        );
+      } else {
+        // Insert new business
+        wasInserted = true;
+        const insertResult = await pool.query<{ id: string }>(
+          `INSERT INTO businesses (
+            ar_gemi, name, address, postal_code, 
+            municipality_id, prefecture_id,
+            website_url, phone, email,
+            dataset_id, owner_user_id, discovery_run_id, created_at, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+          RETURNING id`,
+          insertValues
+        );
+        businessId = insertResult.rows[0]?.id;
+      }
 
       if (!businessId) {
         console.error(`[GEMI] ❌ Failed to insert/update business with ar_gemi: ${company.ar_gemi}`);
-        console.error(`[GEMI] Query returned:`, result.rows);
         skipped++;
         continue;
       }
