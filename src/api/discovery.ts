@@ -262,13 +262,72 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
 
     // Find or resolve dataset ID FIRST (before creating discovery_run)
     // dataset_id is optional - if not provided, find or create one
-    // Note: If using municipality_id, we'll use a default city_id for dataset (or make it optional)
+    // When using municipality_id, find a matching city or use a default
     let finalDatasetId = dataset_id;
+    let datasetCityId = city_id;
+    
+    // If we have municipality_id but no city_id, try to find a matching city
+    if (municipality_id && !datasetCityId) {
+      console.log(`[API] Finding city for municipality_id ${municipality_id}...`);
+      
+      // Get municipality info
+      const municipalityResult = await pool.query<{ descr: string; descr_en: string; prefecture_id: string }>(
+        `SELECT descr, descr_en, prefecture_id FROM municipalities 
+         WHERE id = $1 OR gemi_id = $2`,
+        [municipality_id, municipality_id.replace('mun-', '')]
+      );
+      
+      if (municipalityResult.rows.length > 0) {
+        const municipality = municipalityResult.rows[0];
+        
+        // Try to find matching city by name
+        const cityResult = await pool.query<{ id: string; name: string }>(
+          `SELECT id, name FROM cities 
+           WHERE name ILIKE $1 OR name ILIKE $2 OR normalized_name ILIKE $1 OR normalized_name ILIKE $2
+           LIMIT 1`,
+          [municipality.descr, municipality.descr_en]
+        );
+        
+        if (cityResult.rows.length > 0) {
+          datasetCityId = cityResult.rows[0].id;
+          console.log(`[API] Found matching city: ${cityResult.rows[0].name} (${datasetCityId})`);
+        } else {
+          // Try to find any city in the same prefecture
+          const prefectureCitiesResult = await pool.query<{ id: string; name: string }>(
+            `SELECT c.id, c.name FROM cities c
+             WHERE EXISTS (
+               SELECT 1 FROM municipalities m 
+               WHERE m.prefecture_id = $1 
+               AND (m.descr ILIKE '%' || c.name || '%' OR c.name ILIKE '%' || m.descr || '%')
+             )
+             LIMIT 1`,
+            [municipality.prefecture_id]
+          );
+          
+          if (prefectureCitiesResult.rows.length > 0) {
+            datasetCityId = prefectureCitiesResult.rows[0].id;
+            console.log(`[API] Found city in same prefecture: ${prefectureCitiesResult.rows[0].name} (${datasetCityId})`);
+          } else {
+            // Last resort: use Athens as default
+            const cities = await getCities();
+            const athens = cities.find(c => 
+              c.name.toLowerCase().includes('athens') || 
+              c.name.toLowerCase().includes('αθήνα')
+            );
+            if (athens) {
+              datasetCityId = athens.id;
+              console.log(`[API] Using default city (Athens) for dataset: ${datasetCityId}`);
+            }
+          }
+        }
+      }
+    }
+    
     if (!finalDatasetId) {
       console.log('[API] dataset_id not provided, attempting to find existing dataset...');
       
-      // If we have city_id, use it for dataset lookup
-      if (city_id) {
+      // If we have city_id (from municipality lookup or direct), use it for dataset lookup
+      if (datasetCityId) {
         const existingDataset = await pool.query<{ id: string }>(
           `
           SELECT id FROM datasets
@@ -278,7 +337,7 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
           ORDER BY created_at DESC
           LIMIT 1
           `,
-          [userId, city_id, industry_id!]
+          [userId, datasetCityId, industry_id!]
         );
         finalDatasetId = existingDataset.rows[0]?.id;
       }
@@ -293,21 +352,8 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       console.log('[API] Creating new dataset...');
       const { resolveDataset } = await import('../services/datasetResolver.js');
       
-      // Use city_id if available, otherwise use a default (Athens) or make city_id optional
-      let datasetCityId = city_id;
       if (!datasetCityId) {
-        // Find Athens as default city for municipality-based discovery
-        const cities = await getCities();
-        const athens = cities.find(c => 
-          c.name.toLowerCase().includes('athens') || 
-          c.name.toLowerCase().includes('αθήνα')
-        );
-        datasetCityId = athens?.id;
-        console.log(`[API] Using default city (Athens) for dataset: ${datasetCityId}`);
-      }
-      
-      if (!datasetCityId) {
-        throw new Error('Cannot create dataset: city_id is required. Please provide city_id or ensure Athens exists in cities table.');
+        throw new Error('Cannot create dataset: city_id is required. Please provide city_id or municipality_id.');
       }
       
       const resolverResult = await resolveDataset({
@@ -346,16 +392,7 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       // Create a new dataset that matches the request
       const { resolveDataset: resolveDatasetForMismatch } = await import('../services/datasetResolver.js');
       
-      let datasetCityId = city_id;
-      if (!datasetCityId) {
-        const cities = await getCities();
-        const athens = cities.find(c => 
-          c.name.toLowerCase().includes('athens') || 
-          c.name.toLowerCase().includes('αθήνα')
-        );
-        datasetCityId = athens?.id;
-      }
-      
+      // Use the datasetCityId we already resolved (from municipality or direct city_id)
       if (!datasetCityId) {
         throw new Error('Cannot create dataset: city_id is required.');
       }
