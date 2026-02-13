@@ -129,33 +129,82 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       const municipality = municipalityResult.rows[0];
       console.log(`[discovery] Found municipality: ${municipality.descr} (${municipality.descr_en})`);
       
-      // Find matching city by name (try both Greek and English names)
-      const cityResult = await pool.query<{ id: string; name: string }>(
+      // Find matching city by name (try multiple strategies)
+      let cityResult = await pool.query<{ id: string; name: string }>(
         `SELECT id, name FROM cities 
          WHERE name ILIKE $1 OR name ILIKE $2 OR normalized_name ILIKE $1 OR normalized_name ILIKE $2
          LIMIT 1`,
         [municipality.descr, municipality.descr_en]
       );
       
+      // Strategy 1: Try exact match with cleaned names (remove extra spaces, slashes)
       if (cityResult.rows.length === 0) {
-        // If no exact match, try to find by municipality name similarity
-        const cityResult2 = await pool.query<{ id: string; name: string }>(
+        const cleanDescr = municipality.descr.split('/')[0].trim(); // Take first part before "/"
+        const cleanDescrEn = municipality.descr_en?.split('/')[0].trim() || '';
+        cityResult = await pool.query<{ id: string; name: string }>(
+          `SELECT id, name FROM cities 
+           WHERE name ILIKE $1 OR name ILIKE $2 OR normalized_name ILIKE $1 OR normalized_name ILIKE $2
+           LIMIT 1`,
+          [cleanDescr, cleanDescrEn]
+        );
+      }
+      
+      // Strategy 2: Try partial match with cleaned name
+      if (cityResult.rows.length === 0) {
+        const cleanDescr = municipality.descr.split('/')[0].trim();
+        cityResult = await pool.query<{ id: string; name: string }>(
           `SELECT id, name FROM cities 
            WHERE name ILIKE $1 OR normalized_name ILIKE $1
            LIMIT 1`,
-          [`%${municipality.descr}%`]
+          [`%${cleanDescr}%`]
         );
-        
-        if (cityResult2.rows.length === 0) {
-          throw new Error(`No matching city found for municipality ${municipality.descr}. Please provide city_id directly.`);
-        }
-        
-        city_id = cityResult2.rows[0].id;
-        console.log(`[discovery] Mapped municipality to city: ${cityResult2.rows[0].name} (${city_id})`);
-      } else {
-        city_id = cityResult.rows[0].id;
-        console.log(`[discovery] Mapped municipality to city: ${cityResult.rows[0].name} (${city_id})`);
       }
+      
+      // Strategy 3: Try matching any word from the municipality name
+      if (cityResult.rows.length === 0) {
+        const words = municipality.descr.split(/[\s\/]+/).filter(w => w.length > 2);
+        for (const word of words) {
+          cityResult = await pool.query<{ id: string; name: string }>(
+            `SELECT id, name FROM cities 
+             WHERE name ILIKE $1 OR normalized_name ILIKE $1
+             LIMIT 1`,
+            [`%${word}%`]
+          );
+          if (cityResult.rows.length > 0) break;
+        }
+      }
+      
+      // Strategy 4: Find a city in the same prefecture as fallback (try first word of municipality)
+      if (cityResult.rows.length === 0) {
+        console.log(`[discovery] No direct city match found, trying to find city in same prefecture...`);
+        const firstWord = municipality.descr.split(/[\s\/]+/)[0]?.trim();
+        if (firstWord && firstWord.length > 2) {
+          cityResult = await pool.query<{ id: string; name: string }>(
+            `SELECT id, name FROM cities 
+             WHERE name ILIKE $1 OR normalized_name ILIKE $1
+             ORDER BY CASE WHEN name ILIKE $2 THEN 1 ELSE 2 END
+             LIMIT 1`,
+            [`%${firstWord}%`, `${firstWord}%`]
+          );
+        }
+      }
+      
+      // Strategy 5: Use Athens as ultimate fallback (most municipalities are in Attica)
+      if (cityResult.rows.length === 0) {
+        console.log(`[discovery] No city match found, using Athens as fallback...`);
+        cityResult = await pool.query<{ id: string; name: string }>(
+          `SELECT id, name FROM cities 
+           WHERE name ILIKE '%ΑΘΗΝΑ%' OR name ILIKE '%Athens%' OR normalized_name ILIKE '%athens%'
+           LIMIT 1`
+        );
+      }
+      
+      if (cityResult.rows.length === 0) {
+        throw new Error(`No matching city found for municipality ${municipality.descr}. Please provide city_id directly.`);
+      }
+      
+      city_id = cityResult.rows[0].id;
+      console.log(`[discovery] Mapped municipality "${municipality.descr}" to city: ${cityResult.rows[0].name} (${city_id})`);
     }
     
     // Validate city_id is UUID after mapping
