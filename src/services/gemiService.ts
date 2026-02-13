@@ -52,18 +52,12 @@ const gemiClient: AxiosInstance = axios.create({
   params: {}, // Will be populated per request
 });
 
-// Add API key to requests - try different methods
+// Add API key to requests - use query parameter as per API documentation
 gemiClient.interceptors.request.use((config) => {
   if (GEMI_API_KEY) {
-    // Try as query parameter first
+    // Use api_key as query parameter (as per Postman test)
     config.params = config.params || {};
     config.params.api_key = GEMI_API_KEY;
-    // Also try as header (X-API-Key is common)
-    config.headers['X-API-Key'] = GEMI_API_KEY;
-    // And as Authorization Bearer (fallback)
-    if (!config.headers['Authorization']) {
-      config.headers['Authorization'] = `Bearer ${GEMI_API_KEY}`;
-    }
   }
   return config;
 });
@@ -115,13 +109,14 @@ export async function fetchGemiCompaniesForMunicipality(
 
     try {
       const params: any = {
-        municipality_id: municipalityGemiId,
+        municipalities: municipalityGemiId, // Use 'municipalities' (plural) as per API
         resultsOffset,
-        limit: 100, // Adjust based on API max limit
+        resultsSize: 100, // Use 'resultsSize' instead of 'limit'
+        resultsSortBy: '+arGemi', // Sort by AR GEMI ascending
       };
 
       if (activityId) {
-        params.activity_id = activityId;
+        params.activities = activityId; // Use 'activities' (plural) if that's the correct param
       }
 
       console.log(`[GEMI] Fetching page at offset ${resultsOffset}...`);
