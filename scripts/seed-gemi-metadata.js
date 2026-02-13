@@ -115,14 +115,33 @@ async function fetchActivities() {
  * Upsert prefectures into database
  */
 async function upsertPrefectures(prefectures) {
-  console.log(`\n💾 Upserting ${prefectures.length} prefectures...`);
+  console.log(`\n💾 ========== UPSERTING PREFECTURES ==========`);
+  console.log(`💾 Total prefectures to process: ${prefectures.length}`);
+  
+  if (prefectures.length === 0) {
+    console.warn(`⚠️  No prefectures to upsert!`);
+    return { inserted: 0, updated: 0, errors: 0 };
+  }
+  
+  // Log first prefecture structure for debugging
+  console.log(`💾 First prefecture sample:`, JSON.stringify({
+    id: prefectures[0].id,
+    gemi_id: prefectures[0].gemi_id,
+    descr: prefectures[0].descr,
+    descrEn: prefectures[0].descrEn,
+    keys: Object.keys(prefectures[0]),
+  }, null, 2));
   
   let inserted = 0;
   let updated = 0;
   let errors = 0;
 
-  for (const prefecture of prefectures) {
+  for (let i = 0; i < prefectures.length; i++) {
+    const prefecture = prefectures[i];
     try {
+      if ((i + 1) % 10 === 0 || i < 3) {
+        console.log(`💾 [${i + 1}/${prefectures.length}] Processing: ${prefecture.descr || prefecture.id}`);
+      }
       // Map GEMI API response to our schema
       // API returns: id, descr (Greek), descrEn (English)
       // Table: id (text), descr (text), descr_en (text), gemi_id (text)
@@ -132,7 +151,12 @@ async function upsertPrefectures(prefectures) {
       const lastUpdated = prefecture.lastUpdated ? new Date(prefecture.lastUpdated) : null;
 
       if (!gemiId || !descr) {
-        console.warn(`⚠️  Skipping prefecture with missing data:`, JSON.stringify(prefecture));
+        console.warn(`⚠️  [${i + 1}/${prefectures.length}] Skipping prefecture with missing data:`, JSON.stringify({
+          id: prefecture.id,
+          gemi_id: prefecture.gemi_id,
+          descr: prefecture.descr,
+          keys: Object.keys(prefecture),
+        }));
         errors++;
         continue;
       }
@@ -145,6 +169,10 @@ async function upsertPrefectures(prefectures) {
         'SELECT id FROM prefectures WHERE gemi_id = $1',
         [gemiId]
       );
+
+      if (i < 3) {
+        console.log(`💾 Inserting prefecture: ${descr} (gemi_id: ${gemiId}, id: ${prefectureId})`);
+      }
 
       const result = await pool.query(
         `INSERT INTO prefectures (id, gemi_id, descr, descr_en, last_updated_api, created_at)
@@ -160,16 +188,36 @@ async function upsertPrefectures(prefectures) {
 
       if (existing.rows.length === 0) {
         inserted++;
+        if (i < 3) {
+          console.log(`✅ Inserted prefecture: ${descr} (ID: ${result.rows[0].id})`);
+        }
       } else {
         updated++;
+        if (i < 3) {
+          console.log(`🔄 Updated prefecture: ${descr} (ID: ${result.rows[0].id})`);
+        }
       }
     } catch (error) {
-      console.error(`❌ Error upserting prefecture ${prefecture.id || 'unknown'}:`, error.message);
+      console.error(`❌ [${i + 1}/${prefectures.length}] Error upserting prefecture ${prefecture.id || 'unknown'}:`, error.message);
+      if (error.code) {
+        console.error(`   Error code: ${error.code}`);
+      }
+      if (error.detail) {
+        console.error(`   Detail: ${error.detail}`);
+      }
+      if (i < 3 && error.stack) {
+        console.error(`   Stack:`, error.stack);
+      }
       errors++;
     }
   }
 
-  console.log(`✅ Prefectures: ${inserted} inserted, ${updated} updated, ${errors} errors`);
+  console.log(`\n💾 ========== PREFECTURES SUMMARY ==========`);
+  console.log(`✅ Inserted: ${inserted}`);
+  console.log(`🔄 Updated: ${updated}`);
+  console.log(`❌ Errors: ${errors}`);
+  console.log(`📊 Total: ${inserted + updated + errors} / ${prefectures.length}`);
+  console.log(`💾 ===========================================\n`);
   return { inserted, updated, errors };
 }
 
@@ -177,15 +225,35 @@ async function upsertPrefectures(prefectures) {
  * Upsert municipalities into database
  */
 async function upsertMunicipalities(municipalities) {
-  console.log(`\n💾 Upserting ${municipalities.length} municipalities...`);
+  console.log(`\n💾 ========== UPSERTING MUNICIPALITIES ==========`);
+  console.log(`💾 Total municipalities to process: ${municipalities.length}`);
+  
+  if (municipalities.length === 0) {
+    console.warn(`⚠️  No municipalities to upsert!`);
+    return { inserted: 0, updated: 0, errors: 0, skippedPrefecture: 0 };
+  }
+  
+  // Log first municipality structure for debugging
+  console.log(`💾 First municipality sample:`, JSON.stringify({
+    id: municipalities[0].id,
+    gemi_id: municipalities[0].gemi_id,
+    descr: municipalities[0].descr,
+    descrEn: municipalities[0].descrEn,
+    prefectureId: municipalities[0].prefectureId,
+    keys: Object.keys(municipalities[0]),
+  }, null, 2));
   
   let inserted = 0;
   let updated = 0;
   let errors = 0;
   let skippedPrefecture = 0;
 
-  for (const municipality of municipalities) {
+  for (let i = 0; i < municipalities.length; i++) {
+    const municipality = municipalities[i];
     try {
+      if ((i + 1) % 50 === 0 || i < 3) {
+        console.log(`💾 [${i + 1}/${municipalities.length}] Processing: ${municipality.descr || municipality.id}`);
+      }
       // API returns: id, descr (Greek), descrEn (English), prefectureId
       // Table: id (text), prefecture_id (text), descr (text), descr_en (text), gemi_id (text)
       const gemiId = String(municipality.id || municipality.gemi_id || '');

@@ -198,44 +198,91 @@ export async function importGemiCompaniesToDatabase(
   let updated = 0;
   let skipped = 0;
 
-  console.log(`[GEMI] Starting import of ${companies.length} companies to database...`);
+  console.log(`\n[GEMI] ========== STARTING IMPORT ==========`);
+  console.log(`[GEMI] Total companies to import: ${companies.length}`);
+  console.log(`[GEMI] Dataset ID: ${datasetId}`);
+  console.log(`[GEMI] User ID: ${userId}`);
+  console.log(`[GEMI] Discovery Run ID: ${discoveryRunId || 'none'}`);
+  console.log(`[GEMI] City ID: ${cityId || 'none'}`);
   
-  for (const company of companies) {
+  if (companies.length === 0) {
+    console.warn(`[GEMI] ⚠️  No companies to import!`);
+    return { inserted: 0, updated: 0, skipped: 0 };
+  }
+  
+  // Log first company structure for debugging
+  console.log(`[GEMI] First company structure:`, JSON.stringify({
+    ar_gemi: companies[0].ar_gemi,
+    name: companies[0].name,
+    municipality_id: companies[0].municipality_id,
+    activity_id: companies[0].activity_id,
+    has_address: !!companies[0].address,
+    has_website: !!companies[0].website_url,
+  }, null, 2));
+  
+  for (let i = 0; i < companies.length; i++) {
+    const company = companies[i];
+    // Declare variables in outer scope for error handling
+    let municipalityId: string | null = null;
+    let prefectureId: string | null = null;
+    let industryId: string | null = null;
+    
     try {
       // Validate required field
       if (!company.ar_gemi) {
-        console.warn(`[GEMI] Skipping company without ar_gemi:`, JSON.stringify(company));
+        console.warn(`[GEMI] [${i + 1}/${companies.length}] ⚠️  Skipping company without ar_gemi:`, JSON.stringify({
+          name: company.name,
+          legal_name: company.legal_name,
+          keys: Object.keys(company),
+        }));
         skipped++;
         continue;
       }
+      
+      if ((i + 1) % 50 === 0 || i === 0) {
+        console.log(`[GEMI] [${i + 1}/${companies.length}] Processing: ${company.ar_gemi} - ${company.name || company.legal_name || 'Unknown'}`);
+      }
 
       // Get municipality_id and prefecture_id from GEMI IDs
-      let municipalityId = null;
-      let prefectureId = null;
-      let industryId = null;
 
+      // Lookup municipality
       if (company.municipality_id) {
         const municipalityResult = await pool.query(
-          'SELECT id, prefecture_id FROM municipalities WHERE gemi_id = $1',
+          'SELECT id, prefecture_id, descr, descr_en FROM municipalities WHERE gemi_id = $1',
           [company.municipality_id]
         );
         if (municipalityResult.rows.length > 0) {
           municipalityId = municipalityResult.rows[0].id;
           prefectureId = municipalityResult.rows[0].prefecture_id;
+          if (i < 5) { // Log first 5 for debugging
+            console.log(`[GEMI] Found municipality: ${municipalityResult.rows[0].descr} (ID: ${municipalityId}, Prefecture: ${prefectureId})`);
+          }
         } else {
-          console.warn(`[GEMI] Municipality with gemi_id ${company.municipality_id} not found in database`);
+          console.warn(`[GEMI] ⚠️  Municipality with gemi_id ${company.municipality_id} not found in database for company ${company.ar_gemi}`);
+        }
+      } else {
+        if (i < 5) {
+          console.log(`[GEMI] Company ${company.ar_gemi} has no municipality_id`);
         }
       }
 
+      // Lookup industry
       if (company.activity_id) {
         const industryResult = await pool.query(
-          'SELECT id FROM industries WHERE gemi_id = $1',
+          'SELECT id, name, gemi_id FROM industries WHERE gemi_id = $1',
           [company.activity_id]
         );
         if (industryResult.rows.length > 0) {
           industryId = industryResult.rows[0].id;
+          if (i < 5) { // Log first 5 for debugging
+            console.log(`[GEMI] Found industry: ${industryResult.rows[0].name} (ID: ${industryId})`);
+          }
         } else {
-          console.warn(`[GEMI] Industry with gemi_id ${company.activity_id} not found in database`);
+          console.warn(`[GEMI] ⚠️  Industry with gemi_id ${company.activity_id} not found in database for company ${company.ar_gemi}`);
+        }
+      } else {
+        if (i < 5) {
+          console.log(`[GEMI] Company ${company.ar_gemi} has no activity_id`);
         }
       }
 
@@ -252,6 +299,34 @@ export async function importGemiCompaniesToDatabase(
           [municipalityId]
         );
         finalCityId = cityResult.rows[0]?.id || null;
+      }
+
+      // Prepare insert values
+      const insertValues = [
+        company.ar_gemi,
+        company.name || company.legal_name || 'Unknown',
+        company.address || null,
+        company.postal_code || null,
+        municipalityId,
+        prefectureId,
+        finalCityId,
+        industryId,
+        company.website_url || null,
+        datasetId,
+        userId,
+        discoveryRunId || null,
+      ];
+      
+      if (i < 3) { // Log first 3 inserts in detail
+        console.log(`[GEMI] Insert values for ${company.ar_gemi}:`, {
+          ar_gemi: insertValues[0],
+          name: insertValues[1],
+          municipality_id: insertValues[4],
+          prefecture_id: insertValues[5],
+          industry_id: insertValues[8],
+          dataset_id: insertValues[9],
+          discovery_run_id: insertValues[11],
+        });
       }
 
       // Upsert business using ar_gemi as unique constraint
@@ -275,38 +350,29 @@ export async function importGemiCompaniesToDatabase(
           discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id),
           updated_at = NOW()
         RETURNING id, (xmax = 0) AS inserted`,
-        [
-          company.ar_gemi,
-          company.name || company.legal_name || 'Unknown',
-          company.address || null,
-          company.postal_code || null,
-          municipalityId,
-          prefectureId,
-          finalCityId,
-          industryId,
-          company.website_url || null,
-          datasetId,
-          userId,
-          discoveryRunId || null,
-        ]
+        insertValues
       );
 
       const businessId = result.rows[0]?.id;
       const wasInserted = result.rows[0]?.inserted;
 
       if (!businessId) {
-        console.error(`[GEMI] Failed to insert/update business with ar_gemi: ${company.ar_gemi}`);
+        console.error(`[GEMI] ❌ Failed to insert/update business with ar_gemi: ${company.ar_gemi}`);
+        console.error(`[GEMI] Query returned:`, result.rows);
         skipped++;
         continue;
       }
 
       if (wasInserted) {
         inserted++;
-        if (inserted % 10 === 0) {
-          console.log(`[GEMI] Imported ${inserted} businesses so far...`);
+        if (inserted % 10 === 0 || inserted <= 3) {
+          console.log(`[GEMI] ✅ Inserted business #${inserted}: ${company.ar_gemi} (ID: ${businessId})`);
         }
       } else {
         updated++;
+        if (updated <= 3) {
+          console.log(`[GEMI] 🔄 Updated business: ${company.ar_gemi} (ID: ${businessId})`);
+        }
       }
 
       // Insert website if provided
@@ -358,16 +424,43 @@ export async function importGemiCompaniesToDatabase(
         });
       }
     } catch (error: any) {
-      console.error(`[GEMI] Error importing company ${company.ar_gemi || 'unknown'}:`, error.message);
+      console.error(`[GEMI] ❌ Error importing company [${i + 1}/${companies.length}] ${company.ar_gemi || 'unknown'}:`, error.message);
+      if (error.code) {
+        console.error(`[GEMI] Error code: ${error.code}`);
+      }
+      if (error.detail) {
+        console.error(`[GEMI] Error detail: ${error.detail}`);
+      }
+      if (error.hint) {
+        console.error(`[GEMI] Error hint: ${error.hint}`);
+      }
+      if (error.stack && i < 3) {
+        console.error(`[GEMI] Stack trace:`, error.stack);
+      }
+      
       if (error.code === '23505') { // Unique constraint violation
-        console.warn(`[GEMI] Duplicate ar_gemi detected: ${company.ar_gemi}`);
+        console.warn(`[GEMI] ⚠️  Duplicate ar_gemi detected: ${company.ar_gemi} (counting as update)`);
         updated++; // Count as update instead of skip
+      } else if (error.code === '23503') { // Foreign key violation
+        console.error(`[GEMI] ❌ Foreign key violation for ${company.ar_gemi}:`, {
+          municipality_id: municipalityId,
+          prefecture_id: prefectureId,
+          industry_id: industryId,
+          dataset_id: datasetId,
+        });
+        skipped++;
       } else {
         skipped++;
       }
     }
   }
 
-  console.log(`[GEMI] Import completed: ${inserted} inserted, ${updated} updated, ${skipped} skipped`);
+  console.log(`\n[GEMI] ========== IMPORT SUMMARY ==========`);
+  console.log(`[GEMI] ✅ Inserted: ${inserted}`);
+  console.log(`[GEMI] 🔄 Updated: ${updated}`);
+  console.log(`[GEMI] ⏭️  Skipped: ${skipped}`);
+  console.log(`[GEMI] 📊 Total processed: ${inserted + updated + skipped} / ${companies.length}`);
+  console.log(`[GEMI] ======================================\n`);
+  
   return { inserted, updated, skipped };
 }
