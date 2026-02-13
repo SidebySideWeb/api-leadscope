@@ -413,8 +413,8 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         businesses_created: discoveryResult.businessesCreated,
         businesses_updated: discoveryResult.businessesUpdated,
         searches_executed: discoveryResult.searchesExecuted,
-        contacts_created: discoveryResult.contactsCreated,
-        extraction_jobs_created: discoveryResult.extractionJobsCreated,
+        contacts_created: 0, // Contacts are created in extraction phase, not discovery
+        extraction_jobs_created: 0, // Extraction jobs are created separately
         // Note: websites_created removed - websites are created in extraction phase
         crawl_jobs_created: crawlJobsCreated,
         duration_seconds: (endTime.getTime() - startTime.getTime()) / 1000,
