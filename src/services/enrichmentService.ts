@@ -181,21 +181,37 @@ export async function enrichBusiness(businessId: string): Promise<{
       if (hasEmail) continue; // Skip if already has email
 
       try {
-        const contactResult = await pool.query(
-          `INSERT INTO contacts (email, contact_type, created_at)
-           VALUES ($1, 'email', NOW())
-           ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
-           RETURNING id`,
+        // Check if contact exists, insert if not
+        let contactId: string;
+        const existingEmail = await pool.query<{ id: string }>(
+          'SELECT id FROM contacts WHERE email = $1 LIMIT 1',
           [email]
         );
-
-        if (contactResult.rows.length > 0) {
-          await pool.query(
-            `INSERT INTO contact_sources (business_id, contact_id, source_url, page_type, found_at)
-             VALUES ($1, $2, $3, 'website_scrape', NOW())
-             ON CONFLICT DO NOTHING`,
-            [businessId, contactResult.rows[0].id, url]
+        if (existingEmail.rows.length > 0) {
+          contactId = existingEmail.rows[0].id;
+        } else {
+          const insertResult = await pool.query<{ id: string }>(
+            `INSERT INTO contacts (email, contact_type, created_at)
+             VALUES ($1, 'email', NOW())
+             RETURNING id`,
+            [email]
           );
+          contactId = insertResult.rows[0]?.id;
+        }
+
+        if (contactId) {
+          // Check if contact_sources link already exists
+          const existingSource = await pool.query(
+            'SELECT id FROM contact_sources WHERE business_id = $1 AND contact_id = $2 LIMIT 1',
+            [businessId, contactId]
+          );
+          if (existingSource.rows.length === 0) {
+            await pool.query(
+              `INSERT INTO contact_sources (business_id, contact_id, source_url, page_type, found_at)
+               VALUES ($1, $2, $3, 'website_scrape', NOW())`,
+              [businessId, contactId, url]
+            );
+          }
           emailsFound++;
         }
       } catch (error) {
@@ -207,21 +223,37 @@ export async function enrichBusiness(businessId: string): Promise<{
       if (hasPhone) continue; // Skip if already has phone
 
       try {
-        const contactResult = await pool.query(
-          `INSERT INTO contacts (phone, contact_type, created_at)
-           VALUES ($1, 'phone', NOW())
-           ON CONFLICT (phone) DO UPDATE SET phone = EXCLUDED.phone
-           RETURNING id`,
+        // Check if contact exists, insert if not
+        let contactId: string;
+        const existingPhone = await pool.query<{ id: string }>(
+          'SELECT id FROM contacts WHERE phone = $1 LIMIT 1',
           [phone]
         );
-
-        if (contactResult.rows.length > 0) {
-          await pool.query(
-            `INSERT INTO contact_sources (business_id, contact_id, source_url, page_type, found_at)
-             VALUES ($1, $2, $3, 'website_scrape', NOW())
-             ON CONFLICT DO NOTHING`,
-            [businessId, contactResult.rows[0].id, url]
+        if (existingPhone.rows.length > 0) {
+          contactId = existingPhone.rows[0].id;
+        } else {
+          const insertResult = await pool.query<{ id: string }>(
+            `INSERT INTO contacts (phone, contact_type, created_at)
+             VALUES ($1, 'phone', NOW())
+             RETURNING id`,
+            [phone]
           );
+          contactId = insertResult.rows[0]?.id;
+        }
+
+        if (contactId) {
+          // Check if contact_sources link already exists
+          const existingSource = await pool.query(
+            'SELECT id FROM contact_sources WHERE business_id = $1 AND contact_id = $2 LIMIT 1',
+            [businessId, contactId]
+          );
+          if (existingSource.rows.length === 0) {
+            await pool.query(
+              `INSERT INTO contact_sources (business_id, contact_id, source_url, page_type, found_at)
+               VALUES ($1, $2, $3, 'website_scrape', NOW())`,
+              [businessId, contactId, url]
+            );
+          }
           phonesFound++;
         }
       } catch (error) {
