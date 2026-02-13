@@ -176,20 +176,55 @@ export async function fetchGemiCompaniesForMunicipality(
       }
 
       // Map API response to our interface (handle both camelCase and snake_case)
-      const companies: GemiCompany[] = rawCompanies.map((c: any) => ({
-        ar_gemi: c.arGemi || c.ar_gemi || c.ar || null,
-        name: c.name || c.companyName || c.legalName || 'Unknown',
-        legal_name: c.legalName || c.legal_name || c.name,
-        municipality_id: c.municipalityId || c.municipality_id || c.municipality || null,
-        prefecture_id: c.prefectureId || c.prefecture_id || c.prefecture || null,
-        address: c.address || c.fullAddress || null,
-        postal_code: c.postalCode || c.postal_code || c.zipCode || null,
-        website_url: c.websiteUrl || c.website_url || c.website || null,
-        email: c.email || null,
-        phone: c.phone || c.telephone || null,
-        activity_id: c.activityId || c.activity_id || c.activity || null,
-        ...c, // Include any other fields
-      }));
+      const companies: GemiCompany[] = rawCompanies.map((c: any) => {
+        // Handle municipality_id - can be number, string, or object with id property
+        let municipalityId: number | null = null;
+        if (c.municipalityId || c.municipality_id || c.municipality) {
+          const mun = c.municipalityId || c.municipality_id || c.municipality;
+          if (typeof mun === 'object' && mun !== null) {
+            municipalityId = mun.id || mun.gemi_id || mun.gemiId || null;
+          } else if (typeof mun === 'number' || typeof mun === 'string') {
+            municipalityId = typeof mun === 'string' ? parseInt(mun, 10) : mun;
+          }
+        }
+
+        // Handle prefecture_id - can be number, string, or object with id property
+        let prefectureId: number | null = null;
+        if (c.prefectureId || c.prefecture_id || c.prefecture) {
+          const pref = c.prefectureId || c.prefecture_id || c.prefecture;
+          if (typeof pref === 'object' && pref !== null) {
+            prefectureId = pref.id || pref.gemi_id || pref.gemiId || null;
+          } else if (typeof pref === 'number' || typeof pref === 'string') {
+            prefectureId = typeof pref === 'string' ? parseInt(pref, 10) : pref;
+          }
+        }
+
+        // Handle activity_id - can be number, string, or object with id property
+        let activityId: number | null = null;
+        if (c.activityId || c.activity_id || c.activity) {
+          const act = c.activityId || c.activity_id || c.activity;
+          if (typeof act === 'object' && act !== null) {
+            activityId = act.id || act.gemi_id || act.gemiId || null;
+          } else if (typeof act === 'number' || typeof act === 'string') {
+            activityId = typeof act === 'string' ? parseInt(act, 10) : act;
+          }
+        }
+
+        return {
+          ar_gemi: c.arGemi || c.ar_gemi || c.ar || String(c.arGemi || c.ar_gemi || c.ar || ''),
+          name: c.name || c.companyName || c.legalName || 'Unknown',
+          legal_name: c.legalName || c.legal_name || c.name,
+          municipality_id: municipalityId,
+          prefecture_id: prefectureId,
+          address: c.address || c.fullAddress || null,
+          postal_code: c.postalCode || c.postal_code || c.zipCode || null,
+          website_url: c.websiteUrl || c.website_url || c.website || null,
+          email: c.email || null,
+          phone: c.phone || c.telephone || null,
+          activity_id: activityId,
+          ...c, // Include any other fields
+        };
+      });
 
       // Filter out companies without ar_gemi (required)
       const validCompanies = companies.filter(c => c.ar_gemi);
@@ -296,20 +331,25 @@ export async function importGemiCompaniesToDatabase(
 
       // Get municipality_id and prefecture_id from GEMI IDs
 
-      // Lookup municipality
+      // Lookup municipality - handle both number and string gemi_id
       if (company.municipality_id) {
+        // Convert to string for database lookup (gemi_id is stored as TEXT)
+        const municipalityGemiId = String(company.municipality_id);
         const municipalityResult = await pool.query(
-          'SELECT id, prefecture_id, descr, descr_en FROM municipalities WHERE gemi_id = $1',
-          [company.municipality_id]
+          'SELECT id, prefecture_id, descr, descr_en, gemi_id FROM municipalities WHERE gemi_id = $1',
+          [municipalityGemiId]
         );
         if (municipalityResult.rows.length > 0) {
           municipalityId = municipalityResult.rows[0].id;
           prefectureId = municipalityResult.rows[0].prefecture_id;
           if (i < 5) { // Log first 5 for debugging
-            console.log(`[GEMI] Found municipality: ${municipalityResult.rows[0].descr} (ID: ${municipalityId}, Prefecture: ${prefectureId})`);
+            console.log(`[GEMI] Found municipality: ${municipalityResult.rows[0].descr} (gemi_id: ${municipalityResult.rows[0].gemi_id}, ID: ${municipalityId}, Prefecture: ${prefectureId})`);
           }
         } else {
-          console.warn(`[GEMI] ⚠️  Municipality with gemi_id ${company.municipality_id} not found in database for company ${company.ar_gemi}`);
+          console.warn(`[GEMI] ⚠️  Municipality with gemi_id ${municipalityGemiId} (type: ${typeof company.municipality_id}) not found in database for company ${company.ar_gemi}`);
+          if (i < 5) {
+            console.log(`[GEMI] Company municipality_id value:`, JSON.stringify(company.municipality_id));
+          }
         }
       } else {
         if (i < 5) {
@@ -339,9 +379,10 @@ export async function importGemiCompaniesToDatabase(
 
       // Get city_id from municipality (for backward compatibility)
       // Use provided cityId if available, otherwise try to match by municipality
+      // If still null, use Athens as default (required by NOT NULL constraint)
       let finalCityId = cityId || null;
       if (!finalCityId && municipalityId) {
-        // Try to find matching city by municipality name or use a default mapping
+        // Try to find matching city by municipality name
         const cityResult = await pool.query(
           `SELECT c.id FROM cities c
            JOIN municipalities m ON m.descr = c.name OR m.descr_en = c.name OR m.descr ILIKE c.name
@@ -350,6 +391,25 @@ export async function importGemiCompaniesToDatabase(
           [municipalityId]
         );
         finalCityId = cityResult.rows[0]?.id || null;
+      }
+      
+      // If still no city_id, use Athens as default (required by NOT NULL constraint)
+      if (!finalCityId) {
+        const athensResult = await pool.query(
+          `SELECT id FROM cities 
+           WHERE name ILIKE '%athens%' OR name ILIKE '%αθήνα%' OR normalized_name ILIKE '%athens%'
+           LIMIT 1`
+        );
+        finalCityId = athensResult.rows[0]?.id || null;
+        if (finalCityId && i < 5) {
+          console.log(`[GEMI] Using default city (Athens) for company ${company.ar_gemi}: ${finalCityId}`);
+        }
+      }
+      
+      if (!finalCityId) {
+        console.error(`[GEMI] ❌ Could not find default city (Athens) in database. Cannot insert business ${company.ar_gemi} without city_id.`);
+        skipped++;
+        continue;
       }
 
       // Prepare insert values
