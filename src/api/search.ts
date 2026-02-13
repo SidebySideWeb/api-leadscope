@@ -76,8 +76,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         b.website_url,
         b.created_at,
         b.updated_at,
-        m.name as municipality_name,
-        p.name as prefecture_name,
+        COALESCE(m.descr_en, m.descr) as municipality_name,
+        COALESCE(p.descr_en, p.descr) as prefecture_name,
         i.name as industry_name,
         c.name as city_name
       FROM businesses b
