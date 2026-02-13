@@ -389,16 +389,14 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     }, null, 2));
 
     // Run discovery job asynchronously (don't wait for completion)
-    // Uses vrisko.gr as the ONLY discovery source (no Google Maps/Places API)
+    // Uses GEMI API as the discovery source
     // Extraction will happen in the background via extraction worker
     console.log('[API] Starting discovery job asynchronously...');
     console.log('[API] Discovery job params:', {
       userId,
       industry_id: industry.id,
-      city_id: city.id,
-      latitude: city.latitude,
-      longitude: city.longitude,
-      cityRadiusKm: city.radius_km,
+      city_id: city_id || undefined,
+      municipality_id: municipality_id || undefined,
       datasetId: finalDatasetId,
       discoveryRunId: discoveryRun.id
     });

@@ -264,13 +264,19 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       businessesUpdated: number;
       searchesExecuted: number;
       errors: string[];
+    } = {
+      businessesFound: 0,
+      businessesCreated: 0,
+      businessesUpdated: 0,
+      searchesExecuted: 0,
+      errors: [],
     };
 
     // STEP 2: If no results found, fetch from GEMI API
     if (existingCount === 0) {
       console.log(`[runDiscoveryJob] No existing businesses found, fetching from GEMI API...`);
       
-      let municipalityGemiId: number;
+      let municipalityGemiId: number | undefined;
       
       // If municipality_id is provided directly, use it
       if (finalMunicipalityId) {
@@ -321,7 +327,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         throw new Error('Either city_id or municipality_id is required for GEMI discovery');
       }
       
-      if (municipalityGemiId) {
+      if (municipalityGemiId !== undefined) {
         // Get industry gemi_id
         const industryResult = await pool.query<{ gemi_id: number }>(
           'SELECT gemi_id FROM industries WHERE id = $1',
@@ -368,6 +374,18 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
             businessesUpdated: 0,
             searchesExecuted: 0,
             errors: [error.message || 'Failed to fetch from GEMI API'],
+          };
+        }
+      } else {
+        // municipalityGemiId was not found/assigned, discoveryResult should already be set above
+        // But if it wasn't, set a default
+        if (!discoveryResult) {
+          discoveryResult = {
+            businessesFound: 0,
+            businessesCreated: 0,
+            businessesUpdated: 0,
+            searchesExecuted: 0,
+            errors: ['Municipality GEMI ID not found'],
           };
         }
       }
