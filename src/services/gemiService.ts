@@ -355,30 +355,20 @@ export async function importGemiCompaniesToDatabase(
         }
       }
 
-      // Lookup industry
-      if (company.activity_id) {
+      // Note: industry_id column has been removed from businesses table
+      // Industry filtering is now done through dataset_id -> datasets.industry_id relationship
+      // We still log activity_id for debugging but don't store it in businesses table
+      if (company.activity_id && i < 5) {
         const industryResult = await pool.query(
-          'SELECT id, name, gemi_id FROM industries WHERE gemi_id = $1',
+          'SELECT name FROM industries WHERE gemi_id = $1',
           [company.activity_id]
         );
         if (industryResult.rows.length > 0) {
-          industryId = industryResult.rows[0].id;
-          if (i < 5) { // Log first 5 for debugging
-            console.log(`[GEMI] Found industry: ${industryResult.rows[0].name} (ID: ${industryId})`);
-          }
-        } else {
-          console.warn(`[GEMI] ⚠️  Industry with gemi_id ${company.activity_id} not found in database for company ${company.ar_gemi}`);
-        }
-      } else {
-        if (i < 5) {
-          console.log(`[GEMI] Company ${company.ar_gemi} has no activity_id`);
+          console.log(`[GEMI] Company ${company.ar_gemi} has activity_id ${company.activity_id} (${industryResult.rows[0].name}) - stored via dataset`);
         }
       }
 
-      // city_id column has been removed from businesses table
-      // We only use municipality_id and prefecture_id now
-
-      // Prepare insert values (city_id removed)
+      // Prepare insert values (city_id and industry_id removed)
       const insertValues = [
         company.ar_gemi,
         company.name || company.legal_name || 'Unknown',
@@ -386,7 +376,6 @@ export async function importGemiCompaniesToDatabase(
         company.postal_code || null,
         municipalityId,
         prefectureId,
-        industryId,
         company.website_url || null,
         datasetId,
         userId,
@@ -399,20 +388,19 @@ export async function importGemiCompaniesToDatabase(
           name: insertValues[1],
           municipality_id: insertValues[4],
           prefecture_id: insertValues[5],
-          industry_id: insertValues[6],
-          dataset_id: insertValues[8],
-          discovery_run_id: insertValues[10],
+          dataset_id: insertValues[7],
+          discovery_run_id: insertValues[9],
         });
       }
 
-      // Upsert business using ar_gemi as unique constraint (city_id column removed)
+      // Upsert business using ar_gemi as unique constraint (city_id and industry_id columns removed)
       const result = await pool.query(
         `INSERT INTO businesses (
           ar_gemi, name, address, postal_code, 
-          municipality_id, prefecture_id, industry_id,
+          municipality_id, prefecture_id,
           website_url, dataset_id, owner_user_id, discovery_run_id, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
         ON CONFLICT (ar_gemi) 
         DO UPDATE SET
           name = EXCLUDED.name,
@@ -420,7 +408,6 @@ export async function importGemiCompaniesToDatabase(
           postal_code = COALESCE(EXCLUDED.postal_code, businesses.postal_code),
           municipality_id = COALESCE(EXCLUDED.municipality_id, businesses.municipality_id),
           prefecture_id = COALESCE(EXCLUDED.prefecture_id, businesses.prefecture_id),
-          industry_id = COALESCE(EXCLUDED.industry_id, businesses.industry_id),
           website_url = COALESCE(EXCLUDED.website_url, businesses.website_url),
           discovery_run_id = COALESCE(EXCLUDED.discovery_run_id, businesses.discovery_run_id),
           updated_at = NOW()

@@ -79,8 +79,9 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       paramIndex++;
     }
 
+    // Filter by industry through dataset (industry_id column removed from businesses table)
     if (industry_id) {
-      conditions.push(`b.industry_id = $${paramIndex}`);
+      conditions.push(`b.dataset_id IN (SELECT id FROM datasets WHERE industry_id = $${paramIndex})`);
       params.push(industry_id);
       paramIndex++;
     }
@@ -93,7 +94,7 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    // Get businesses with pagination
+    // Get businesses with pagination (industry_id and city_id columns removed)
     const query = `
       SELECT 
         b.id,
@@ -102,15 +103,14 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
         b.postal_code,
         b.ar_gemi,
         b.website_url,
-        m.name as municipality_name,
-        p.name as prefecture_name,
-        i.name as industry_name,
-        c.name as city_name
+        COALESCE(m.descr_en, m.descr) as municipality_name,
+        COALESCE(p.descr_en, p.descr) as prefecture_name,
+        i.name as industry_name
       FROM businesses b
       LEFT JOIN municipalities m ON m.id = b.municipality_id
       LEFT JOIN prefectures p ON p.id = b.prefecture_id
-      LEFT JOIN industries i ON i.id = b.industry_id
-      LEFT JOIN cities c ON c.id = b.city_id
+      LEFT JOIN datasets d ON d.id = b.dataset_id
+      LEFT JOIN industries i ON i.id = d.industry_id
       ${whereClause}
       ORDER BY b.created_at DESC
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
@@ -167,7 +167,6 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
       { header: 'Postal Code', key: 'postal_code', width: 12 },
       { header: 'Municipality', key: 'municipality', width: 20 },
       { header: 'Prefecture', key: 'prefecture', width: 20 },
-      { header: 'City', key: 'city', width: 20 },
       { header: 'Industry', key: 'industry', width: 25 },
       { header: 'Website', key: 'website', width: 30 },
       { header: 'Email', key: 'email', width: 30 },
@@ -192,7 +191,6 @@ router.post('/', authMiddleware, async (req: AuthRequest, res) => {
         postal_code: business.postal_code || '',
         municipality: business.municipality_name || '',
         prefecture: business.prefecture_name || '',
-        city: business.city_name || '',
         industry: business.industry_name || '',
         website: business.website_url || '',
         email: contact.emails.join('; ') || '',

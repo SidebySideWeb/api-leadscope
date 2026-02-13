@@ -36,9 +36,9 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       paramIndex++;
     }
 
-    // Filter by industry
+    // Filter by industry through dataset (industry_id column removed from businesses table)
     if (industry_id) {
-      conditions.push(`b.industry_id = $${paramIndex}`);
+      conditions.push(`b.dataset_id IN (SELECT id FROM datasets WHERE industry_id = $${paramIndex})`);
       params.push(industry_id);
       paramIndex++;
     }
@@ -62,7 +62,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     const countResult = await pool.query<{ total: string }>(countQuery, params);
     const totalCount = parseInt(countResult.rows[0]?.total || '0', 10);
 
-    // Get businesses with pagination
+    // Get businesses with pagination (industry_id and city_id columns removed)
     const query = `
       SELECT 
         b.id,
@@ -72,19 +72,18 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         b.ar_gemi,
         b.municipality_id,
         b.prefecture_id,
-        b.industry_id,
         b.website_url,
+        b.dataset_id,
         b.created_at,
         b.updated_at,
         COALESCE(m.descr_en, m.descr) as municipality_name,
         COALESCE(p.descr_en, p.descr) as prefecture_name,
-        i.name as industry_name,
-        c.name as city_name
+        i.name as industry_name
       FROM businesses b
       LEFT JOIN municipalities m ON m.id = b.municipality_id
       LEFT JOIN prefectures p ON p.id = b.prefecture_id
-      LEFT JOIN industries i ON i.id = b.industry_id
-      LEFT JOIN cities c ON c.id = b.city_id
+      LEFT JOIN datasets d ON d.id = b.dataset_id
+      LEFT JOIN industries i ON i.id = d.industry_id
       ${whereClause}
       ORDER BY b.created_at DESC
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
@@ -148,7 +147,6 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         municipality: b.municipality_name,
         prefecture: b.prefecture_name,
         industry: b.industry_name,
-        city: b.city_name,
         website: websitesMap.get(b.id) || b.website_url || null,
         email: contact.email,
         phone: contact.phone,
