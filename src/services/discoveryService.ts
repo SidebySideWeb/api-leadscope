@@ -494,6 +494,19 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     // Note: Websites are created in extraction phase, not discovery
     console.log(`   Crawl jobs created: ${crawlJobsCreated}`);
 
+    // Mark discovery_run as completed
+    try {
+      if (typeof discoveryRun !== 'undefined') {
+        await updateDiscoveryRun(discoveryRun.id, {
+          status: 'completed',
+          completed_at: new Date(),
+        });
+        console.log(`[runDiscoveryJob] Marked discovery_run as completed: ${discoveryRun.id}`);
+      }
+    } catch (updateError) {
+      console.error('[runDiscoveryJob] Failed to update discovery_run status to completed:', updateError);
+    }
+
     return result;
   } catch (error) {
     const endTime = new Date();
