@@ -211,12 +211,25 @@ export async function fetchGemiCompaniesForMunicipality(
         }
 
         // Get business name from coNamesEn (English) or coNameEl (Greek)
+        // If both have values, prefer coNameEl (Greek)
         // Handle arrays - take first element if it's an array
         let businessName = 'Unknown';
-        if (c.coNamesEn) {
-          businessName = Array.isArray(c.coNamesEn) ? (c.coNamesEn[0] || 'Unknown') : c.coNamesEn;
-        } else if (c.coNameEl) {
-          businessName = Array.isArray(c.coNameEl) ? (c.coNameEl[0] || 'Unknown') : c.coNameEl;
+        
+        // Extract values from arrays or strings
+        const coNamesEnValue = c.coNamesEn 
+          ? (Array.isArray(c.coNamesEn) ? c.coNamesEn[0] : c.coNamesEn)
+          : null;
+        const coNameElValue = c.coNameEl || c.coNamesEL
+          ? (Array.isArray(c.coNameEl || c.coNamesEL) ? (c.coNameEl || c.coNamesEL)[0] : (c.coNameEl || c.coNamesEL))
+          : null;
+        
+        // If both have values, prefer Greek (coNameEl)
+        if (coNameElValue && coNamesEnValue) {
+          businessName = coNameElValue;
+        } else if (coNameElValue) {
+          businessName = coNameElValue;
+        } else if (coNamesEnValue) {
+          businessName = coNamesEnValue;
         } else if (c.name) {
           businessName = Array.isArray(c.name) ? (c.name[0] || 'Unknown') : c.name;
         } else if (c.companyName) {
@@ -224,6 +237,9 @@ export async function fetchGemiCompaniesForMunicipality(
         } else if (c.legalName) {
           businessName = Array.isArray(c.legalName) ? (c.legalName[0] || 'Unknown') : c.legalName;
         }
+
+        // Map url field to website_url
+        const websiteUrl = c.url || c.websiteUrl || c.website_url || c.website || null;
 
         return {
           ar_gemi: c.arGemi || c.ar_gemi || c.ar || String(c.arGemi || c.ar_gemi || c.ar || ''),
@@ -233,7 +249,7 @@ export async function fetchGemiCompaniesForMunicipality(
           prefecture_id: prefectureId,
           address: c.address || c.fullAddress || null,
           postal_code: c.postalCode || c.postal_code || c.zipCode || null,
-          website_url: c.websiteUrl || c.website_url || c.website || null,
+          website_url: websiteUrl,
           email: c.email || null,
           phone: c.phone || c.telephone || null,
           activity_id: activityId,
