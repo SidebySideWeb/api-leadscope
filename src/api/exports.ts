@@ -183,25 +183,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       expires_at: Date | null;
     }>(query, params);
 
-    // Get base URL from request or environment
-    // Check X-Forwarded-Proto header (set by nginx/proxy) for HTTPS detection
-    const forwardedProto = req.get('X-Forwarded-Proto');
-    const protocol = forwardedProto || req.protocol || (process.env.NODE_ENV === 'production' ? 'https' : 'http');
-    
-    // Use API_BASE_URL if set (should be HTTPS in production), otherwise construct from request
-    let baseUrl: string;
-    if (process.env.API_BASE_URL) {
-      baseUrl = process.env.API_BASE_URL;
-    } else {
-      const host = req.get('host') || 'localhost:3001';
-      baseUrl = `${protocol}://${host}`;
-    }
-    
-    // Ensure HTTPS in production
-    if (process.env.NODE_ENV === 'production' && baseUrl.startsWith('http://')) {
-      baseUrl = baseUrl.replace('http://', 'https://');
-    }
-    
+    // Map exports to response format
     const exports = result.rows.map(row => {
       const filters = row.filters || {};
       const tier = filters.tier || 'starter';
@@ -209,6 +191,12 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       // Determine status: if file_path is empty/null, export is still processing
       const isProcessing = !row.file_path || row.file_path.trim() === '';
       const status = isProcessing ? 'processing' : 'completed';
+      
+      // Use Next.js API route for downloads (better CORS handling)
+      // Frontend will proxy to backend
+      const downloadUrl = row.file_path && row.file_path.trim() !== '' 
+        ? `/api/exports/${row.id}/download` 
+        : null;
       
       return {
         id: row.id,
@@ -219,7 +207,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         rows_returned: row.total_rows, // Same as total_rows for now
         rows_total: row.total_rows,
         file_path: row.file_path,
-        download_url: row.file_path && row.file_path.trim() !== '' ? `${baseUrl}/exports/${row.id}/download` : null,
+        download_url: downloadUrl,
         status: status, // 'processing' or 'completed'
         created_at: row.created_at.toISOString(),
         expires_at: row.expires_at ? row.expires_at.toISOString() : null,

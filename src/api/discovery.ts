@@ -543,6 +543,7 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     const responseData = {
       data: [{
         id: discoveryRun.id,
+        dataset_id: finalDatasetId,
         status: discoveryRun.status,
         created_at: discoveryRun.created_at instanceof Date 
           ? discoveryRun.created_at.toISOString() 
@@ -723,6 +724,96 @@ router.get('/runs/:runId/results', authMiddleware, async (req: AuthRequest, res)
         total_available: 0,
         total_returned: 0,
         gate_reason: error.message || 'Failed to get discovery results',
+      },
+    });
+  }
+});
+
+/**
+ * GET /api/discovery/runs
+ * Get all discovery runs for the authenticated user
+ * Requires authentication
+ */
+router.get('/runs', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId!;
+
+    // Get user's plan
+    const userResult = await pool.query<{ plan: string }>(
+      'SELECT plan FROM users WHERE id = $1',
+      [userId]
+    );
+    const userPlan = (userResult.rows[0]?.plan || 'demo') as string;
+
+    // Get all discovery runs for user's datasets
+    const discoveryRunsResult = await pool.query<{
+      id: string;
+      dataset_id: string;
+      status: string;
+      created_at: Date;
+      completed_at: Date | null;
+      businesses_found: string;
+      dataset_name: string;
+      industry_name: string;
+      city_name: string | null;
+    }>(
+      `SELECT 
+        dr.id,
+        dr.dataset_id,
+        dr.status,
+        dr.created_at,
+        dr.completed_at,
+        COUNT(b.id) as businesses_found,
+        d.name as dataset_name,
+        i.name as industry_name,
+        c.name as city_name
+      FROM discovery_runs dr
+      JOIN datasets d ON d.id = dr.dataset_id
+      LEFT JOIN industries i ON i.id = d.industry_id
+      LEFT JOIN cities c ON c.id = d.city_id
+      LEFT JOIN businesses b ON b.discovery_run_id = dr.id
+      WHERE d.user_id = $1
+      GROUP BY dr.id, dr.dataset_id, dr.status, dr.created_at, dr.completed_at, d.name, i.name, c.name
+      ORDER BY dr.created_at DESC
+      LIMIT 100`,
+      [userId]
+    );
+
+    const discoveryRuns = discoveryRunsResult.rows.map(row => ({
+      id: row.id,
+      dataset_id: row.dataset_id,
+      status: row.status,
+      created_at: row.created_at instanceof Date 
+        ? row.created_at.toISOString() 
+        : row.created_at,
+      completed_at: row.completed_at instanceof Date 
+        ? row.completed_at.toISOString() 
+        : row.completed_at,
+      businesses_found: parseInt(row.businesses_found || '0', 10),
+      dataset_name: row.dataset_name,
+      industry_name: row.industry_name,
+      city_name: row.city_name,
+    }));
+
+    return res.json({
+      data: discoveryRuns,
+      meta: {
+        plan_id: userPlan,
+        gated: false,
+        total_available: discoveryRuns.length,
+        total_returned: discoveryRuns.length,
+      },
+    });
+  } catch (error: any) {
+    console.error('[API] Error getting all discovery runs:', error);
+    return res.status(500).json({
+      data: null,
+      meta: {
+        plan_id: 'demo',
+        gated: false,
+        total_available: 0,
+        total_returned: 0,
+        gate_reason: error.message || 'Failed to get discovery runs',
       },
     });
   }
