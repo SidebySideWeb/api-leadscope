@@ -169,7 +169,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 
     query += ' ORDER BY e.created_at DESC';
 
-    console.log('[exports] Executing query with params:', params);
+    console.log('[exports] Executing query:', query);
+    console.log('[exports] Query params:', params);
     const result = await pool.query<{
       id: string;
       user_id: string;
@@ -182,6 +183,16 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       created_at: Date;
       expires_at: Date | null;
     }>(query, params);
+
+    console.log('[exports] Query returned', result.rows.length, 'rows');
+    if (result.rows.length > 0) {
+      console.log('[exports] Sample export:', {
+        id: result.rows[0].id,
+        user_id: result.rows[0].user_id,
+        file_path: result.rows[0].file_path,
+        filters: result.rows[0].filters,
+      });
+    }
 
     // Map exports to response format
     const exports = result.rows.map(row => {
