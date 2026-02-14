@@ -84,6 +84,27 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       // Enforce dataset creation limit before resolving
       await enforceDatasetCreation(input.userId);
 
+      // Get municipality name for dataset naming (prefer municipality name over city name)
+      let municipalityName: string | undefined;
+      if (input.municipality_id) {
+        const municipalityResult = await pool.query<{ descr: string; descr_en: string }>(
+          'SELECT descr, descr_en FROM municipalities WHERE id = $1',
+          [input.municipality_id]
+        );
+        if (municipalityResult.rows.length > 0) {
+          // Prefer Greek name (descr), fallback to English (descr_en)
+          municipalityName = municipalityResult.rows[0].descr || municipalityResult.rows[0].descr_en;
+        }
+      } else if (input.municipality_gemi_id) {
+        const municipalityResult = await pool.query<{ descr: string; descr_en: string }>(
+          'SELECT descr, descr_en FROM municipalities WHERE gemi_id = $1',
+          [input.municipality_gemi_id.toString()]
+        );
+        if (municipalityResult.rows.length > 0) {
+          municipalityName = municipalityResult.rows[0].descr || municipalityResult.rows[0].descr_en;
+        }
+      }
+
       // Resolve dataset - prefer IDs, fallback to names (must exist, won't create)
       const resolverResult = await resolveDataset({
         userId: input.userId,
@@ -91,6 +112,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         cityName: input.city_id ? undefined : input.city, // Only use city name if city_id not provided
         industryId: input.industry_id, // Use industry ID if available
         industryName: input.industry_id ? undefined : input.industry, // Only use industry name if industry_id not provided
+        municipalityName: municipalityName, // Pass municipality name for better dataset naming
       });
 
       datasetId = resolverResult.dataset.id;

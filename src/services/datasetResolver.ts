@@ -19,6 +19,7 @@ export interface DatasetResolverInput {
   cityName?: string; // Fallback: use city name (must exist, won't create)
   industryId?: string; // Preferred: use industry ID
   industryName?: string; // Fallback: use industry name (must exist, won't create)
+  municipalityName?: string; // Optional: municipality name for dataset naming (preferred over city name)
   datasetName?: string;
 }
 
@@ -41,7 +42,7 @@ export interface DatasetResolverResult {
 export async function resolveDataset(
   input: DatasetResolverInput
 ): Promise<DatasetResolverResult> {
-  const { userId, cityId, cityName, industryId, industryName, datasetName } = input;
+  const { userId, cityId, cityName, industryId, industryName, municipalityName, datasetName } = input;
 
   // Get city by ID (preferred) or by name (must exist, won't create)
   let city;
@@ -76,12 +77,16 @@ export async function resolveDataset(
     throw new Error('Either industryId or industryName is required');
   }
 
+  // Generate dataset name from municipality (preferred) or city and industry if not provided
+  const locationName = municipalityName || city.name;
+  const finalDatasetName = datasetName || `${locationName} - ${industry.name}`;
+
   // Get or create dataset (with reuse logic)
   const dataset = await getOrCreateDataset(
     userId,
     city.id,
     industry.id,
-    datasetName
+    finalDatasetName
   );
 
   // Check if this is a reused dataset
