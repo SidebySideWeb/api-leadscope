@@ -67,7 +67,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         params.push(municipalityIds);
       } else {
         // Use text array for non-UUID IDs like "mun-XXXXX"
-        conditions.push(`b.municipality_id = ANY($${paramIndex}::text[])`);
+        // Cast the column to text for comparison since municipality_id might be UUID type
+        conditions.push(`b.municipality_id::text = ANY($${paramIndex}::text[])`);
         params.push(municipalityIds);
       }
       paramIndex++;
@@ -107,7 +108,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         params.push(prefectureIds);
       } else {
         // Use text array for non-UUID IDs like "pref-5"
-        conditions.push(`b.prefecture_id = ANY($${paramIndex}::text[])`);
+        // Cast the column to text for comparison since prefecture_id might be UUID type
+        conditions.push(`b.prefecture_id::text = ANY($${paramIndex}::text[])`);
         params.push(prefectureIds);
       }
       paramIndex++;
