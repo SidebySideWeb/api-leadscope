@@ -18,7 +18,16 @@ const router = express.Router();
 router.get('/', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.userId!;
-    const { municipality_id, industry_id, prefecture_id, page = '1', limit = '50' } = req.query;
+    const { 
+      municipality_id, 
+      municipality_ids,
+      industry_id, 
+      industry_ids,
+      prefecture_id, 
+      prefecture_ids,
+      page = '1', 
+      limit = '50' 
+    } = req.query;
 
     const pageNum = parseInt(page as string, 10) || 1;
     const limitNum = Math.min(parseInt(limit as string, 10) || 50, 100); // Max 100 per page
@@ -29,24 +38,48 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     const params: any[] = [];
     let paramIndex = 1;
 
-    // Filter by municipality
+    // Filter by municipality (support both single and array)
+    const municipalityIds: string[] = [];
     if (municipality_id) {
-      conditions.push(`b.municipality_id = $${paramIndex}`);
-      params.push(municipality_id);
+      municipalityIds.push(municipality_id as string);
+    }
+    if (municipality_ids) {
+      const ids = Array.isArray(municipality_ids) ? municipality_ids : [municipality_ids];
+      municipalityIds.push(...ids.map(id => String(id)));
+    }
+    if (municipalityIds.length > 0) {
+      conditions.push(`b.municipality_id = ANY($${paramIndex}::uuid[])`);
+      params.push(municipalityIds);
       paramIndex++;
     }
 
-    // Filter by industry through dataset (industry_id column removed from businesses table)
+    // Filter by industry through dataset (support both single and array)
+    const industryIds: string[] = [];
     if (industry_id) {
-      conditions.push(`b.dataset_id IN (SELECT id FROM datasets WHERE industry_id = $${paramIndex})`);
-      params.push(industry_id);
+      industryIds.push(industry_id as string);
+    }
+    if (industry_ids) {
+      const ids = Array.isArray(industry_ids) ? industry_ids : [industry_ids];
+      industryIds.push(...ids.map(id => String(id)));
+    }
+    if (industryIds.length > 0) {
+      conditions.push(`b.dataset_id IN (SELECT id FROM datasets WHERE industry_id = ANY($${paramIndex}::uuid[]))`);
+      params.push(industryIds);
       paramIndex++;
     }
 
-    // Filter by prefecture
+    // Filter by prefecture (support both single and array)
+    const prefectureIds: string[] = [];
     if (prefecture_id) {
-      conditions.push(`b.prefecture_id = $${paramIndex}`);
-      params.push(prefecture_id);
+      prefectureIds.push(prefecture_id as string);
+    }
+    if (prefecture_ids) {
+      const ids = Array.isArray(prefecture_ids) ? prefecture_ids : [prefecture_ids];
+      prefectureIds.push(...ids.map(id => String(id)));
+    }
+    if (prefectureIds.length > 0) {
+      conditions.push(`b.prefecture_id = ANY($${paramIndex}::uuid[])`);
+      params.push(prefectureIds);
       paramIndex++;
     }
 
