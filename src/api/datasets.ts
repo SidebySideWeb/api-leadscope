@@ -421,20 +421,21 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res): Promis
 
     // Get businesses with crawl results
     const result = await pool.query<{
-      id: number;
+      id: string;
       name: string;
       address: string | null;
       postal_code: string | null;
-      city_id: number;
-      industry_id: number | null;
-      google_place_id: string | null;
       dataset_id: string;
       owner_user_id: string;
       created_at: Date;
       updated_at: Date;
+      city_id: string | null;
+      industry_id: string | null;
       city_name: string | null;
       industry_name: string | null;
       website_url: string | null;
+      phone: string | null;
+      email: string | null;
       crawl_status: string | null;
       emails_count: number;
       phones_count: number;
@@ -468,16 +469,17 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res): Promis
         b.name,
         b.address,
         b.postal_code,
-        b.city_id,
-        b.industry_id,
-        b.google_place_id,
         b.dataset_id,
         b.owner_user_id,
         b.created_at,
         b.updated_at,
+        d.city_id,
+        d.industry_id,
         c.name as city_name,
         i.name as industry_name,
-        w.url as website_url,
+        b.website_url,
+        b.phone,
+        b.email,
         CASE 
           WHEN cs.business_id IS NULL OR cs.pages_visited IS NULL OR cs.pages_visited = 0 THEN 'not_crawled'
           WHEN cs.any_completed = TRUE AND cs.pages_limit IS NOT NULL AND cs.pages_visited >= cs.pages_limit THEN 'completed'
@@ -488,9 +490,9 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res): Promis
         COALESCE(cs.pages_visited, 0) as pages_visited,
         cs.finished_at as finished_at
       FROM businesses b
-      LEFT JOIN cities c ON c.id = b.city_id
-      LEFT JOIN industries i ON i.id = b.industry_id
-      LEFT JOIN websites w ON w.business_id = b.id
+      LEFT JOIN datasets d ON d.id = b.dataset_id
+      LEFT JOIN cities c ON c.id = d.city_id
+      LEFT JOIN industries i ON i.id = d.industry_id
       LEFT JOIN crawl_stats cs ON cs.business_id = b.id
       LEFT JOIN contact_counts cc ON cc.business_id = b.id
       WHERE b.dataset_id = $1
@@ -506,8 +508,8 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res): Promis
       name: b.name,
       address: b.address,
       website: b.website_url || null,
-      email: null, // Individual emails are in contacts
-      phone: null, // Individual phones are in contacts
+      email: b.email || null, // Direct from businesses table
+      phone: b.phone || null, // Direct from businesses table
       city: b.city_name || 'Unknown',
       industry: b.industry_name || 'Unknown',
       lastVerifiedAt: b.finished_at ? b.finished_at.toISOString() : null,
