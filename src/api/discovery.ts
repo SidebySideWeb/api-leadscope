@@ -645,7 +645,14 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     
     return res.json(responseData);
   } catch (error: any) {
-    console.error('[API] Error in discovery:', error);
+    console.error('[API] Error in discovery endpoint:', error);
+    console.error('[API] Error details:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      stack: error.stack,
+      body: req.body,
+    });
     // Try to get user plan for error response, but don't fail if it errors
     let errorPlan = 'demo';
     try {
