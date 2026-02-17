@@ -6,6 +6,7 @@ export interface DiscoveryRun {
   id: string; // UUID
   dataset_id: string; // UUID
   user_id?: string; // UUID (optional, may not be in schema)
+  industry_group_id?: string | null; // UUID (optional, for industry group discovery)
   status: DiscoveryRunStatus;
   created_at: Date;
   started_at: Date | null; // When execution actually began
@@ -41,18 +42,35 @@ export interface DiscoveryRun {
  */
 export async function createDiscoveryRun(
   datasetId: string,
-  userId?: string
+  userId?: string,
+  industryGroupId?: string | null
 ): Promise<DiscoveryRun> {
-  // Try to insert with user_id if provided
-  // If user_id column doesn't exist in schema, fall back to dataset_id only
-  if (userId) {
-    try {
-      const result = await pool.query<DiscoveryRun>(
-        `INSERT INTO discovery_runs (dataset_id, user_id, status)
-         VALUES ($1, $2, 'running')
-         RETURNING *`,
-        [datasetId, userId]
-      );
+  // Try to insert with user_id and industry_group_id if provided
+    // If columns don't exist in schema, fall back gracefully
+    if (userId || industryGroupId) {
+      try {
+        const columns: string[] = ['dataset_id', 'status'];
+        const values: any[] = [datasetId, 'running'];
+        let paramIndex = 3;
+        
+        if (userId) {
+          columns.push('user_id');
+          values.push(userId);
+          paramIndex++;
+        }
+        
+        if (industryGroupId) {
+          columns.push('industry_group_id');
+          values.push(industryGroupId);
+          paramIndex++;
+        }
+        
+        const result = await pool.query<DiscoveryRun>(
+          `INSERT INTO discovery_runs (${columns.join(', ')})
+           VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')})
+           RETURNING *`,
+          values
+        );
       const row = result.rows[0];
       return {
         ...row,
@@ -62,10 +80,10 @@ export async function createDiscoveryRun(
               : row.cost_estimates)
           : null,
       };
-    } catch (error: any) {
-      // If user_id column doesn't exist (PostgreSQL error code 42703), fall back
-      if (error.code === '42703' || error.message?.includes('column "user_id"')) {
-        console.log('[createDiscoveryRun] user_id column not found, using dataset_id only');
+      } catch (error: any) {
+      // If user_id or industry_group_id column doesn't exist (PostgreSQL error code 42703), fall back
+      if (error.code === '42703' || error.message?.includes('column')) {
+        console.log('[createDiscoveryRun] Some columns not found, using dataset_id only');
         const result = await pool.query<DiscoveryRun>(
           `INSERT INTO discovery_runs (dataset_id, status)
            VALUES ($1, 'running')

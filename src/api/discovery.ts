@@ -47,23 +47,35 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     
     // CRITICAL: Accept gemi_id values (preferred) or internal IDs (for backward compatibility)
     // Support both municipality_gemi_id/industry_gemi_id (preferred) and municipality_id/industry_id (legacy)
+    // NEW: Support industry_group_id as alternative to industry_id
     let industry_gemi_id: number | undefined;
     let industry_id: string | undefined;
+    let industry_group_id: string | undefined;
     let municipality_gemi_id: number | undefined;
     let municipality_id: string | undefined;
     let city_id: string | undefined;
     let dataset_id: string | undefined;
     
-    // Accept industry_gemi_id (preferred) or industry_id (legacy)
-    if (req.body.industry_gemi_id !== undefined) {
-      industry_gemi_id = typeof req.body.industry_gemi_id === 'number' 
-        ? req.body.industry_gemi_id 
-        : parseInt(req.body.industry_gemi_id, 10);
-    } else if (req.body.industry_id) {
-      industry_id = req.body.industry_id;
-    } else if (req.body.industryId) {
-      industry_id = req.body.industryId;
-      console.warn('[discovery] WARNING: Received camelCase industryId, converted to industry_id. Please use industry_gemi_id in future requests.');
+    // Accept industry_group_id (new), industry_gemi_id (preferred), or industry_id (legacy)
+    if (req.body.industry_group_id !== undefined) {
+      industry_group_id = req.body.industry_group_id;
+    } else if (req.body.industryGroupId) {
+      industry_group_id = req.body.industryGroupId;
+      console.warn('[discovery] WARNING: Received camelCase industryGroupId, converted to industry_group_id.');
+    }
+    
+    // Only accept industry_gemi_id or industry_id if industry_group_id is not provided
+    if (!industry_group_id) {
+      if (req.body.industry_gemi_id !== undefined) {
+        industry_gemi_id = typeof req.body.industry_gemi_id === 'number' 
+          ? req.body.industry_gemi_id 
+          : parseInt(req.body.industry_gemi_id, 10);
+      } else if (req.body.industry_id) {
+        industry_id = req.body.industry_id;
+      } else if (req.body.industryId) {
+        industry_id = req.body.industryId;
+        console.warn('[discovery] WARNING: Received camelCase industryId, converted to industry_id. Please use industry_gemi_id in future requests.');
+      }
     }
     
     // Accept municipality_gemi_id (preferred) or municipality_id/city_id (legacy)
@@ -105,38 +117,106 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       console.warn('[discovery] WARNING: Received camelCase datasetId, converted to dataset_id. Please use snake_case in future requests.');
     }
     
-    console.log('[discovery] payload:', { industry_gemi_id, industry_id, municipality_gemi_id, municipality_id, city_id, dataset_id });
+    console.log('[discovery] payload:', { industry_gemi_id, industry_id, industry_group_id, municipality_gemi_id, municipality_id, city_id, dataset_id });
     
-    // CRITICAL: Explicit validation - (industry_gemi_id OR industry_id) and (municipality_gemi_id OR municipality_id OR city_id) are required
+    // CRITICAL: Explicit validation
+    // Industry: (industry_group_id OR industry_gemi_id OR industry_id) - exactly one
+    // Location: (municipality_gemi_id OR municipality_id OR city_id) - at least one
     // dataset_id is optional and will be auto-resolved if missing
-    if ((!industry_gemi_id && !industry_id) || (!municipality_gemi_id && !municipality_id && !city_id)) {
-      const missing = [];
-      if (!industry_gemi_id && !industry_id) missing.push('industry_gemi_id OR industry_id');
-      if (!municipality_gemi_id && !municipality_id && !city_id) missing.push('municipality_gemi_id OR municipality_id OR city_id');
-      
-      const errorMsg = `Invalid discovery request: missing required fields: ${missing.join(', ')}. Expected: (industry_gemi_id OR industry_id), (municipality_gemi_id OR municipality_id OR city_id). Received body keys: ${Object.keys(req.body || {}).join(', ') || 'none'}`;
-      console.error('[API] Validation failed:', errorMsg);
-      console.error('[API] Full req.body:', JSON.stringify(req.body, null, 2));
-      throw new Error(errorMsg);
+    
+    // Validate industry selection - must have exactly one
+    const hasIndustryGroup = !!industry_group_id;
+    const hasIndustryGemi = !!industry_gemi_id;
+    const hasIndustryId = !!industry_id;
+    
+    if (hasIndustryGroup && (hasIndustryGemi || hasIndustryId)) {
+      throw new Error('Invalid discovery request: Cannot provide both industry_group_id and industry_id/industry_gemi_id. Use only one.');
+    }
+    
+    if (!hasIndustryGroup && !hasIndustryGemi && !hasIndustryId) {
+      throw new Error('Invalid discovery request: missing required field: industry_group_id OR industry_gemi_id OR industry_id');
+    }
+    
+    // Validate location
+    if (!municipality_gemi_id && !municipality_id && !city_id) {
+      throw new Error('Invalid discovery request: missing required field: municipality_gemi_id OR municipality_id OR city_id');
     }
 
-    // Resolve industry_id from industry_gemi_id if needed
-    if (industry_gemi_id && !industry_id) {
-      const industryResult = await pool.query<{ id: string }>(
-        'SELECT id FROM industries WHERE gemi_id = $1',
-        [industry_gemi_id]
+    // Handle industry_group_id: if provided, fetch industries from group
+    // For now, we'll use the first industry for GEMI discovery
+    // In the future, we can make multiple GEMI calls or use merged keywords
+    if (industry_group_id) {
+      const { getIndustriesByGroup } = await import('../db/industryGroups.js');
+      const industriesInGroup = await getIndustriesByGroup(industry_group_id);
+      
+      if (industriesInGroup.length === 0) {
+        throw new Error(`No industries found for industry group ${industry_group_id}`);
+      }
+      
+      // Use the first industry (highest search_weight) for GEMI discovery
+      // TODO: In the future, support multiple industry discovery or keyword-based discovery
+      const primaryIndustry = industriesInGroup[0];
+      industry_id = primaryIndustry.id;
+      
+      // Try to get gemi_id for the primary industry
+      const industryGemiResult = await pool.query<{ gemi_id: number }>(
+        'SELECT gemi_id FROM industries WHERE id = $1',
+        [industry_id]
       );
-      if (industryResult.rows.length === 0) {
-        throw new Error(`Industry with gemi_id ${industry_gemi_id} not found`);
+      if (industryGemiResult.rows.length > 0 && industryGemiResult.rows[0].gemi_id) {
+        industry_gemi_id = industryGemiResult.rows[0].gemi_id;
       }
-      industry_id = industryResult.rows[0].id;
-      console.log(`[discovery] Resolved industry_gemi_id ${industry_gemi_id} to industry_id ${industry_id}`);
-    } else if (industry_id) {
-      // Validate UUID format for industry_id (only if not using gemi_id)
-      const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-      if (!uuidRegex.test(industry_id)) {
-        throw new Error(`Invalid discovery request: industry_id must be a valid UUID, got: ${industry_id}`);
+      
+      console.log(`[discovery] Using industry group ${industry_group_id} with ${industriesInGroup.length} industries. Primary industry: ${primaryIndustry.name} (${industry_id})`);
+      console.log(`[discovery] All industries in group: ${industriesInGroup.map(i => i.name).join(', ')}`);
+    } else {
+    // Handle industry_group_id: if provided, fetch industries from group
+    // For now, we'll use the first industry for GEMI discovery
+    // In the future, we can make multiple GEMI calls or use merged keywords
+    if (industry_group_id) {
+      const { getIndustriesByGroup } = await import('../db/industryGroups.js');
+      const industriesInGroup = await getIndustriesByGroup(industry_group_id);
+      
+      if (industriesInGroup.length === 0) {
+        throw new Error(`No industries found for industry group ${industry_group_id}`);
       }
+      
+      // Use the first industry (highest search_weight) for GEMI discovery
+      // TODO: In the future, support multiple industry discovery or keyword-based discovery
+      const primaryIndustry = industriesInGroup[0];
+      industry_id = primaryIndustry.id;
+      
+      // Try to get gemi_id for the primary industry
+      const industryGemiResult = await pool.query<{ gemi_id: number }>(
+        'SELECT gemi_id FROM industries WHERE id = $1',
+        [industry_id]
+      );
+      if (industryGemiResult.rows.length > 0 && industryGemiResult.rows[0].gemi_id) {
+        industry_gemi_id = industryGemiResult.rows[0].gemi_id;
+      }
+      
+      console.log(`[discovery] Using industry group ${industry_group_id} with ${industriesInGroup.length} industries. Primary industry: ${primaryIndustry.name} (${industry_id})`);
+      console.log(`[discovery] All industries in group: ${industriesInGroup.map(i => i.name).join(', ')}`);
+    } else {
+      // Resolve industry_id from industry_gemi_id if needed
+      if (industry_gemi_id && !industry_id) {
+        const industryResult = await pool.query<{ id: string }>(
+          'SELECT id FROM industries WHERE gemi_id = $1',
+          [industry_gemi_id]
+        );
+        if (industryResult.rows.length === 0) {
+          throw new Error(`Industry with gemi_id ${industry_gemi_id} not found`);
+        }
+        industry_id = industryResult.rows[0].id;
+        console.log(`[discovery] Resolved industry_gemi_id ${industry_gemi_id} to industry_id ${industry_id}`);
+      } else if (industry_id) {
+        // Validate UUID format for industry_id (only if not using gemi_id)
+        const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+        if (!uuidRegex.test(industry_id)) {
+          throw new Error(`Invalid discovery request: industry_id must be a valid UUID, got: ${industry_id}`);
+        }
+      }
+    }
     }
     
     // Resolve municipality_id from municipality_gemi_id if needed
@@ -484,8 +564,8 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
 
     // CRITICAL: Create discovery_run at the VERY START (synchronously, before returning)
     // This makes discovery observable and stateful
-    console.log('[API] About to create discovery_run with datasetId:', finalDatasetId, 'userId:', userId);
-    const discoveryRun = await createDiscoveryRun(finalDatasetId, userId);
+    console.log('[API] About to create discovery_run with datasetId:', finalDatasetId, 'userId:', userId, 'industry_group_id:', industry_group_id);
+    const discoveryRun = await createDiscoveryRun(finalDatasetId, userId, industry_group_id || undefined);
     console.log('[API] Created discovery_run:', JSON.stringify({
       id: discoveryRun.id,
       status: discoveryRun.status,
@@ -515,6 +595,7 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       userId,
       industry_id: industry.id, // Internal industry_id (resolved from gemi_id if needed)
       industry_gemi_id: industry_gemi_id, // GEMI industry ID (preferred)
+      industry_group_id: industry_group_id || undefined, // Industry group ID (if provided)
       city_id: city_id || undefined, // Use city_id if available (for backward compatibility)
       municipality_id: municipality_id || undefined, // Internal municipality_id (resolved from gemi_id if needed)
       municipality_gemi_id: municipality_gemi_id, // GEMI municipality ID (preferred)

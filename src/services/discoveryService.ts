@@ -143,7 +143,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       console.log(`[runDiscoveryJob] Using provided discovery_run: ${discoveryRun.id}`);
     } else {
       // Create discovery_run (orchestration layer) - fallback if not provided
-      discoveryRun = await createDiscoveryRun(datasetId, input.userId);
+      discoveryRun = await createDiscoveryRun(datasetId, input.userId, input.industry_group_id);
       console.log(`[runDiscoveryJob] Created discovery_run: ${discoveryRun.id}`);
     }
 
@@ -220,39 +220,89 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       throw new Error('municipality_gemi_id, municipality_id, city_id, or city is required for discovery');
     }
 
-    // Resolve industry_id from industry_gemi_id if needed
+    // Resolve industry: prefer industry_group_id, then industry_id, fallback to industry name (legacy)
     let finalIndustryId = input.industry_id;
     let finalIndustryGemiId = input.industry_gemi_id;
-    
-    if (input.industry_gemi_id && !finalIndustryId) {
-      const industryResult = await pool.query<{ id: string; gemi_id: number }>(
-        'SELECT id, gemi_id FROM industries WHERE gemi_id = $1',
-        [input.industry_gemi_id]
-      );
-      if (industryResult.rows.length === 0) {
-        throw new Error(`Industry with gemi_id ${input.industry_gemi_id} not found`);
+    let industriesToUse: Array<{ id: string; name: string; discovery_keywords: string[] | null; search_weight: number | null }> = [];
+
+    // Handle industry_group_id: if provided, fetch all industries in the group
+    if (input.industry_group_id) {
+      const { getIndustriesByGroup } = await import('../db/industryGroups.js');
+      const industriesInGroup = await getIndustriesByGroup(input.industry_group_id);
+      
+      if (industriesInGroup.length === 0) {
+        throw new Error(`No industries found for industry group ${input.industry_group_id}`);
       }
-      finalIndustryId = industryResult.rows[0].id;
-      finalIndustryGemiId = industryResult.rows[0].gemi_id;
-      console.log(`[runDiscoveryJob] Resolved industry_gemi_id ${input.industry_gemi_id} to industry_id ${finalIndustryId}`);
-    } else if (finalIndustryId && !finalIndustryGemiId) {
-      // Get gemi_id from industry_id
-      const industryResult = await pool.query<{ gemi_id: number }>(
+      
+      industriesToUse = industriesInGroup;
+      
+      // Use the first industry (highest search_weight) for GEMI discovery
+      // TODO: In the future, support multiple industry discovery or keyword-based discovery with merged keywords
+      const primaryIndustry = industriesInGroup[0];
+      finalIndustryId = primaryIndustry.id;
+      
+      // Try to get gemi_id for the primary industry
+      const industryGemiResult = await pool.query<{ gemi_id: number }>(
         'SELECT gemi_id FROM industries WHERE id = $1',
         [finalIndustryId]
       );
-      if (industryResult.rows.length > 0) {
+      if (industryGemiResult.rows.length > 0 && industryGemiResult.rows[0].gemi_id) {
+        finalIndustryGemiId = industryGemiResult.rows[0].gemi_id;
+      }
+      
+      console.log(`[runDiscoveryJob] Using industry group ${input.industry_group_id} with ${industriesInGroup.length} industries`);
+      console.log(`[runDiscoveryJob] Primary industry for GEMI: ${primaryIndustry.name} (${finalIndustryId})`);
+      console.log(`[runDiscoveryJob] All industries in group: ${industriesInGroup.map(i => `${i.name} (weight: ${i.search_weight || 'null'})`).join(', ')}`);
+      
+      // Merge all discovery_keywords from industries in the group
+      const allKeywords = [
+        ...new Set(
+          industriesInGroup.flatMap(i => i.discovery_keywords || [])
+        )
+      ];
+      console.log(`[runDiscoveryJob] Merged keywords from group: ${allKeywords.join(', ')}`);
+      // TODO: Use merged keywords for keyword-based discovery in the future
+    } else {
+      // Resolve industry_id from industry_gemi_id if needed
+      if (input.industry_gemi_id && !finalIndustryId) {
+        const industryResult = await pool.query<{ id: string; gemi_id: number }>(
+          'SELECT id, gemi_id FROM industries WHERE gemi_id = $1',
+          [input.industry_gemi_id]
+        );
+        if (industryResult.rows.length === 0) {
+          throw new Error(`Industry with gemi_id ${input.industry_gemi_id} not found`);
+        }
+        finalIndustryId = industryResult.rows[0].id;
         finalIndustryGemiId = industryResult.rows[0].gemi_id;
+        console.log(`[runDiscoveryJob] Resolved industry_gemi_id ${input.industry_gemi_id} to industry_id ${finalIndustryId}`);
+      } else if (finalIndustryId && !finalIndustryGemiId) {
+        // Get gemi_id from industry_id
+        const industryResult = await pool.query<{ gemi_id: number }>(
+          'SELECT gemi_id FROM industries WHERE id = $1',
+          [finalIndustryId]
+        );
+        if (industryResult.rows.length > 0) {
+          finalIndustryGemiId = industryResult.rows[0].gemi_id;
+        }
       }
-    }
 
-    if (!finalIndustryId && input.industry) {
-      const { getIndustryByName } = await import('../db/industries.js');
-      const industry = await getIndustryByName(input.industry);
-      if (!industry) {
-        throw new Error(`Industry "${input.industry}" not found`);
+      if (!finalIndustryId && input.industry) {
+        const { getIndustryByName } = await import('../db/industries.js');
+        const industry = await getIndustryByName(input.industry);
+        if (!industry) {
+          throw new Error(`Industry "${input.industry}" not found`);
+        }
+        finalIndustryId = industry.id;
       }
-      finalIndustryId = industry.id;
+      
+      // For single industry, use it as the only industry
+      if (finalIndustryId) {
+        const { getIndustryById } = await import('../db/industries.js');
+        const industry = await getIndustryById(finalIndustryId);
+        if (industry) {
+          industriesToUse = [industry];
+        }
+      }
     }
 
     // Resolve municipality_id from municipality_gemi_id if needed

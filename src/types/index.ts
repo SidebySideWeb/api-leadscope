@@ -9,6 +9,8 @@ export interface Industry {
   id: string; // UUID, not a number
   name: string;
   discovery_keywords: string[] | null; // JSONB array of keywords for discovery
+  industry_group_id: string | null; // UUID - FK to industry_groups
+  search_weight: number | null; // Numeric weight for keyword ordering
   created_at: Date;
 }
 
@@ -118,6 +120,7 @@ export interface GooglePlaceResult {
 export interface DiscoveryInput {
   industry?: string; // Legacy: industry name (for backward compatibility)
   industry_id?: string; // Preferred: industry UUID
+  industry_group_id?: string; // New: industry group UUID (alternative to industry_id)
   city?: string; // Legacy: city name (for backward compatibility)
   city_id?: string; // Preferred: city UUID
   latitude?: number;
