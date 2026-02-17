@@ -120,6 +120,7 @@ export async function createDiscoveryRun(
     const row = result.rows[0];
     return {
       ...row,
+      industry_group_id: industryGroupId || null, // Add manually since column doesn't exist yet
       cost_estimates: row.cost_estimates 
         ? (typeof row.cost_estimates === 'string' 
             ? JSON.parse(row.cost_estimates) 
