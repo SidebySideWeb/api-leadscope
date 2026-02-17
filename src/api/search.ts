@@ -29,6 +29,18 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       limit = '50' 
     } = req.query;
 
+    console.log('[API] Search request query params:', {
+      municipality_id,
+      municipality_ids,
+      industry_id,
+      industry_ids,
+      prefecture_id,
+      prefecture_ids,
+      page,
+      limit,
+      allQuery: req.query,
+    });
+
     const pageNum = parseInt(page as string, 10) || 1;
     const limitNum = Math.min(parseInt(limit as string, 10) || 50, 100); // Max 100 per page
     const offset = (pageNum - 1) * limitNum;
@@ -104,12 +116,16 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     // Build WHERE clause
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    console.log('[API] Search query conditions:', conditions);
+    console.log('[API] Search query params:', params);
+
     // Get total count
     const countQuery = `
       SELECT COUNT(*) as total
       FROM businesses b
       ${whereClause}
     `;
+    console.log('[API] Count query:', countQuery);
     const countResult = await pool.query<{ total: string }>(countQuery, params);
     const totalCount = parseInt(countResult.rows[0]?.total || '0', 10);
 
