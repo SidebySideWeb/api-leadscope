@@ -86,6 +86,9 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     });
   } catch (error: any) {
     console.error('[API] Error in refresh endpoint:', error);
+    console.error('[API] Error stack:', error.stack);
+    console.error('[API] Error code:', error.code);
+    console.error('[API] Error detail:', error.detail);
     return res.status(500).json({
       data: null,
       meta: {
@@ -93,7 +96,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         gated: false,
         total_available: 0,
         total_returned: 0,
-        gate_reason: error.message || 'Failed to get discovery runs',
+        gate_reason: error.message || error.detail || 'Failed to get discovery runs',
       },
     });
   }
