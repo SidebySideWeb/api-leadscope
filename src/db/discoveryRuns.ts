@@ -66,7 +66,9 @@ export async function createDiscoveryRun(
         }
         
         // Only select columns that exist - don't use RETURNING * to avoid errors if column doesn't exist
-        const result = await pool.query<DiscoveryRun>(
+        // Use explicit column list in RETURNING to avoid errors if industry_group_id doesn't exist yet
+        // We'll add industry_group_id to the result manually if it was inserted
+        const result = await pool.query<DiscoveryRun & { industry_group_id?: string | null }>(
           `INSERT INTO discovery_runs (${columns.join(', ')})
            VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')})
            RETURNING id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates`,
@@ -75,6 +77,7 @@ export async function createDiscoveryRun(
       const row = result.rows[0];
       return {
         ...row,
+        industry_group_id: industryGroupId || null, // Add manually since we can't return it if column doesn't exist
         cost_estimates: row.cost_estimates 
           ? (typeof row.cost_estimates === 'string' 
               ? JSON.parse(row.cost_estimates) 
@@ -94,6 +97,7 @@ export async function createDiscoveryRun(
         const row = result.rows[0];
         return {
           ...row,
+          industry_group_id: industryGroupId || null, // Add manually since column doesn't exist yet
           cost_estimates: row.cost_estimates 
             ? (typeof row.cost_estimates === 'string' 
                 ? JSON.parse(row.cost_estimates) 
@@ -105,11 +109,11 @@ export async function createDiscoveryRun(
       throw error;
     }
   } else {
-    // No userId provided, insert with dataset_id only
+    // No userId or industryGroupId provided, insert with dataset_id only
     const result = await pool.query<DiscoveryRun>(
       `INSERT INTO discovery_runs (dataset_id, status)
        VALUES ($1, 'running')
-       RETURNING *`,
+       RETURNING id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates`,
       [datasetId]
     );
     const row = result.rows[0];
