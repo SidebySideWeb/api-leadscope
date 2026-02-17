@@ -6,14 +6,19 @@ import type { Industry } from '../types/index.js';
  * Returns industries sorted by search_weight DESC
  */
 export async function getIndustriesByGroup(groupId: string): Promise<Industry[]> {
-  const result = await pool.query<Industry>(
+  // Note: The column in industries table is 'group_id', not 'industry_group_id'
+  const result = await pool.query<Industry & { group_id: string | null }>(
     `SELECT *
      FROM industries
-     WHERE industry_group_id = $1
+     WHERE group_id = $1
      ORDER BY search_weight DESC NULLS LAST, name ASC`,
     [groupId]
   );
-  return result.rows;
+  // Map group_id to industry_group_id for consistency with TypeScript interface
+  return result.rows.map(row => ({
+    ...row,
+    industry_group_id: row.group_id || null,
+  }));
 }
 
 /**

@@ -9,7 +9,8 @@ export interface Industry {
   id: string; // UUID, not a number
   name: string;
   discovery_keywords: string[] | null; // JSONB array of keywords for discovery
-  industry_group_id: string | null; // UUID - FK to industry_groups
+  group_id: string | null; // UUID - FK to industry_groups (column name in industries table is group_id)
+  industry_group_id?: string | null; // Alias for group_id for backward compatibility
   search_weight: number | null; // Numeric weight for keyword ordering
   created_at: Date;
 }
