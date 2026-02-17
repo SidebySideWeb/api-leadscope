@@ -86,12 +86,13 @@ export async function createDiscoveryRun(
       };
       } catch (error: any) {
       // If user_id or industry_group_id column doesn't exist (PostgreSQL error code 42703), fall back
-      if (error.code === '42703' || error.message?.includes('column')) {
-        console.log('[createDiscoveryRun] Some columns not found, using dataset_id only');
+      if (error.code === '42703' || error.message?.includes('column') || error.message?.includes('industry_group_id')) {
+        console.log('[createDiscoveryRun] Some columns not found (industry_group_id or user_id), using dataset_id only');
+        console.log('[createDiscoveryRun] Error details:', error.message, error.code);
         const result = await pool.query<DiscoveryRun>(
           `INSERT INTO discovery_runs (dataset_id, status)
            VALUES ($1, 'running')
-           RETURNING *`,
+           RETURNING id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates`,
           [datasetId]
         );
         const row = result.rows[0];
