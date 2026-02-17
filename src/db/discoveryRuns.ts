@@ -65,10 +65,11 @@ export async function createDiscoveryRun(
           paramIndex++;
         }
         
+        // Only select columns that exist - don't use RETURNING * to avoid errors if column doesn't exist
         const result = await pool.query<DiscoveryRun>(
           `INSERT INTO discovery_runs (${columns.join(', ')})
            VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')})
-           RETURNING *`,
+           RETURNING id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates`,
           values
         );
       const row = result.rows[0];
