@@ -6,6 +6,7 @@ import datasetsRoutes from './api/datasets.js';
 import dashboardRoutes from './api/dashboard.js';
 import exportsRoutes from './api/exports.js';
 import industriesRoutes from './api/industries.js';
+import industryGroupsRoutes from './api/industryGroups.js';
 import citiesRoutes from './api/cities.js';
 import discoveryRoutes from './api/discovery.js';
 import businessesRoutes from './api/businesses.js';
@@ -33,6 +34,7 @@ app.use('/api/auth', authRoutes);
 
 // Public data routes (no auth required)
 app.use('/api/industries', industriesRoutes);
+app.use('/api/industry-groups', industryGroupsRoutes);
 app.use('/api/cities', citiesRoutes);
 
 // Datasets routes (requires authentication)
