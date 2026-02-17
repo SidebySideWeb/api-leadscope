@@ -7,11 +7,15 @@ import type { Industry } from '../types/index.js';
  */
 export async function getIndustriesByGroup(groupId: string): Promise<Industry[]> {
   // Note: The column in industries table is 'group_id', not 'industry_group_id'
-  const result = await pool.query<Industry & { group_id: string | null }>(
-    `SELECT *
-     FROM industries
-     WHERE group_id = $1
-     ORDER BY search_weight DESC NULLS LAST, name ASC`,
+  // search_weight is in industry_groups table, so we need to join to get it for ordering
+  const result = await pool.query<Industry & { group_id: string | null; search_weight: number | null }>(
+    `SELECT 
+       i.*,
+       ig.search_weight
+     FROM industries i
+     LEFT JOIN industry_groups ig ON ig.id = i.group_id
+     WHERE i.group_id = $1
+     ORDER BY ig.search_weight DESC NULLS LAST, i.name ASC`,
     [groupId]
   );
   // Map group_id to industry_group_id for consistency with TypeScript interface
