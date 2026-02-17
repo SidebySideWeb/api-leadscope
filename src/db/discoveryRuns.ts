@@ -214,11 +214,11 @@ export async function updateDiscoveryRun(
       }
       
       if (filteredUpdates.length > 0) {
-        result = await pool.query<DiscoveryRun>(
+        result = await pool.query<DiscoveryRun & { industry_group_id?: string | null }>(
           `UPDATE discovery_runs
            SET ${filteredUpdates.join(', ')}
            WHERE id = $${filteredValues.length + 1}
-           RETURNING *`,
+           RETURNING id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates`,
           [...filteredValues, id]
         );
       } else {
