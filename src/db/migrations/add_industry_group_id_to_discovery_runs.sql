@@ -13,11 +13,28 @@ COMMENT ON COLUMN discovery_runs.industry_group_id IS 'UUID of the industry grou
 -- Note: This will fail gracefully if industry_groups table doesn't exist yet
 DO $$ 
 BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'industry_groups') THEN
-    ALTER TABLE discovery_runs 
-    ADD CONSTRAINT IF NOT EXISTS discovery_runs_industry_group_id_fkey 
-    FOREIGN KEY (industry_group_id) 
-    REFERENCES industry_groups(id) 
-    ON DELETE SET NULL;
+  IF EXISTS (
+    SELECT 1 
+    FROM information_schema.tables 
+    WHERE table_schema = 'public' 
+    AND table_name = 'industry_groups'
+  ) THEN
+    -- Only add constraint if it doesn't already exist
+    IF NOT EXISTS (
+      SELECT 1 
+      FROM information_schema.table_constraints 
+      WHERE constraint_schema = 'public'
+      AND constraint_name = 'discovery_runs_industry_group_id_fkey'
+    ) THEN
+      ALTER TABLE discovery_runs 
+      ADD CONSTRAINT discovery_runs_industry_group_id_fkey 
+      FOREIGN KEY (industry_group_id) 
+      REFERENCES industry_groups(id) 
+      ON DELETE SET NULL;
+    END IF;
   END IF;
+EXCEPTION
+  WHEN OTHERS THEN
+    -- Ignore any errors (e.g., if industry_groups table doesn't exist)
+    RAISE NOTICE 'Could not add foreign key constraint: %', SQLERRM;
 END $$;
