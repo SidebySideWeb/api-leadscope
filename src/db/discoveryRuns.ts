@@ -45,9 +45,32 @@ export async function createDiscoveryRun(
   userId?: string,
   industryGroupId?: string | null
 ): Promise<DiscoveryRun> {
+  // Check if industry_group_id column exists before trying to use it
+  // This prevents errors when the migration hasn't been run yet
+  let industryGroupIdColumnExists = false;
+  if (industryGroupId) {
+    try {
+      const { pool } = await import('../config/database.js');
+      const columnCheck = await pool.query(
+        `SELECT column_name 
+         FROM information_schema.columns 
+         WHERE table_name = 'discovery_runs' 
+         AND column_name = 'industry_group_id'`
+      );
+      industryGroupIdColumnExists = columnCheck.rows.length > 0;
+      if (!industryGroupIdColumnExists) {
+        console.log('[createDiscoveryRun] industry_group_id column does not exist, will skip it');
+      }
+    } catch (checkError) {
+      console.warn('[createDiscoveryRun] Could not check for industry_group_id column:', checkError);
+      // If we can't check, assume it doesn't exist to be safe
+      industryGroupIdColumnExists = false;
+    }
+  }
+
   // Try to insert with user_id and industry_group_id if provided
     // If columns don't exist in schema, fall back gracefully
-    if (userId || industryGroupId) {
+    if (userId || (industryGroupId && industryGroupIdColumnExists)) {
       try {
         const columns: string[] = ['dataset_id', 'status'];
         const values: any[] = [datasetId, 'running'];
@@ -59,7 +82,7 @@ export async function createDiscoveryRun(
           paramIndex++;
         }
         
-        if (industryGroupId) {
+        if (industryGroupId && industryGroupIdColumnExists) {
           columns.push('industry_group_id');
           values.push(industryGroupId);
           paramIndex++;
@@ -101,6 +124,7 @@ export async function createDiscoveryRun(
           detail: error.detail,
           stack: error.stack?.substring(0, 200)
         });
+        // Fall through to retry without the problematic columns
         const result = await pool.query<DiscoveryRun>(
           `INSERT INTO discovery_runs (dataset_id, status)
            VALUES ($1, 'running')
