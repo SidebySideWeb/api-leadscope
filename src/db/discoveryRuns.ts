@@ -11,7 +11,6 @@ export interface DiscoveryRun {
   created_at: Date;
   started_at: Date | null; // When execution actually began
   completed_at: Date | null;
-  error_message: string | null;
   // Cost estimation data (stored as JSON, optional)
   cost_estimates?: {
     estimatedBusinesses: number;
@@ -105,7 +104,7 @@ export async function createDiscoveryRun(
         const result = await pool.query<DiscoveryRun & { industry_group_id?: string | null }>(
           `INSERT INTO discovery_runs (${columns.join(', ')})
            VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')})
-           RETURNING id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates`,
+           RETURNING id, dataset_id, status, created_at, started_at, completed_at, cost_estimates`,
           values
         );
       const row = result.rows[0];
@@ -139,7 +138,7 @@ export async function createDiscoveryRun(
         const result = await pool.query<DiscoveryRun>(
           `INSERT INTO discovery_runs (dataset_id, status)
            VALUES ($1, 'running')
-           RETURNING id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates`,
+           RETURNING id, dataset_id, status, created_at, started_at, completed_at, cost_estimates`,
           [datasetId]
         );
         const row = result.rows[0];
@@ -186,7 +185,6 @@ export async function updateDiscoveryRun(
     status?: DiscoveryRunStatus;
     started_at?: Date | null;
     completed_at?: Date | null;
-    error_message?: string | null;
     cost_estimates?: DiscoveryRun['cost_estimates'];
   }
 ): Promise<DiscoveryRun> {
@@ -206,10 +204,6 @@ export async function updateDiscoveryRun(
     updates.push(`completed_at = $${index++}`);
     values.push(data.completed_at);
   }
-  if (data.error_message !== undefined) {
-    updates.push(`error_message = $${index++}`);
-    values.push(data.error_message);
-  }
   if (data.cost_estimates !== undefined) {
     updates.push(`cost_estimates = $${index++}`);
     values.push(JSON.stringify(data.cost_estimates));
@@ -217,7 +211,7 @@ export async function updateDiscoveryRun(
 
   if (updates.length === 0) {
     const result = await pool.query<DiscoveryRun>(
-      'SELECT id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates FROM discovery_runs WHERE id = $1',
+      'SELECT id, dataset_id, status, created_at, started_at, completed_at, cost_estimates FROM discovery_runs WHERE id = $1',
       [id]
     );
     const row = result.rows[0];
@@ -239,16 +233,12 @@ export async function updateDiscoveryRun(
       values
     );
   } catch (error: any) {
-    // If cost_estimates, error_message, or industry_group_id column doesn't exist, retry without them
-    if (error.code === '42703' && (updates.some(u => u.includes('cost_estimates')) || updates.some(u => u.includes('error_message')) || error.message?.includes('industry_group_id'))) {
+    // If cost_estimates or industry_group_id column doesn't exist, retry without them
+    if (error.code === '42703' && (updates.some(u => u.includes('cost_estimates')) || error.message?.includes('industry_group_id'))) {
       const missingColumns: string[] = [];
       if (updates.some(u => u.includes('cost_estimates'))) {
         missingColumns.push('cost_estimates');
         console.warn('[updateDiscoveryRun] cost_estimates column not found, retrying without it');
-      }
-      if (updates.some(u => u.includes('error_message'))) {
-        missingColumns.push('error_message');
-        console.warn('[updateDiscoveryRun] error_message column not found, retrying without it');
       }
       
       const filteredUpdates = updates.filter(u => !missingColumns.some(col => u.includes(col)));
@@ -265,13 +255,13 @@ export async function updateDiscoveryRun(
           `UPDATE discovery_runs
            SET ${filteredUpdates.join(', ')}
            WHERE id = $${filteredValues.length + 1}
-           RETURNING id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates`,
+           RETURNING id, dataset_id, status, created_at, started_at, completed_at, cost_estimates`,
           [...filteredValues, id]
         );
       } else {
         // No updates to make, just fetch the row
         result = await pool.query<DiscoveryRun>(
-          'SELECT id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates FROM discovery_runs WHERE id = $1',
+          'SELECT id, dataset_id, status, created_at, started_at, completed_at, cost_estimates FROM discovery_runs WHERE id = $1',
           [id]
         );
       }
@@ -299,7 +289,7 @@ export async function getDiscoveryRunsByDatasetId(
   datasetId: string
 ): Promise<DiscoveryRun[]> {
   const result = await pool.query<DiscoveryRun>(
-    `SELECT id, status, created_at, started_at, completed_at, error_message, cost_estimates
+    `SELECT id, dataset_id, status, created_at, started_at, completed_at, cost_estimates
      FROM discovery_runs
      WHERE dataset_id = $1
      ORDER BY created_at DESC`,

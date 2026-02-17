@@ -442,7 +442,6 @@ export async function discoverBusinesses(
         await updateDiscoveryRun(discoveryRunId, {
           status: 'failed',
           completed_at: new Date(),
-          error_message: errorMsg
         });
         console.log(`[discoverBusinesses] Marked discovery_run ${discoveryRunId} as failed due to error`);
       } catch (updateError) {

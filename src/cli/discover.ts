@@ -183,7 +183,6 @@ async function main() {
     await updateDiscoveryRun(discoveryRun.id, {
       status: 'failed',
       completed_at: new Date(),
-      error_message: error instanceof Error ? error.message : String(error)
     });
     console.error('\n❌ Discovery failed:', error);
     console.error(`   Discovery_run ${discoveryRun.id} marked as failed`);

@@ -283,7 +283,6 @@ export async function runVriskoDiscovery(datasetId: string): Promise<VriskoDisco
       await updateDiscoveryRun(discoveryRun.id, {
         status: 'failed',
         completed_at: new Date(),
-        error_message: errorMsg,
       });
     }
   }

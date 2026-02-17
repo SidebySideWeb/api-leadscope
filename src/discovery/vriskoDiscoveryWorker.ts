@@ -340,7 +340,6 @@ export async function discoverAllActiveCombinations(
         await updateDiscoveryRun(discoveryRun.id, {
           status: discoveryResult.errors.length > 0 ? 'failed' : 'completed',
           completed_at: new Date(),
-          error_message: discoveryResult.errors.length > 0 ? discoveryResult.errors.join('; ') : null,
         });
 
         results.push(discoveryResult);

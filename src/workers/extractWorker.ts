@@ -446,7 +446,6 @@ async function checkAndCompleteDiscoveryRun(discoveryRunId: string): Promise<voi
         await updateDiscoveryRun(discoveryRunId, {
           status: 'failed',
           completed_at: new Date(),
-          error_message: `${jobsResult.rows.find(r => r.status === 'failed')?.count || '0'} extraction job(s) failed`
         });
         console.log(`[extractWorker] Marked discovery_run ${discoveryRunId} as failed (some extraction jobs failed)`);
       } else {

@@ -598,7 +598,6 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         await updateDiscoveryRun(discoveryRun.id, {
           status: 'failed',
           completed_at: new Date(),
-          error_message: errorMsg,
           started_at: discoveryRun.started_at || new Date() // Set started_at if not already set
         });
         console.log(`[runDiscoveryJob] Marked discovery_run as failed due to error: ${discoveryRun.id}`);
