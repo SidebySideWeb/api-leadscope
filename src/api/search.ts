@@ -48,8 +48,16 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       municipalityIds.push(...ids.map(id => String(id)));
     }
     if (municipalityIds.length > 0) {
-      conditions.push(`b.municipality_id = ANY($${paramIndex}::uuid[])`);
-      params.push(municipalityIds);
+      // Municipality IDs can be UUIDs or strings like "mun-XXXXX", so we need to handle both
+      const allAreUuids = municipalityIds.every(id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+      if (allAreUuids) {
+        conditions.push(`b.municipality_id = ANY($${paramIndex}::uuid[])`);
+        params.push(municipalityIds);
+      } else {
+        // Use text array for non-UUID IDs like "mun-XXXXX"
+        conditions.push(`b.municipality_id = ANY($${paramIndex}::text[])`);
+        params.push(municipalityIds);
+      }
       paramIndex++;
     }
 
@@ -69,6 +77,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     // Filter by prefecture (support both single and array)
+    // Note: prefecture IDs can be UUIDs or strings like "pref-5"
     const prefectureIds: string[] = [];
     if (prefecture_id) {
       prefectureIds.push(prefecture_id as string);
@@ -78,8 +87,17 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       prefectureIds.push(...ids.map(id => String(id)));
     }
     if (prefectureIds.length > 0) {
-      conditions.push(`b.prefecture_id = ANY($${paramIndex}::uuid[])`);
-      params.push(prefectureIds);
+      // Prefecture IDs can be UUIDs or strings like "pref-5", so we need to handle both
+      // Check if all IDs are UUIDs, otherwise use text comparison
+      const allAreUuids = prefectureIds.every(id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+      if (allAreUuids) {
+        conditions.push(`b.prefecture_id = ANY($${paramIndex}::uuid[])`);
+        params.push(prefectureIds);
+      } else {
+        // Use text array for non-UUID IDs like "pref-5"
+        conditions.push(`b.prefecture_id = ANY($${paramIndex}::text[])`);
+        params.push(prefectureIds);
+      }
       paramIndex++;
     }
 
@@ -157,12 +175,20 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       },
     });
   } catch (error: any) {
-    console.error('[API] Error in search:', error);
+    console.error('[API] Error in search endpoint:', error);
+    console.error('[API] Error details:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      stack: error.stack,
+      query: req.query,
+    });
     return res.status(500).json({
       data: [],
       meta: {
         total_count: 0,
         error: error.message || 'Failed to search businesses',
+        gate_reason: error.message || 'Failed to search businesses',
       },
     });
   }
