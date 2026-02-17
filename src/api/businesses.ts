@@ -47,24 +47,29 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     // Build query
+    // Note: city_id and industry_id are on datasets table, not businesses
+    // website_url, phone, and email are now directly on businesses table
     let query = `
       SELECT 
         b.id,
         b.name,
         b.address,
         b.postal_code,
-        b.city_id,
-        b.industry_id,
-        b.google_place_id,
         b.dataset_id,
         b.owner_user_id,
         b.created_at,
         b.updated_at,
+        b.website_url,
+        b.phone,
+        b.email,
+        d.city_id,
+        d.industry_id,
         c.name as city_name,
         i.name as industry_name
       FROM businesses b
-      LEFT JOIN cities c ON c.id = b.city_id
-      LEFT JOIN industries i ON i.id = b.industry_id
+      LEFT JOIN datasets d ON d.id = b.dataset_id
+      LEFT JOIN cities c ON c.id = d.city_id
+      LEFT JOIN industries i ON i.id = d.industry_id
       WHERE b.dataset_id = $1
     `;
     const params: any[] = [datasetId];
@@ -77,8 +82,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 
     // Get total count
     const countQuery = query.replace(
-      'SELECT b.id, b.name, b.address, b.postal_code, b.city_id, b.industry_id, b.google_place_id, b.dataset_id, b.owner_user_id, b.created_at, b.updated_at, c.name as city_name, i.name as industry_name',
-      'SELECT COUNT(*) as total'
+      /SELECT[\s\S]*?FROM businesses b/s,
+      'SELECT COUNT(*) as total FROM businesses b'
     );
     const countResult = await pool.query<{ total: string }>(countQuery, params);
     const total = parseInt(countResult.rows[0]?.total || '0', 10);
@@ -94,78 +99,18 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       name: string;
       address: string | null;
       postal_code: string | null;
-      city_id: string;
-      industry_id: string | null;
-      google_place_id: string | null;
       dataset_id: string;
       owner_user_id: string;
       created_at: Date;
       updated_at: Date;
+      website_url: string | null;
+      phone: string | null;
+      email: string | null;
+      city_id: string | null;
+      industry_id: string | null;
       city_name: string | null;
       industry_name: string | null;
     }>(query, params);
-
-    // Get websites for businesses (to populate website field)
-    const businessIds = result.rows.map(b => b.id);
-    let websites: { business_id: string; url: string }[] = [];
-    let contacts: { business_id: string; email: string | null; phone: string | null }[] = [];
-    
-    if (businessIds.length > 0) {
-      // Get websites
-      const websitesResult = await pool.query<{ business_id: string; url: string }>(
-        `SELECT business_id, url FROM websites WHERE business_id = ANY($1)`,
-        [businessIds]
-      );
-      websites = websitesResult.rows;
-
-      // Get contacts (email and phone) - use business_id if available, otherwise fallback to website join
-      const contactsResult = await pool.query<{ 
-        business_id: string; 
-        email: string | null; 
-        phone: string | null;
-      }>(
-        `SELECT DISTINCT ON (COALESCE(cs.business_id, w.business_id)::text, c.contact_type)
-           COALESCE(cs.business_id, w.business_id)::text as business_id,
-           CASE WHEN c.contact_type = 'email' THEN c.email ELSE NULL END as email,
-           CASE WHEN c.contact_type = 'phone' THEN COALESCE(c.phone, c.mobile) ELSE NULL END as phone
-         FROM contacts c
-         JOIN contact_sources cs ON cs.contact_id = c.id
-         LEFT JOIN websites w ON (
-           cs.business_id IS NULL 
-           AND (
-             cs.source_url LIKE '%' || REPLACE(REPLACE(w.url, 'https://', ''), 'http://', '') || '%'
-             OR cs.source_url = w.url
-             OR cs.source_url LIKE w.url || '%'
-           )
-         )
-         WHERE (cs.business_id = ANY($1) OR w.business_id = ANY($1))
-           AND (c.email IS NOT NULL OR c.phone IS NOT NULL OR c.mobile IS NOT NULL)
-         ORDER BY COALESCE(cs.business_id, w.business_id)::text, c.contact_type, cs.found_at ASC`,
-        [businessIds]
-      );
-      
-      // Aggregate contacts per business (get first email and first phone)
-      const contactMap = new Map<string, { email: string | null; phone: string | null }>();
-      for (const row of contactsResult.rows) {
-        if (!contactMap.has(row.business_id)) {
-          contactMap.set(row.business_id, { email: null, phone: null });
-        }
-        const contact = contactMap.get(row.business_id)!;
-        if (row.email && !contact.email) {
-          contact.email = row.email;
-        }
-        if (row.phone && !contact.phone) {
-          contact.phone = row.phone;
-        }
-      }
-      contacts = Array.from(contactMap.entries()).map(([business_id, contact]) => ({
-        business_id,
-        ...contact,
-      }));
-    }
-
-    const websiteMap = new Map(websites.map(w => [w.business_id, w.url]));
-    const contactMap = new Map(contacts.map(c => [c.business_id, c]));
 
     // Get user's plan
     const userResult = await pool.query<{ plan: string }>(
@@ -176,14 +121,13 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 
     // Map to frontend format
     const businesses = result.rows.map((b) => {
-      const contact = contactMap.get(b.id);
       return {
         id: b.id,
         name: b.name,
         address: b.address,
-        website: websiteMap.get(b.id) || null,
-        email: contact?.email || null,
-        phone: contact?.phone || null,
+        website: b.website_url || null,
+        email: b.email || null,
+        phone: b.phone || null,
         city: b.city_name || 'Unknown',
         industry: b.industry_name || 'Unknown',
         lastVerifiedAt: null,
@@ -445,13 +389,15 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
       name: string;
       address: string | null;
       postal_code: string | null;
-      city_id: string;
-      industry_id: string | null;
-      google_place_id: string | null;
       dataset_id: string;
       owner_user_id: string;
       created_at: Date;
       updated_at: Date;
+      website_url: string | null;
+      phone: string | null;
+      email: string | null;
+      city_id: string | null;
+      industry_id: string | null;
       city_name: string | null;
       industry_name: string | null;
     }>(
@@ -460,18 +406,21 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
         b.name,
         b.address,
         b.postal_code,
-        b.city_id,
-        b.industry_id,
-        b.google_place_id,
         b.dataset_id,
         b.owner_user_id,
         b.created_at,
         b.updated_at,
+        b.website_url,
+        b.phone,
+        b.email,
+        d.city_id,
+        d.industry_id,
         c.name as city_name,
         i.name as industry_name
       FROM businesses b
-      LEFT JOIN cities c ON c.id = b.city_id
-      LEFT JOIN industries i ON i.id = b.industry_id
+      LEFT JOIN datasets d ON d.id = b.dataset_id
+      LEFT JOIN cities c ON c.id = d.city_id
+      LEFT JOIN industries i ON i.id = d.industry_id
       WHERE b.id = $1`,
       [businessId]
     );
@@ -506,12 +455,8 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
       });
     }
 
-    // Get website
-    const websiteResult = await pool.query<{ url: string }>(
-      'SELECT url FROM websites WHERE business_id = $1 LIMIT 1',
-      [businessId]
-    );
-    const website = websiteResult.rows[0]?.url || null;
+    // Get website - now stored directly on businesses table
+    const website = business.website_url || null;
 
     // Get ALL contacts for this business
     const contactsResult = await pool.query<{
@@ -604,7 +549,6 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
         postal_code: business.postal_code,
         city: business.city_name || 'Unknown',
         industry: business.industry_name || 'Unknown',
-        google_place_id: business.google_place_id,
         website: website,
         emails: emails,
         phones: phones,
