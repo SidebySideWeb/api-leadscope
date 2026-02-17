@@ -170,26 +170,30 @@ export async function updateDiscoveryRun(
 
   if (updates.length === 0) {
     const result = await pool.query<DiscoveryRun>(
-      'SELECT * FROM discovery_runs WHERE id = $1',
+      'SELECT id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates FROM discovery_runs WHERE id = $1',
       [id]
     );
-    return result.rows[0];
+    const row = result.rows[0];
+    return {
+      ...row,
+      industry_group_id: null, // Add manually since column might not exist
+    };
   }
 
   values.push(id);
 
   let result;
   try {
-    result = await pool.query<DiscoveryRun>(
+    result = await pool.query<DiscoveryRun & { industry_group_id?: string | null }>(
       `UPDATE discovery_runs
        SET ${updates.join(', ')}
        WHERE id = $${index}
-       RETURNING *`,
+       RETURNING id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates`,
       values
     );
   } catch (error: any) {
-    // If cost_estimates or error_message column doesn't exist, retry without them
-    if (error.code === '42703' && (updates.some(u => u.includes('cost_estimates')) || updates.some(u => u.includes('error_message')))) {
+    // If cost_estimates, error_message, or industry_group_id column doesn't exist, retry without them
+    if (error.code === '42703' && (updates.some(u => u.includes('cost_estimates')) || updates.some(u => u.includes('error_message')) || error.message?.includes('industry_group_id'))) {
       const missingColumns: string[] = [];
       if (updates.some(u => u.includes('cost_estimates'))) {
         missingColumns.push('cost_estimates');
@@ -220,7 +224,7 @@ export async function updateDiscoveryRun(
       } else {
         // No updates to make, just fetch the row
         result = await pool.query<DiscoveryRun>(
-          'SELECT * FROM discovery_runs WHERE id = $1',
+          'SELECT id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates FROM discovery_runs WHERE id = $1',
           [id]
         );
       }
@@ -229,7 +233,16 @@ export async function updateDiscoveryRun(
     }
   }
 
-  return result.rows[0];
+  const row = result.rows[0];
+  return {
+    ...row,
+    industry_group_id: (row as any).industry_group_id || null, // May not exist in query result
+    cost_estimates: row.cost_estimates 
+      ? (typeof row.cost_estimates === 'string' 
+          ? JSON.parse(row.cost_estimates) 
+          : row.cost_estimates)
+      : null,
+  };
 }
 
 /**
@@ -246,9 +259,10 @@ export async function getDiscoveryRunsByDatasetId(
     [datasetId]
   );
 
-  // Parse cost_estimates JSON if present
+  // Parse cost_estimates JSON if present and add industry_group_id (might be null if column doesn't exist)
   return result.rows.map(row => ({
     ...row,
+    industry_group_id: (row as any).industry_group_id || null, // May not exist in query result
     cost_estimates: row.cost_estimates 
       ? (typeof row.cost_estimates === 'string' 
           ? JSON.parse(row.cost_estimates) 
@@ -272,10 +286,11 @@ export async function getDiscoveryRunById(
     return null;
   }
 
-  // Parse cost_estimates JSON if present
+  // Parse cost_estimates JSON if present and add industry_group_id (might be null if column doesn't exist)
   const row = result.rows[0];
   return {
     ...row,
+    industry_group_id: (row as any).industry_group_id || null, // May not exist in query result
     cost_estimates: row.cost_estimates 
       ? (typeof row.cost_estimates === 'string' 
           ? JSON.parse(row.cost_estimates) 
