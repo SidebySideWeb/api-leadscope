@@ -54,15 +54,17 @@ export async function createDiscoveryRun(
       const columnCheck = await pool.query(
         `SELECT column_name 
          FROM information_schema.columns 
-         WHERE table_name = 'discovery_runs' 
+         WHERE table_schema = 'public'
+         AND table_name = 'discovery_runs' 
          AND column_name = 'industry_group_id'`
       );
       industryGroupIdColumnExists = columnCheck.rows.length > 0;
+      console.log(`[createDiscoveryRun] industry_group_id column exists check: ${industryGroupIdColumnExists}`);
       if (!industryGroupIdColumnExists) {
-        console.log('[createDiscoveryRun] industry_group_id column does not exist, will skip it');
+        console.log('[createDiscoveryRun] industry_group_id column does not exist, will skip it in INSERT');
       }
-    } catch (checkError) {
-      console.warn('[createDiscoveryRun] Could not check for industry_group_id column:', checkError);
+    } catch (checkError: any) {
+      console.warn('[createDiscoveryRun] Could not check for industry_group_id column:', checkError?.message || checkError);
       // If we can't check, assume it doesn't exist to be safe
       industryGroupIdColumnExists = false;
     }
@@ -70,7 +72,9 @@ export async function createDiscoveryRun(
 
   // Try to insert with user_id and industry_group_id if provided
     // If columns don't exist in schema, fall back gracefully
-    if (userId || (industryGroupId && industryGroupIdColumnExists)) {
+    // ALWAYS try the insert, but only include industry_group_id if column exists
+    // We need to try the insert if we have userId OR industryGroupId (even if column doesn't exist)
+    if (userId || industryGroupId) {
       try {
         const columns: string[] = ['dataset_id', 'status'];
         const values: any[] = [datasetId, 'running'];
@@ -82,10 +86,14 @@ export async function createDiscoveryRun(
           paramIndex++;
         }
         
+        // Only add industry_group_id if column exists (checked above)
         if (industryGroupId && industryGroupIdColumnExists) {
+          console.log('[createDiscoveryRun] Adding industry_group_id to INSERT:', industryGroupId);
           columns.push('industry_group_id');
           values.push(industryGroupId);
           paramIndex++;
+        } else if (industryGroupId) {
+          console.log('[createDiscoveryRun] Skipping industry_group_id in INSERT (column does not exist):', industryGroupId);
         }
         
         // Only select columns that exist - don't use RETURNING * to avoid errors if column doesn't exist
