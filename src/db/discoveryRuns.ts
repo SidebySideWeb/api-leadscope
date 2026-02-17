@@ -50,7 +50,7 @@ export async function createDiscoveryRun(
   let industryGroupIdColumnExists = false;
   if (industryGroupId) {
     try {
-      const { pool } = await import('../config/database.js');
+      // Use the pool that's already imported at the top of the file
       const columnCheck = await pool.query(
         `SELECT column_name 
          FROM information_schema.columns 
@@ -59,15 +59,18 @@ export async function createDiscoveryRun(
          AND column_name = 'industry_group_id'`
       );
       industryGroupIdColumnExists = columnCheck.rows.length > 0;
-      console.log(`[createDiscoveryRun] industry_group_id column exists check: ${industryGroupIdColumnExists}`);
+      console.log(`[createDiscoveryRun] industry_group_id column exists check: ${industryGroupIdColumnExists} (for industryGroupId: ${industryGroupId})`);
       if (!industryGroupIdColumnExists) {
         console.log('[createDiscoveryRun] industry_group_id column does not exist, will skip it in INSERT');
       }
     } catch (checkError: any) {
       console.warn('[createDiscoveryRun] Could not check for industry_group_id column:', checkError?.message || checkError);
+      console.warn('[createDiscoveryRun] Assuming column does not exist to be safe');
       // If we can't check, assume it doesn't exist to be safe
       industryGroupIdColumnExists = false;
     }
+  } else {
+    console.log('[createDiscoveryRun] No industryGroupId provided, skipping column check');
   }
 
   // Try to insert with user_id and industry_group_id if provided
