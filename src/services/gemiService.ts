@@ -88,12 +88,12 @@ export interface GemiCompaniesResponse {
  * Fetch companies from GEMI API for a specific municipality, multiple municipalities, or prefecture
  * Automatically handles pagination
  * @param municipalityGemiId - Municipality GEMI ID or array of IDs (optional if prefectureGemiId is provided)
- * @param activityId - Activity/Industry GEMI ID (optional)
+ * @param activityId - Activity/Industry GEMI ID or array of IDs (optional)
  * @param prefectureGemiId - Prefecture GEMI ID (optional if municipalityGemiId is provided)
  */
 export async function fetchGemiCompaniesForMunicipality(
   municipalityGemiId?: number | number[],
-  activityId?: number,
+  activityId?: number | number[],
   prefectureGemiId?: number
 ): Promise<GemiCompany[]> {
   if (!GEMI_API_KEY) {
@@ -120,7 +120,12 @@ export async function fetchGemiCompaniesForMunicipality(
   const locationId = municipalityGemiId 
     ? (municipalityIds.length > 1 ? municipalityIds.join(',') : String(municipalityIds[0]))
     : String(prefectureGemiId);
-  console.log(`[GEMI] Fetching companies for ${locationType} ${locationId}...`);
+  const activityDesc = activityId 
+    ? (Array.isArray(activityId) 
+        ? `${activityId.length} activities: [${activityId.join(', ')}]`
+        : `activity ${activityId}`)
+    : 'all activities';
+  console.log(`[GEMI] Fetching companies for ${locationType} ${locationId} with ${activityDesc}...`);
 
   while (hasMore) {
     // Acquire rate limiter lock
@@ -142,7 +147,10 @@ export async function fetchGemiCompaniesForMunicipality(
       }
 
       if (activityId) {
-        params.activities = activityId; // Use 'activities' (plural) if that's the correct param
+        // Normalize activityId to array for consistent handling
+        const activityIds = Array.isArray(activityId) ? activityId : [activityId];
+        // GEMI API supports arrays for activities parameter
+        params.activities = activityIds.length === 1 ? activityIds[0] : activityIds;
       }
 
       console.log(`[GEMI] Fetching page at offset ${resultsOffset}...`);
@@ -327,7 +335,12 @@ export async function fetchGemiCompaniesForMunicipality(
               ? `${municipalityIds.length} municipalities` 
               : `municipality ${municipalityIds[0]}`)
           : `prefecture ${prefectureGemiId}`;
-        console.log(`[GEMI] No businesses found for ${locationDesc}${activityId ? ` and activity ${activityId}` : ''} (404)`);
+        const activityDesc = activityId 
+          ? (Array.isArray(activityId) 
+              ? ` and ${activityId.length} activities: [${activityId.join(', ')}]`
+              : ` and activity ${activityId}`)
+          : '';
+        console.log(`[GEMI] No businesses found for ${locationDesc}${activityDesc} (404)`);
         console.log(`[GEMI] 404 Response status: ${error.response.status}`);
         console.log(`[GEMI] 404 Response headers:`, JSON.stringify(error.response.headers, null, 2));
         console.log(`[GEMI] 404 Response data:`, JSON.stringify(error.response.data, null, 2));

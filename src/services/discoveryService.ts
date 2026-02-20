@@ -419,13 +419,14 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     if (existingCount === 0) {
       console.log(`[runDiscoveryJob] No existing businesses found, fetching from GEMI API...`);
       
-      let municipalityGemiId: number | number[] | undefined;
+      let municipalityGemiId: number[] | undefined;
       let prefectureGemiId: number | undefined;
       
       // Use municipality_gemi_id directly if available (preferred)
+      // Always send as array, even for single municipality
       if (finalMunicipalityGemiId) {
-        municipalityGemiId = finalMunicipalityGemiId;
-        console.log(`[runDiscoveryJob] Using municipality_gemi_id directly: ${municipalityGemiId}`);
+        municipalityGemiId = Array.isArray(finalMunicipalityGemiId) ? finalMunicipalityGemiId : [finalMunicipalityGemiId];
+        console.log(`[runDiscoveryJob] Using municipality_gemi_id directly: [${municipalityGemiId.join(', ')}]`);
       } else if (finalMunicipalityId) {
         // Fallback: get gemi_id from municipality_id
         const municipalityResult = await pool.query<{ gemi_id: string }>(
@@ -438,7 +439,9 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
           throw new Error(`Municipality with id ${finalMunicipalityId} not found`);
         }
         
-        municipalityGemiId = parseInt(municipalityResult.rows[0].gemi_id, 10);
+        // Always send as array, even for single municipality
+        municipalityGemiId = [parseInt(municipalityResult.rows[0].gemi_id, 10)];
+        console.log(`[runDiscoveryJob] Resolved municipality_id to gemi_id: [${municipalityGemiId.join(', ')}]`);
       } else if (finalPrefectureGemiId || finalPrefectureId) {
         // When prefecture is selected, fetch all municipalities in that prefecture
         // and use them for the GEMI API call
@@ -476,10 +479,9 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
             .filter(id => !isNaN(id));
           
           if (municipalityGemiIds.length > 0) {
-            municipalityGemiId = municipalityGemiIds.length === 1 
-              ? municipalityGemiIds[0] 
-              : municipalityGemiIds;
-            console.log(`[runDiscoveryJob] Found ${municipalityGemiIds.length} municipalities in prefecture, using all for GEMI API call`);
+            // Always send as array, even for single municipality
+            municipalityGemiId = municipalityGemiIds;
+            console.log(`[runDiscoveryJob] Found ${municipalityGemiIds.length} municipalities in prefecture, using all for GEMI API call: [${municipalityGemiIds.join(', ')}]`);
           } else {
             console.warn(`[runDiscoveryJob] No valid municipality GEMI IDs found, falling back to prefecture-level query`);
             prefectureGemiId = finalPrefectureGemiId || parseInt(
@@ -496,14 +498,34 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       }
       
       if (municipalityGemiId !== undefined || prefectureGemiId !== undefined) {
-        // Use industry_gemi_id directly if available (preferred), otherwise get from industry_id
-        let industryGemiId = finalIndustryGemiId;
-        if (!industryGemiId) {
-          const industryResult = await pool.query<{ gemi_id: number }>(
-            'SELECT gemi_id FROM industries WHERE id = $1',
-            [finalIndustryId]
+        // Collect all activity IDs (gemi_ids) from all industries in the group
+        let activityIds: number[] | undefined;
+        
+        if (input.industry_group_id && industriesInGroup.length > 0) {
+          // Get all gemi_ids from all industries in the group
+          const industryIds = industriesInGroup.map(i => i.id);
+          const allIndustriesResult = await pool.query<{ gemi_id: number }>(
+            'SELECT gemi_id FROM industries WHERE id = ANY($1) AND gemi_id IS NOT NULL',
+            [industryIds]
           );
-          industryGemiId = industryResult.rows[0]?.gemi_id || undefined;
+          activityIds = allIndustriesResult.rows
+            .map(row => row.gemi_id)
+            .filter(id => id != null && !isNaN(id));
+          console.log(`[runDiscoveryJob] Found ${activityIds.length} activity IDs from industry group: [${activityIds.join(', ')}]`);
+        } else {
+          // For single industry, use industry_gemi_id directly if available (preferred), otherwise get from industry_id
+          const singleActivityId = finalIndustryGemiId;
+          if (!singleActivityId && finalIndustryId) {
+            const industryResult = await pool.query<{ gemi_id: number }>(
+              'SELECT gemi_id FROM industries WHERE id = $1',
+              [finalIndustryId]
+            );
+            if (industryResult.rows[0]?.gemi_id) {
+              activityIds = [industryResult.rows[0].gemi_id];
+            }
+          } else if (singleActivityId) {
+            activityIds = [singleActivityId];
+          }
         }
 
         const locationDesc = municipalityGemiId 
@@ -511,16 +533,20 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
               ? `${municipalityGemiId.length} municipalities`
               : `municipality_gemi_id=${municipalityGemiId}`)
           : `prefecture_gemi_id=${prefectureGemiId}`;
-        console.log(`[runDiscoveryJob] Fetching from GEMI API: ${locationDesc}, activity_id=${industryGemiId}`);
+        const activityDesc = activityIds 
+          ? (activityIds.length === 1 ? `activity_id=${activityIds[0]}` : `${activityIds.length} activities: [${activityIds.join(', ')}]`)
+          : 'no activity filter';
+        console.log(`[runDiscoveryJob] Fetching from GEMI API: ${locationDesc}, ${activityDesc}`);
 
         // Import GEMI service functions
         const { fetchGemiCompaniesForMunicipality, importGemiCompaniesToDatabase } = await import('./gemiService.js');
         
         try {
           // Fetch companies from GEMI API (supports municipality, multiple municipalities, or prefecture)
+          // Pass activity IDs as array (the GEMI service will handle single vs multiple)
           const companies = await fetchGemiCompaniesForMunicipality(
             municipalityGemiId,
-            industryGemiId,
+            activityIds && activityIds.length > 0 ? activityIds : undefined,
             prefectureGemiId
           );
 
