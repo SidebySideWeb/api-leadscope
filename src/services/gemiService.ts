@@ -154,9 +154,10 @@ export async function fetchGemiCompaniesForMunicipality(
         params.activities = activityIds.length === 1 ? activityIds[0] : activityIds;
       }
 
-      console.log(`[GEMI] Fetching page at offset ${resultsOffset}...`);
+      console.log(`[GEMI] Fetching page at offset ${resultsOffset} with size ${resultsSize}...`);
       console.log(`[GEMI] Request parameters:`, JSON.stringify(params, null, 2));
       console.log(`[GEMI] Request URL: ${GEMI_API_BASE_URL}/companies`);
+      console.log(`[GEMI] Expected next offset after this request: ${resultsOffset + resultsSize}`);
 
       const response = await gemiClient.get<any>('/companies', { params });
       
@@ -320,14 +321,20 @@ export async function fetchGemiCompaniesForMunicipality(
       // Check if there are more results
       // Increment offset by resultsSize (200) to get the next page, not by the number of results received
       // This ensures proper pagination even if some results are filtered out
+      const previousOffset = resultsOffset;
       resultsOffset += resultsSize;
+      console.log(`[GEMI] Pagination: offset ${previousOffset} → ${resultsOffset} (incremented by ${resultsSize})`);
       
       // Continue if:
       // 1. We got results in this batch (might be less than resultsSize if near the end)
       // 2. AND (we don't know totalCount yet OR we haven't reached the total)
       hasMore = validCompanies.length > 0 && (totalCount === 0 || resultsOffset < totalCount);
 
-      console.log(`[GEMI] Fetched ${validCompanies.length} companies (total: ${allCompanies.length}/${totalCount})`);
+      console.log(`[GEMI] Fetched ${validCompanies.length} companies (total: ${allCompanies.length}/${totalCount || 'unknown'}), next offset will be: ${resultsOffset}`);
+      
+      if (!hasMore) {
+        console.log(`[GEMI] No more results: validCompanies=${validCompanies.length}, totalCount=${totalCount || 'unknown'}, currentOffset=${resultsOffset}`);
+      }
 
       // Safety check to prevent infinite loops
       if (resultsOffset >= 10000) {
