@@ -315,7 +315,7 @@ export async function getDiscoveryRunById(
   id: string
 ): Promise<DiscoveryRun | null> {
   const result = await pool.query<DiscoveryRun>(
-    'SELECT * FROM discovery_runs WHERE id = $1',
+    'SELECT id, dataset_id, status, created_at, started_at, completed_at, cost_estimates FROM discovery_runs WHERE id = $1',
     [id]
   );
 
