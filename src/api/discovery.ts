@@ -382,6 +382,45 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       city: cityName || 'N/A (using municipality directly)'
     });
 
+    // Generate descriptive dataset name (used for both initial creation and mismatch cases)
+    let datasetName: string | undefined;
+    
+    // Get industry/industry group name
+    let industryNameForDataset: string;
+    if (industry_group_id) {
+      const { getIndustryGroupById } = await import('../db/industryGroups.js');
+      const industryGroup = await getIndustryGroupById(industry_group_id);
+      industryNameForDataset = industryGroup?.name || industry.name;
+    } else {
+      industryNameForDataset = industry.name;
+    }
+    
+    // Get location name (preference: prefecture > municipality > city)
+    let locationName: string = 'Unknown';
+    
+    // Try to get prefecture name if we have municipality_id
+    if (municipality_id) {
+      const prefectureResult = await pool.query<{ descr: string; descr_en: string }>(
+        `SELECT p.descr, p.descr_en 
+         FROM prefectures p
+         JOIN municipalities m ON m.prefecture_id = p.id
+         WHERE m.id = $1 OR m.gemi_id = $2
+         LIMIT 1`,
+        [municipality_id, municipality_id.replace('mun-', '')]
+      );
+      
+      if (prefectureResult.rows.length > 0) {
+        locationName = prefectureResult.rows[0].descr_en || prefectureResult.rows[0].descr || municipalityName;
+      } else {
+        locationName = municipalityName;
+      }
+    } else if (city_id) {
+      locationName = cityName;
+    }
+    
+    // Generate dataset name: "Industry Name - Location Name"
+    datasetName = `${industryNameForDataset} - ${locationName}`;
+
     // Find or resolve dataset ID FIRST (before creating discovery_run)
     // dataset_id is optional - if not provided, find or create one
     // When using municipality_id, find a matching city or use a default
@@ -497,6 +536,8 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
           userId,
           cityId: datasetCityId,
           industryId: industry.id,
+          municipalityName: municipalityName !== 'Unknown' ? municipalityName : undefined,
+          datasetName,
         });
         finalDatasetId = resolverResult.dataset.id;
       } else {
@@ -506,7 +547,7 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
           userId,
           null, // city_id is null when using municipality_gemi_id directly
           industry.id,
-          `Dataset ${municipality_gemi_id || municipality_id || 'unknown'}-${industry.id}`
+          datasetName
         );
         finalDatasetId = dataset.id;
       }
@@ -549,6 +590,8 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
         userId,
         cityId: datasetCityId,
         industryId: industry.id,
+        municipalityName: municipalityName !== 'Unknown' ? municipalityName : undefined,
+        datasetName,
       });
       finalDatasetId = resolverResult.dataset.id;
       console.log(`[API] Created new matching dataset: ${finalDatasetId}`);
