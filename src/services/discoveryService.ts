@@ -224,11 +224,12 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     let finalIndustryId = input.industry_id;
     let finalIndustryGemiId = input.industry_gemi_id;
     let industriesToUse: Array<{ id: string; name: string; discovery_keywords: string[] | null; search_weight: number | null }> = [];
+    let industriesInGroup: Array<{ id: string; name: string; discovery_keywords: string[] | null; search_weight: number | null }> = []; // Declare at higher scope for later use
 
     // Handle industry_group_id: if provided, fetch all industries in the group
     if (input.industry_group_id) {
       const { getIndustriesByGroup } = await import('../db/industryGroups.js');
-      const industriesInGroup = await getIndustriesByGroup(input.industry_group_id);
+      industriesInGroup = await getIndustriesByGroup(input.industry_group_id);
       
       if (industriesInGroup.length === 0) {
         throw new Error(`No industries found for industry group ${input.industry_group_id}`);
@@ -503,7 +504,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         
         if (input.industry_group_id && industriesInGroup.length > 0) {
           // Get all gemi_ids from all industries in the group
-          const industryIds = industriesInGroup.map(i => i.id);
+          const industryIds = industriesInGroup.map((i: { id: string; name: string; discovery_keywords: string[] | null; search_weight: number | null }) => i.id);
           const allIndustriesResult = await pool.query<{ gemi_id: number }>(
             'SELECT gemi_id FROM industries WHERE id = ANY($1) AND gemi_id IS NOT NULL',
             [industryIds]
@@ -578,7 +579,10 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
                   ? `${municipalityGemiId.length} municipalities`
                   : `municipality ${municipalityGemiId}`)
               : `prefecture ${prefectureGemiId}`;
-            console.log(`[runDiscoveryJob] No businesses found for ${locationDesc} and activity ${industryGemiId} (404)`);
+            const activityDesc = activityIds 
+              ? (activityIds.length === 1 ? `activity ${activityIds[0]}` : `${activityIds.length} activities: [${activityIds.join(', ')}]`)
+              : 'all activities';
+            console.log(`[runDiscoveryJob] No businesses found for ${locationDesc} and ${activityDesc} (404)`);
             discoveryResult = {
               businessesFound: 0,
               businessesCreated: 0,
