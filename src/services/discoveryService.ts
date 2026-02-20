@@ -216,8 +216,8 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     if (!input.industry_gemi_id && !input.industry_id && !input.industry) {
       throw new Error('industry_gemi_id, industry_id, or industry is required for discovery');
     }
-    if (!input.municipality_gemi_id && !input.municipality_id && !input.city_id && !input.city) {
-      throw new Error('municipality_gemi_id, municipality_id, city_id, or city is required for discovery');
+    if (!input.municipality_gemi_id && !input.municipality_id && !input.prefecture_gemi_id && !input.prefecture_id && !input.city_id && !input.city) {
+      throw new Error('municipality_gemi_id, municipality_id, prefecture_gemi_id, prefecture_id, city_id, or city is required for discovery');
     }
 
     // Resolve industry: prefer industry_group_id, then industry_id, fallback to industry name (legacy)
@@ -308,11 +308,15 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     // Resolve municipality_id from municipality_gemi_id if needed
     let finalMunicipalityId = input.municipality_id;
     let finalMunicipalityGemiId = input.municipality_gemi_id;
+    
+    // Resolve prefecture_id and prefecture_gemi_id
+    let finalPrefectureId = input.prefecture_id;
+    let finalPrefectureGemiId = input.prefecture_gemi_id;
 
     // Resolve municipality_id from municipality_gemi_id if needed (city_id column removed)
     if (input.municipality_gemi_id && !finalMunicipalityId) {
-      const municipalityResult = await pool.query<{ id: string; gemi_id: string }>(
-        'SELECT id, gemi_id FROM municipalities WHERE gemi_id = $1',
+      const municipalityResult = await pool.query<{ id: string; gemi_id: string; prefecture_id: string }>(
+        'SELECT id, gemi_id, prefecture_id FROM municipalities WHERE gemi_id = $1',
         [input.municipality_gemi_id.toString()]
       );
       if (municipalityResult.rows.length === 0) {
@@ -320,29 +324,51 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       }
       finalMunicipalityId = municipalityResult.rows[0].id;
       finalMunicipalityGemiId = parseInt(municipalityResult.rows[0].gemi_id, 10);
+      // Also set prefecture_id if not already set
+      if (!finalPrefectureId) {
+        finalPrefectureId = municipalityResult.rows[0].prefecture_id;
+      }
       console.log(`[runDiscoveryJob] Resolved municipality_gemi_id ${input.municipality_gemi_id} to municipality_id ${finalMunicipalityId}`);
     } else if (finalMunicipalityId && !finalMunicipalityGemiId) {
       // Get gemi_id from municipality_id
-      const municipalityResult = await pool.query<{ gemi_id: string }>(
-        'SELECT gemi_id FROM municipalities WHERE id = $1',
+      const municipalityResult = await pool.query<{ gemi_id: string; prefecture_id: string }>(
+        'SELECT gemi_id, prefecture_id FROM municipalities WHERE id = $1',
         [finalMunicipalityId]
       );
       if (municipalityResult.rows.length > 0) {
         finalMunicipalityGemiId = parseInt(municipalityResult.rows[0].gemi_id, 10);
+        // Also set prefecture_id if not already set
+        if (!finalPrefectureId) {
+          finalPrefectureId = municipalityResult.rows[0].prefecture_id;
+        }
       }
+    }
+    
+    // Resolve prefecture_gemi_id from prefecture_id if needed
+    if (finalPrefectureId && !finalPrefectureGemiId) {
+      const prefectureResult = await pool.query<{ gemi_id: string }>(
+        'SELECT gemi_id FROM prefectures WHERE id = $1',
+        [finalPrefectureId]
+      );
+      if (prefectureResult.rows.length > 0) {
+        finalPrefectureGemiId = parseInt(prefectureResult.rows[0].gemi_id, 10);
+        console.log(`[runDiscoveryJob] Resolved prefecture_id ${finalPrefectureId} to prefecture_gemi_id ${finalPrefectureGemiId}`);
+      }
+    } else if (input.prefecture_gemi_id && !finalPrefectureGemiId) {
+      finalPrefectureGemiId = input.prefecture_gemi_id;
     }
 
     if (!finalIndustryId) {
       throw new Error('Could not resolve industry_id');
     }
     
-    // municipality_gemi_id is preferred for GEMI discovery (city_id column removed)
-    if (!finalMunicipalityGemiId && !finalMunicipalityId) {
-      throw new Error('Could not resolve municipality_gemi_id or municipality_id (city_id column has been removed)');
+    // Need either municipality or prefecture for GEMI discovery
+    if (!finalMunicipalityGemiId && !finalMunicipalityId && !finalPrefectureGemiId && !finalPrefectureId) {
+      throw new Error('Could not resolve municipality_gemi_id, municipality_id, prefecture_gemi_id, or prefecture_id');
     }
 
     // STEP 1: Check local database first for existing businesses
-    // Filter by dataset_id and municipality_id (industry_id and city_id columns removed)
+    // Filter by dataset_id and municipality_id or prefecture_id
     console.log(`[runDiscoveryJob] Checking local database for existing businesses...`);
     let existingBusinessesResult;
     if (finalMunicipalityId) {
@@ -353,8 +379,23 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
            AND municipality_id = $2`,
         [datasetId, finalMunicipalityId]
       );
+    } else if (finalPrefectureId) {
+      // When only prefecture is available, check by prefecture_id
+      existingBusinessesResult = await pool.query<{ count: string }>(
+        `SELECT COUNT(*) as count
+         FROM businesses
+         WHERE dataset_id = $1
+           AND prefecture_id = $2`,
+        [datasetId, finalPrefectureId]
+      );
     } else {
-      throw new Error('municipality_id is required (city_id and industry_id columns have been removed)');
+      // Fallback: check by dataset_id only (less precise but still valid)
+      existingBusinessesResult = await pool.query<{ count: string }>(
+        `SELECT COUNT(*) as count
+         FROM businesses
+         WHERE dataset_id = $1`,
+        [datasetId]
+      );
     }
     
     const existingCount = parseInt(existingBusinessesResult.rows[0]?.count || '0', 10);
@@ -379,6 +420,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       console.log(`[runDiscoveryJob] No existing businesses found, fetching from GEMI API...`);
       
       let municipalityGemiId: number | undefined;
+      let prefectureGemiId: number | undefined;
       
       // Use municipality_gemi_id directly if available (preferred)
       if (finalMunicipalityGemiId) {
@@ -397,11 +439,27 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         }
         
         municipalityGemiId = parseInt(municipalityResult.rows[0].gemi_id, 10);
+      } else if (finalPrefectureGemiId) {
+        // Use prefecture_gemi_id if municipality is not available
+        prefectureGemiId = finalPrefectureGemiId;
+        console.log(`[runDiscoveryJob] Using prefecture_gemi_id directly: ${prefectureGemiId}`);
+      } else if (finalPrefectureId) {
+        // Fallback: get gemi_id from prefecture_id
+        const prefectureResult = await pool.query<{ gemi_id: string }>(
+          'SELECT gemi_id FROM prefectures WHERE id = $1',
+          [finalPrefectureId]
+        );
+        
+        if (prefectureResult.rows.length === 0) {
+          throw new Error(`Prefecture with id ${finalPrefectureId} not found`);
+        }
+        
+        prefectureGemiId = parseInt(prefectureResult.rows[0].gemi_id, 10);
       } else {
-        throw new Error('municipality_id or municipality_gemi_id is required for GEMI discovery (city_id column has been removed)');
+        throw new Error('municipality_id, municipality_gemi_id, prefecture_id, or prefecture_gemi_id is required for GEMI discovery');
       }
       
-      if (municipalityGemiId !== undefined) {
+      if (municipalityGemiId !== undefined || prefectureGemiId !== undefined) {
         // Use industry_gemi_id directly if available (preferred), otherwise get from industry_id
         let industryGemiId = finalIndustryGemiId;
         if (!industryGemiId) {
@@ -412,16 +470,20 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
           industryGemiId = industryResult.rows[0]?.gemi_id || undefined;
         }
 
-        console.log(`[runDiscoveryJob] Fetching from GEMI API: municipality_gemi_id=${municipalityGemiId}, activity_id=${industryGemiId}`);
+        const locationDesc = municipalityGemiId 
+          ? `municipality_gemi_id=${municipalityGemiId}` 
+          : `prefecture_gemi_id=${prefectureGemiId}`;
+        console.log(`[runDiscoveryJob] Fetching from GEMI API: ${locationDesc}, activity_id=${industryGemiId}`);
 
         // Import GEMI service functions
         const { fetchGemiCompaniesForMunicipality, importGemiCompaniesToDatabase } = await import('./gemiService.js');
         
         try {
-          // Fetch companies from GEMI API
+          // Fetch companies from GEMI API (supports both municipality and prefecture)
           const companies = await fetchGemiCompaniesForMunicipality(
             municipalityGemiId,
-            industryGemiId
+            industryGemiId,
+            prefectureGemiId
           );
 
           console.log(`[runDiscoveryJob] Fetched ${companies.length} companies from GEMI API`);
@@ -447,7 +509,10 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
           // 404 errors are handled in gemiService and return empty array, so they shouldn't reach here
           // But if they do, treat them as "no results" rather than an error
           if (error.response && error.response.status === 404) {
-            console.log(`[runDiscoveryJob] No businesses found for municipality ${municipalityGemiId} and activity ${industryGemiId} (404)`);
+            const locationDesc = municipalityGemiId 
+              ? `municipality ${municipalityGemiId}` 
+              : `prefecture ${prefectureGemiId}`;
+            console.log(`[runDiscoveryJob] No businesses found for ${locationDesc} and activity ${industryGemiId} (404)`);
             discoveryResult = {
               businessesFound: 0,
               businessesCreated: 0,

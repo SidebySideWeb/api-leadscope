@@ -53,6 +53,8 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     let industry_group_id: string | undefined;
     let municipality_gemi_id: number | undefined;
     let municipality_id: string | undefined;
+    let prefecture_gemi_id: number | undefined;
+    let prefecture_id: string | undefined;
     let city_id: string | undefined;
     let dataset_id: string | undefined;
     
@@ -103,11 +105,16 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       console.warn('[discovery] WARNING: Received camelCase cityId, converted to city_id. Please use municipality_gemi_id in future requests.');
     }
     
-    if (req.body.dataset_id) {
-      dataset_id = req.body.dataset_id;
-    } else if (req.body.datasetId) {
-      dataset_id = req.body.datasetId;
-      console.warn('[discovery] WARNING: Received camelCase datasetId, converted to dataset_id. Please use snake_case in future requests.');
+    // Accept prefecture_gemi_id or prefecture_id (for prefecture-level discovery)
+    if (req.body.prefecture_gemi_id !== undefined) {
+      prefecture_gemi_id = typeof req.body.prefecture_gemi_id === 'number'
+        ? req.body.prefecture_gemi_id
+        : parseInt(req.body.prefecture_gemi_id, 10);
+    } else if (req.body.prefecture_id) {
+      prefecture_id = req.body.prefecture_id;
+    } else if (req.body.prefectureId) {
+      prefecture_id = req.body.prefectureId;
+      console.warn('[discovery] WARNING: Received camelCase prefectureId, converted to prefecture_id.');
     }
     
     if (req.body.dataset_id) {
@@ -117,11 +124,18 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       console.warn('[discovery] WARNING: Received camelCase datasetId, converted to dataset_id. Please use snake_case in future requests.');
     }
     
-    console.log('[discovery] payload:', { industry_gemi_id, industry_id, industry_group_id, municipality_gemi_id, municipality_id, city_id, dataset_id });
+    if (req.body.dataset_id) {
+      dataset_id = req.body.dataset_id;
+    } else if (req.body.datasetId) {
+      dataset_id = req.body.datasetId;
+      console.warn('[discovery] WARNING: Received camelCase datasetId, converted to dataset_id. Please use snake_case in future requests.');
+    }
+    
+    console.log('[discovery] payload:', { industry_gemi_id, industry_id, industry_group_id, municipality_gemi_id, municipality_id, prefecture_gemi_id, prefecture_id, city_id, dataset_id });
     
     // CRITICAL: Explicit validation
     // Industry: (industry_group_id OR industry_gemi_id OR industry_id) - exactly one
-    // Location: (municipality_gemi_id OR municipality_id OR city_id) - at least one
+    // Location: (municipality_gemi_id OR municipality_id OR prefecture_gemi_id OR prefecture_id OR city_id) - at least one
     // dataset_id is optional and will be auto-resolved if missing
     
     // Validate industry selection - must have exactly one
@@ -137,9 +151,9 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       throw new Error('Invalid discovery request: missing required field: industry_group_id OR industry_gemi_id OR industry_id');
     }
     
-    // Validate location
-    if (!municipality_gemi_id && !municipality_id && !city_id) {
-      throw new Error('Invalid discovery request: missing required field: municipality_gemi_id OR municipality_id OR city_id');
+    // Validate location - must have at least one location identifier
+    if (!municipality_gemi_id && !municipality_id && !prefecture_gemi_id && !prefecture_id && !city_id) {
+      throw new Error('Invalid discovery request: missing required field: municipality_gemi_id OR municipality_id OR prefecture_gemi_id OR prefecture_id OR city_id');
     }
 
     // Handle industry_group_id: if provided, fetch industries from group
@@ -638,6 +652,8 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       industry_gemi_id: industry_gemi_id,
       municipality_gemi_id: municipality_gemi_id,
       municipality_id: municipality_id || undefined,
+      prefecture_gemi_id: prefecture_gemi_id || undefined,
+      prefecture_id: prefecture_id || undefined,
       city_id: city_id || undefined,
       datasetId: finalDatasetId,
       discoveryRunId: discoveryRun.id
@@ -654,6 +670,8 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       city_id: city_id || undefined, // Use city_id if available (for backward compatibility)
       municipality_id: municipality_id || undefined, // Internal municipality_id (resolved from gemi_id if needed)
       municipality_gemi_id: municipality_gemi_id, // GEMI municipality ID (preferred)
+      prefecture_id: prefecture_id || undefined, // Internal prefecture_id
+      prefecture_gemi_id: prefecture_gemi_id || undefined, // GEMI prefecture ID (for prefecture-level discovery)
       latitude: undefined, // Not needed for GEMI-based discovery
       longitude: undefined, // Not needed for GEMI-based discovery
       cityRadiusKm: undefined, // Not needed for GEMI-based discovery

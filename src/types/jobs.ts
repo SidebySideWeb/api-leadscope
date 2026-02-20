@@ -9,6 +9,8 @@ export interface DiscoveryJobInput {
   city_id?: string; // Legacy: city UUID (for backward compatibility)
   municipality_id?: string; // Legacy: municipality internal ID (for backward compatibility)
   municipality_gemi_id?: number; // Preferred: municipality GEMI ID
+  prefecture_id?: string; // Prefecture internal ID (for prefecture-level discovery)
+  prefecture_gemi_id?: number; // Preferred: prefecture GEMI ID (for prefecture-level discovery)
   latitude?: number;
   longitude?: number;
   cityRadiusKm?: number;
