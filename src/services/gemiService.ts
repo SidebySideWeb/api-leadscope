@@ -146,8 +146,12 @@ export async function fetchGemiCompaniesForMunicipality(
       }
 
       console.log(`[GEMI] Fetching page at offset ${resultsOffset}...`);
+      console.log(`[GEMI] Request parameters:`, JSON.stringify(params, null, 2));
+      console.log(`[GEMI] Request URL: ${GEMI_API_BASE_URL}/companies`);
 
       const response = await gemiClient.get<any>('/companies', { params });
+      
+      console.log(`[GEMI] Response status: ${response.status}`);
 
       // Log response structure for debugging
       if (resultsOffset === 0 && response.data) {
@@ -191,6 +195,8 @@ export async function fetchGemiCompaniesForMunicipality(
 
       if (rawCompanies.length === 0) {
         console.warn(`[GEMI] ⚠️  No companies found in response at offset ${resultsOffset}`);
+        console.log(`[GEMI] Response data keys:`, response.data ? Object.keys(response.data) : 'null');
+        console.log(`[GEMI] Full response (first 1000 chars):`, JSON.stringify(response.data).substring(0, 1000));
         hasMore = false;
         break;
       }
@@ -367,6 +373,11 @@ export async function importGemiCompaniesToDatabase(
   
   if (companies.length === 0) {
     console.warn(`[GEMI] ⚠️  No companies to import!`);
+    console.warn(`[GEMI] This could mean:`);
+    console.warn(`[GEMI]   1. The GEMI API returned no results for the given criteria`);
+    console.warn(`[GEMI]   2. The API response structure was unexpected`);
+    console.warn(`[GEMI]   3. All companies were filtered out (missing ar_gemi)`);
+    console.warn(`[GEMI] Check the logs above for the API request parameters and response structure.`);
     return { inserted: 0, updated: 0, skipped: 0 };
   }
   
