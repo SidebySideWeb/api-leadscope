@@ -234,33 +234,58 @@ router.post('/buy-credits', authMiddleware, async (req: AuthRequest, res) => {
     const { creditPackage } = req.body;
 
     // Define credit packages
-    // Package 1: 50 credits for 50 euros (1:1 ratio)
-    // Package 2: 120 credits for 100 euros (20% bonus: 100 + 20 = 120)
-    // Package 3: 260 credits for 200 euros (30% bonus: 200 + 60 = 260)
-    const creditPackages: Record<string, { credits: number; priceEUR: number; priceId: string; bonus: string }> = {
+    // Bronze: 50 credits for 50 euros (1:1 ratio)
+    // Silver: 120 credits for 100 euros (20% bonus: 100 + 20 = 120)
+    // Gold: 260 credits for 200 euros (30% bonus: 200 + 60 = 260)
+    const creditPackages: Record<string, { credits: number; priceEUR: number; productId: string; bonus: string; name: string }> = {
+      'bronze': {
+        credits: 50,
+        priceEUR: 50,
+        productId: 'prod_Tt3B60xv6QIv5u', // Bronze package
+        bonus: '0%',
+        name: 'Bronze',
+      },
+      'silver': {
+        credits: 120,
+        priceEUR: 100,
+        productId: 'prod_Tt3B9gbSMgNNdF', // Silver package
+        bonus: '20%',
+        name: 'Silver',
+      },
+      'gold': {
+        credits: 260,
+        priceEUR: 200,
+        productId: 'prod_Tt3CuWqsz7ASaF', // Gold package
+        bonus: '30%',
+        name: 'Gold',
+      },
+      // Legacy numeric keys for backward compatibility
       '50': {
         credits: 50,
         priceEUR: 50,
-        priceId: process.env.STRIPE_PRICE_ID_CREDITS_50 || '',
+        productId: 'prod_Tt3B60xv6QIv5u',
         bonus: '0%',
+        name: 'Bronze',
       },
       '120': {
         credits: 120,
         priceEUR: 100,
-        priceId: process.env.STRIPE_PRICE_ID_CREDITS_120 || '',
+        productId: 'prod_Tt3B9gbSMgNNdF',
         bonus: '20%',
+        name: 'Silver',
       },
       '260': {
         credits: 260,
         priceEUR: 200,
-        priceId: process.env.STRIPE_PRICE_ID_CREDITS_260 || '',
+        productId: 'prod_Tt3CuWqsz7ASaF',
         bonus: '30%',
+        name: 'Gold',
       },
     };
 
     const packageData = creditPackages[creditPackage];
-    if (!packageData || !packageData.priceId) {
-      res.status(400).json({ error: 'Invalid credit package or price ID not configured' });
+    if (!packageData || !packageData.productId) {
+      res.status(400).json({ error: 'Invalid credit package or product ID not configured' });
       return;
     }
 
@@ -277,12 +302,19 @@ router.post('/buy-credits', authMiddleware, async (req: AuthRequest, res) => {
     const userEmail = userResult.rows[0]?.email;
 
     // Create Stripe checkout session for one-time payment
+    // Note: Stripe requires price IDs, not product IDs, for line_items
+    // If you have product IDs, you need to get the price IDs from those products
+    // For now, we'll create the price_data inline using the product ID
     const session = await stripe.checkout.sessions.create({
       customer_email: userEmail,
       payment_method_types: ['card'],
       line_items: [
         {
-          price: packageData.priceId,
+          price_data: {
+            product: packageData.productId,
+            currency: 'eur',
+            unit_amount: packageData.priceEUR * 100, // Convert to cents
+          },
           quantity: 1,
         },
       ],
@@ -304,6 +336,7 @@ router.post('/buy-credits', authMiddleware, async (req: AuthRequest, res) => {
       credits: packageData.credits,
       priceEUR: packageData.priceEUR,
       bonus: packageData.bonus,
+      packageName: packageData.name,
     });
   } catch (error: any) {
     console.error('[billing] Error creating credit purchase session:', error);
