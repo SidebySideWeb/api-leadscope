@@ -5,7 +5,6 @@ import { getDatasetById } from '../db/datasets.js';
 import { logDatasetExport, type ExportFormat } from '../db/exports.js';
 import { buildXlsxFile, type XlsxColumn } from '../utils/xlsx.js';
 import {
-  getTierEntitlements,
   parseTier,
   parseFormat,
   type ExportTier
@@ -13,12 +12,11 @@ import {
 
 interface RawExportRow {
   business_id: string; // UUID
-  dataset_id: string;
   business_name: string;
-  industry: string | null;
-  city: string | null;
+  ar_gemi: string | null;
+  prefecture: string | null;
+  last_gemi_sync: Date | null;
   website: string | null;
-  last_crawled_at: Date | null;
   contact_id: number | null;
   email: string | null;
   phone: string | null;
@@ -30,21 +28,12 @@ interface RawExportRow {
 
 interface AggregatedRow {
   business_name: string;
-  industry: string;
-  city: string;
+  ar_gemi: string | null;
+  prefecture: string | null;
+  last_gemi_sync: string | null;
+  email: string | null;
+  phone: string | null;
   website: string | null;
-  best_email: string | null;
-  best_phone: string | null;
-  all_emails?: string;
-  all_phones?: string;
-  social_links?: string;
-  contact_page_url?: string | null;
-  has_contact_form?: boolean;
-  last_crawled_at?: string | null;
-  contact_confidence?: string;
-  contact_sources?: string;
-  pages_crawled?: number;
-  dataset_watermark?: string;
 }
 
 function scoreContact(pageType: string | null): number {
@@ -61,26 +50,22 @@ async function queryDatasetContacts(
   // First, get all businesses with their basic info (one row per business)
   const businessesResult = await pool.query<{
     business_id: string;
-    dataset_id: string;
     business_name: string;
-    industry: string | null;
-    city: string | null;
+    ar_gemi: string | null;
+    prefecture: string | null;
+    last_gemi_sync: Date | null;
     website: string | null;
-    last_crawled_at: Date | null;
   }>(
     `
     SELECT DISTINCT
       b.id AS business_id,
-      b.dataset_id,
       b.name AS business_name,
-      i.name AS industry,
-      c.name AS city,
-      w.url AS website,
-      w.last_crawled_at
+      b.ar_gemi,
+      p.descr AS prefecture,
+      b.updated_at AS last_gemi_sync,
+      COALESCE(w.url, b.website_url) AS website
     FROM businesses b
-    LEFT JOIN datasets d ON d.id = b.dataset_id
-    LEFT JOIN industries i ON i.id = d.industry_id
-    LEFT JOIN cities c ON c.id = d.city_id
+    LEFT JOIN prefectures p ON p.id = b.prefecture_id
     LEFT JOIN websites w ON w.business_id = b.id
     WHERE b.dataset_id = $1
     ORDER BY b.name ASC
@@ -146,12 +131,11 @@ async function queryDatasetContacts(
       // Business with no contacts - still include it
       rawRows.push({
         business_id: business.business_id,
-        dataset_id: business.dataset_id,
         business_name: business.business_name,
-        industry: business.industry,
-        city: business.city,
+        ar_gemi: business.ar_gemi,
+        prefecture: business.prefecture,
+        last_gemi_sync: business.last_gemi_sync,
         website: business.website,
-        last_crawled_at: business.last_crawled_at,
         contact_id: null,
         email: null,
         phone: null,
@@ -165,12 +149,11 @@ async function queryDatasetContacts(
       for (const contact of contacts) {
         rawRows.push({
           business_id: business.business_id,
-          dataset_id: business.dataset_id,
           business_name: business.business_name,
-          industry: business.industry,
-          city: business.city,
+          ar_gemi: business.ar_gemi,
+          prefecture: business.prefecture,
+          last_gemi_sync: business.last_gemi_sync,
           website: business.website,
-          last_crawled_at: business.last_crawled_at,
           contact_id: contact.contact_id,
           email: contact.email,
           phone: contact.phone,
@@ -226,11 +209,12 @@ function aggregateRows(
     if (!byBusiness.has(row.business_id)) {
       byBusiness.set(row.business_id, {
         business_name: row.business_name || 'Unknown Business',
-        industry: row.industry || 'Unknown Industry',
-        city: row.city || 'Unknown City',
+        ar_gemi: row.ar_gemi,
+        prefecture: row.prefecture,
+        last_gemi_sync: row.last_gemi_sync ? row.last_gemi_sync.toISOString() : null,
         website: row.website,
-        best_email: null,
-        best_phone: null,
+        email: null,
+        phone: null,
         contacts: []
       });
     }
@@ -246,86 +230,37 @@ function aggregateRows(
   for (const [businessId, agg] of byBusiness.entries()) {
     const contacts = agg.contacts;
 
-    const emails = new Map<string, { score: number; source: string | null }>();
-    const phones = new Map<string, { score: number; source: string | null }>();
-    const sourcesForConfidence: string[] = [];
-
-    let contactPageUrl: string | null = null;
+    // Find best email and phone from contacts
+    let bestEmail: string | null = null;
+    let bestPhone: string | null = null;
+    let bestEmailScore = 0;
+    let bestPhoneScore = 0;
 
     for (const c of contacts) {
       const pageType = c.page_type;
       const score = scoreContact(pageType);
 
-      if (c.source_url && pageType === 'contact') {
-        contactPageUrl = c.source_url;
-      }
-
-      if (c.email) {
-        const key = c.email.toLowerCase();
-        const existing = emails.get(key);
-        if (!existing || score > existing.score) {
-          emails.set(key, { score, source: c.source_url });
-        }
-        sourcesForConfidence.push(`${key}:${score.toFixed(2)}`);
+      if (c.email && score > bestEmailScore) {
+        bestEmail = c.email;
+        bestEmailScore = score;
       }
 
       const phoneValue = c.phone || c.mobile;
-      if (phoneValue) {
-        const key = phoneValue;
-        const existing = phones.get(key);
-        if (!existing || score > existing.score) {
-          phones.set(key, { score, source: c.source_url });
-        }
-        sourcesForConfidence.push(`${key}:${score.toFixed(2)}`);
+      if (phoneValue && score > bestPhoneScore) {
+        bestPhone = phoneValue;
+        bestPhoneScore = score;
       }
     }
 
-    const bestEmailEntry = Array.from(emails.entries()).sort(
-      (a, b) => b[1].score - a[1].score
-    )[0];
-    const bestPhoneEntry = Array.from(phones.entries()).sort(
-      (a, b) => b[1].score - a[1].score
-    )[0];
-
-    const allEmails =
-      tier === 'starter'
-        ? undefined
-        : Array.from(emails.keys()).join('; ');
-    const allPhones =
-      tier === 'starter'
-        ? undefined
-        : Array.from(phones.keys()).join('; ');
-
-    const pagesCrawled = pagesMap.get(businessId) || 0;
-
     const base: AggregatedRow = {
       business_name: agg.business_name,
-      industry: agg.industry,
-      city: agg.city,
-      website: agg.website,
-      best_email: bestEmailEntry ? bestEmailEntry[0] : null,
-      best_phone: bestPhoneEntry ? bestPhoneEntry[0] : null
+      ar_gemi: agg.ar_gemi,
+      prefecture: agg.prefecture,
+      last_gemi_sync: agg.last_gemi_sync,
+      email: bestEmail,
+      phone: bestPhone,
+      website: agg.website
     };
-
-    if (tier === 'pro' || tier === 'agency') {
-      base.all_emails = allEmails || '';
-      base.all_phones = allPhones || '';
-      base.social_links = ''; // placeholder – socials would require HTML re-scan
-      base.contact_page_url = contactPageUrl;
-      base.has_contact_form = false; // could be derived from crawl_pages HTML if needed
-      base.last_crawled_at = agg.website
-        ? null
-        : null; // simplified: can be expanded with websites.last_crawled_at
-    }
-
-    if (tier === 'agency') {
-      base.contact_confidence = sourcesForConfidence.join(' | ');
-      base.contact_sources = Array.from(
-        new Set(contacts.map(c => c.source_url).filter(Boolean) as string[])
-      ).join('; ');
-      base.pages_crawled = pagesCrawled;
-      base.dataset_watermark = datasetId;
-    }
 
     result.push(base);
   }
@@ -334,32 +269,18 @@ function aggregateRows(
 }
 
 function buildColumnsForTier(tier: ExportTier): XlsxColumn[] {
-  const entitlements = getTierEntitlements(tier);
+  // Define the columns in the order requested
+  const columns: XlsxColumn[] = [
+    { header: 'Business Name', key: 'business_name', width: 30 },
+    { header: 'AR GEMI', key: 'ar_gemi', width: 20 },
+    { header: 'Prefecture', key: 'prefecture', width: 25 },
+    { header: 'Last GEMI Sync', key: 'last_gemi_sync', width: 20 },
+    { header: 'Email', key: 'email', width: 30 },
+    { header: 'Phone', key: 'phone', width: 20 },
+    { header: 'Website', key: 'website', width: 40 }
+  ];
 
-  const headerMap: Record<string, string> = {
-    business_name: 'Business Name',
-    industry: 'Industry',
-    city: 'City',
-    website: 'Website',
-    best_email: 'Best Email',
-    best_phone: 'Best Phone',
-    all_emails: 'All Emails',
-    all_phones: 'All Phones',
-    social_links: 'Social Links',
-    contact_page_url: 'Contact Page URL',
-    has_contact_form: 'Has Contact Form',
-    last_crawled_at: 'Last Crawled At',
-    contact_confidence: 'Contact Confidence',
-    contact_sources: 'Contact Sources',
-    pages_crawled: 'Pages Crawled',
-    dataset_watermark: 'Dataset Watermark'
-  };
-
-  return entitlements.columns.map(key => ({
-    header: headerMap[key] ?? key,
-    key,
-    width: 25
-  }));
+  return columns;
 }
 
 function buildCsvContent(
