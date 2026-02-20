@@ -146,11 +146,18 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     // For now, we'll use the first industry for GEMI discovery
     // In the future, we can make multiple GEMI calls or use merged keywords
     if (industry_group_id) {
-      const { getIndustriesByGroup } = await import('../db/industryGroups.js');
+      const { getIndustriesByGroup, getIndustryGroupById } = await import('../db/industryGroups.js');
+      
+      // First verify the industry group exists
+      const industryGroup = await getIndustryGroupById(industry_group_id);
+      if (!industryGroup) {
+        throw new Error(`Industry group ${industry_group_id} not found`);
+      }
+      
       const industriesInGroup = await getIndustriesByGroup(industry_group_id);
       
       if (industriesInGroup.length === 0) {
-        throw new Error(`No industries found for industry group ${industry_group_id}`);
+        throw new Error(`No industries found for industry group "${industryGroup.name}" (${industry_group_id}). Please select a different industry group or contact support.`);
       }
       
       // Use the first industry (highest search_weight) for GEMI discovery
@@ -716,7 +723,17 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       // Ignore errors getting plan
     }
     
-    return res.status(500).json({
+    // Determine if this is a validation error (400) or server error (500)
+    const isValidationError = 
+      error.message?.includes('No industries found for industry group') ||
+      error.message?.includes('Industry group') && error.message?.includes('not found') ||
+      error.message?.includes('Invalid discovery request') ||
+      error.message?.includes('missing required field') ||
+      error.message?.includes('Unauthorized');
+    
+    const statusCode = isValidationError ? 400 : 500;
+    
+    return res.status(statusCode).json({
       data: null,
       meta: {
         plan_id: errorPlan,
