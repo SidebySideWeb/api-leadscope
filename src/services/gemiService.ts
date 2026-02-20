@@ -288,6 +288,15 @@ export async function fetchGemiCompaniesForMunicipality(
         break;
       }
     } catch (error: any) {
+      // Handle 404 as "no businesses found" rather than an error
+      if (error.response && error.response.status === 404) {
+        console.log(`[GEMI] No businesses found for municipality ${municipalityGemiId}${activityId ? ` and activity ${activityId}` : ''} (404)`);
+        // Return empty array - this is a valid response meaning no businesses match the criteria
+        hasMore = false;
+        break;
+      }
+      
+      // For other errors, log and throw
       console.error(`[GEMI] Error fetching companies at offset ${resultsOffset}:`, error.message);
       if (error.response) {
         console.error(`[GEMI] Status: ${error.response.status}, Data:`, error.response.data);

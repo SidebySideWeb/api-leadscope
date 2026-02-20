@@ -444,14 +444,27 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
 
           console.log(`[runDiscoveryJob] GEMI import completed: ${importResult.inserted} inserted, ${importResult.updated} updated`);
         } catch (error: any) {
-          console.error(`[runDiscoveryJob] GEMI API error:`, error.message);
-          discoveryResult = {
-            businessesFound: 0,
-            businessesCreated: 0,
-            businessesUpdated: 0,
-            searchesExecuted: 0,
-            errors: [error.message || 'Failed to fetch from GEMI API'],
-          };
+          // 404 errors are handled in gemiService and return empty array, so they shouldn't reach here
+          // But if they do, treat them as "no results" rather than an error
+          if (error.response && error.response.status === 404) {
+            console.log(`[runDiscoveryJob] No businesses found for municipality ${municipalityGemiId} and activity ${industryGemiId} (404)`);
+            discoveryResult = {
+              businessesFound: 0,
+              businessesCreated: 0,
+              businessesUpdated: 0,
+              searchesExecuted: 1, // Still count as a search attempt
+              errors: [], // No error - just no results
+            };
+          } else {
+            console.error(`[runDiscoveryJob] GEMI API error:`, error.message);
+            discoveryResult = {
+              businessesFound: 0,
+              businessesCreated: 0,
+              businessesUpdated: 0,
+              searchesExecuted: 0,
+              errors: [error.message || 'Failed to fetch from GEMI API'],
+            };
+          }
         }
       } else {
         // municipalityGemiId was not found/assigned, discoveryResult should already be set above
