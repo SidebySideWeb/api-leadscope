@@ -419,7 +419,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     if (existingCount === 0) {
       console.log(`[runDiscoveryJob] No existing businesses found, fetching from GEMI API...`);
       
-      let municipalityGemiId: number | undefined;
+      let municipalityGemiId: number | number[] | undefined;
       let prefectureGemiId: number | undefined;
       
       // Use municipality_gemi_id directly if available (preferred)
