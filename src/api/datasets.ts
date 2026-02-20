@@ -548,4 +548,156 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res): Promis
   }
 });
 
+/**
+ * GET /datasets/:id/crawl/status
+ * Get crawl and extraction job status for a dataset
+ */
+router.get('/:id/crawl/status', authMiddleware, async (req: AuthRequest, res): Promise<void> => {
+  try {
+    const datasetId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const userId = req.userId!;
+
+    if (!datasetId) {
+      res.status(400).json({
+        data: null,
+        meta: {
+          plan_id: 'demo',
+          gated: false,
+          total_available: 0,
+          total_returned: 0,
+          gate_reason: 'Dataset ID is required',
+        },
+      });
+      return;
+    }
+
+    // Verify dataset ownership
+    await verifyDatasetOwnership(datasetId, userId);
+
+    // Check crawl and extraction job status
+    const crawlJobsResult = await pool.query<{ count: number }>(
+      `SELECT COUNT(*) as count
+       FROM crawl_jobs cj
+       JOIN websites w ON w.id = cj.website_id
+       JOIN businesses b ON b.id = w.business_id
+       WHERE b.dataset_id = $1
+         AND cj.status IN ('pending', 'running')`,
+      [datasetId]
+    );
+    const pendingCrawlJobs = parseInt(crawlJobsResult.rows[0]?.count.toString() || '0');
+
+    const runningCrawlJobsResult = await pool.query<{ count: number }>(
+      `SELECT COUNT(*) as count
+       FROM crawl_jobs cj
+       JOIN websites w ON w.id = cj.website_id
+       JOIN businesses b ON b.id = w.business_id
+       WHERE b.dataset_id = $1
+         AND cj.status = 'running'`,
+      [datasetId]
+    );
+    const runningCrawlJobs = parseInt(runningCrawlJobsResult.rows[0]?.count.toString() || '0');
+
+    const completedCrawlJobsResult = await pool.query<{ count: number }>(
+      `SELECT COUNT(*) as count
+       FROM crawl_jobs cj
+       JOIN websites w ON w.id = cj.website_id
+       JOIN businesses b ON b.id = w.business_id
+       WHERE b.dataset_id = $1
+         AND cj.status = 'completed'`,
+      [datasetId]
+    );
+    const completedCrawlJobs = parseInt(completedCrawlJobsResult.rows[0]?.count.toString() || '0');
+
+    const failedCrawlJobsResult = await pool.query<{ count: number }>(
+      `SELECT COUNT(*) as count
+       FROM crawl_jobs cj
+       JOIN websites w ON w.id = cj.website_id
+       JOIN businesses b ON b.id = w.business_id
+       WHERE b.dataset_id = $1
+         AND cj.status = 'failed'`,
+      [datasetId]
+    );
+    const failedCrawlJobs = parseInt(failedCrawlJobsResult.rows[0]?.count.toString() || '0');
+
+    // Check extraction jobs
+    const extractionJobsResult = await pool.query<{ count: number }>(
+      `SELECT COUNT(*) as count
+       FROM extraction_jobs ej
+       JOIN businesses b ON b.id = ej.business_id
+       WHERE b.dataset_id = $1
+         AND ej.status IN ('pending', 'running')`,
+      [datasetId]
+    );
+    const pendingExtractionJobs = parseInt(extractionJobsResult.rows[0]?.count.toString() || '0');
+
+    const runningExtractionJobsResult = await pool.query<{ count: number }>(
+      `SELECT COUNT(*) as count
+       FROM extraction_jobs ej
+       JOIN businesses b ON b.id = ej.business_id
+       WHERE b.dataset_id = $1
+         AND ej.status = 'running'`,
+      [datasetId]
+    );
+    const runningExtractionJobs = parseInt(runningExtractionJobsResult.rows[0]?.count.toString() || '0');
+
+    const completedExtractionJobsResult = await pool.query<{ count: number }>(
+      `SELECT COUNT(*) as count
+       FROM extraction_jobs ej
+       JOIN businesses b ON b.id = ej.business_id
+       WHERE b.dataset_id = $1
+         AND ej.status = 'completed'`,
+      [datasetId]
+    );
+    const completedExtractionJobs = parseInt(completedExtractionJobsResult.rows[0]?.count.toString() || '0');
+
+    const failedExtractionJobsResult = await pool.query<{ count: number }>(
+      `SELECT COUNT(*) as count
+       FROM extraction_jobs ej
+       JOIN businesses b ON b.id = ej.business_id
+       WHERE b.dataset_id = $1
+         AND ej.status = 'failed'`,
+      [datasetId]
+    );
+    const failedExtractionJobs = parseInt(failedExtractionJobsResult.rows[0]?.count.toString() || '0');
+
+    const allComplete = pendingCrawlJobs === 0 && pendingExtractionJobs === 0;
+
+    res.json({
+      data: {
+        allComplete,
+        crawl: {
+          pending: pendingCrawlJobs,
+          running: runningCrawlJobs,
+          completed: completedCrawlJobs,
+          failed: failedCrawlJobs,
+        },
+        extraction: {
+          pending: pendingExtractionJobs,
+          running: runningExtractionJobs,
+          completed: completedExtractionJobs,
+          failed: failedExtractionJobs,
+        },
+      },
+      meta: {
+        plan_id: 'demo',
+        gated: false,
+        total_available: 1,
+        total_returned: 1,
+      },
+    });
+  } catch (error: any) {
+    console.error('[datasets] Error fetching crawl status:', error);
+    res.status(error.status || 500).json({
+      data: null,
+      meta: {
+        plan_id: 'demo',
+        gated: false,
+        total_available: 0,
+        total_returned: 0,
+        gate_reason: error.message || 'Failed to fetch crawl status',
+      },
+    });
+  }
+});
+
 export default router;
