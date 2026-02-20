@@ -160,7 +160,7 @@ export async function createDiscoveryRun(
     const result = await pool.query<DiscoveryRun>(
       `INSERT INTO discovery_runs (dataset_id, status)
        VALUES ($1, 'running')
-       RETURNING id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates`,
+       RETURNING id, dataset_id, status, created_at, started_at, completed_at, cost_estimates`,
       [datasetId]
     );
     const row = result.rows[0];
@@ -229,7 +229,7 @@ export async function updateDiscoveryRun(
       `UPDATE discovery_runs
        SET ${updates.join(', ')}
        WHERE id = $${index}
-       RETURNING id, dataset_id, status, created_at, started_at, completed_at, error_message, cost_estimates`,
+       RETURNING id, dataset_id, status, created_at, started_at, completed_at, cost_estimates`,
       values
     );
   } catch (error: any) {
