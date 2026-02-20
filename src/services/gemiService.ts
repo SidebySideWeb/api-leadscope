@@ -328,6 +328,11 @@ export async function fetchGemiCompaniesForMunicipality(
               : `municipality ${municipalityIds[0]}`)
           : `prefecture ${prefectureGemiId}`;
         console.log(`[GEMI] No businesses found for ${locationDesc}${activityId ? ` and activity ${activityId}` : ''} (404)`);
+        console.log(`[GEMI] 404 Response status: ${error.response.status}`);
+        console.log(`[GEMI] 404 Response headers:`, JSON.stringify(error.response.headers, null, 2));
+        console.log(`[GEMI] 404 Response data:`, JSON.stringify(error.response.data, null, 2));
+        console.log(`[GEMI] 404 Request URL: ${error.config?.url || 'unknown'}`);
+        console.log(`[GEMI] 404 Request params:`, JSON.stringify(error.config?.params || {}, null, 2));
         // Return empty array - this is a valid response meaning no businesses match the criteria
         hasMore = false;
         break;
