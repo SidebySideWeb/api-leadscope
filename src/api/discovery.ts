@@ -418,8 +418,13 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       locationName = cityName;
     }
     
-    // Generate dataset name: "Industry Name - Location Name"
-    datasetName = `${industryNameForDataset} - ${locationName}`;
+    // Generate dataset name: "Industry Group - Region - Municipality (if exists)"
+    // Format: industry group - prefecture - municipality (if municipality exists)
+    let municipalityPart = '';
+    if (municipality_id && municipalityName !== 'Unknown') {
+      municipalityPart = ` - ${municipalityName}`;
+    }
+    datasetName = `${industryNameForDataset} - ${locationName}${municipalityPart}`;
 
     // Find or resolve dataset ID FIRST (before creating discovery_run)
     // dataset_id is optional - if not provided, find or create one

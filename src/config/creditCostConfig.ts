@@ -19,7 +19,7 @@ export const CREDIT_COSTS: CreditCosts = {
   discoveryBusiness: 0.2,
   websiteCrawl: 1,
   emailExtraction: 2,
-  exportRow: 0.1,
+  exportRow: 0.05, // 0.05 euros per row (1 credit = 1 euro)
 };
 
 /**

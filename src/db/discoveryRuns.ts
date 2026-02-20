@@ -355,8 +355,7 @@ export async function cleanupStuckDiscoveryRuns(timeoutSeconds: number = 300): P
   const result = await pool.query<{ id: string }>(
     `UPDATE discovery_runs
      SET status = 'failed',
-         completed_at = NOW(),
-         error_message = 'Discovery run timed out: exceeded maximum execution time'
+         completed_at = NOW()
      WHERE status = 'running'
      AND started_at IS NOT NULL
      AND started_at < $1
@@ -365,7 +364,7 @@ export async function cleanupStuckDiscoveryRuns(timeoutSeconds: number = 300): P
        FROM businesses b
        JOIN extraction_jobs ej ON ej.business_id = b.id
        WHERE b.discovery_run_id = discovery_runs.id
-       AND ej.status IN ('queued', 'running')
+       AND ej.status IN ('pending', 'running')
      )
      RETURNING id`,
     [timeoutThreshold]

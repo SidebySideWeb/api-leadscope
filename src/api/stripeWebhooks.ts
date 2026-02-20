@@ -11,6 +11,7 @@
 
 import express from 'express';
 import { handleSubscriptionCreated, handleSubscriptionUpdated, handleInvoicePaymentSucceeded } from '../services/billingService.js';
+import { handleCheckoutSessionCompleted } from '../services/billingService.js';
 import { Logger } from '../crawler/vrisko/utils/logger.js';
 
 const logger = new Logger('StripeWebhook');
@@ -69,6 +70,10 @@ router.post('/stripe', express.raw({ type: 'application/json' }), async (req, re
           period_start: event.data.object.period_start,
           period_end: event.data.object.period_end,
         });
+        break;
+
+      case 'checkout.session.completed':
+        await handleCheckoutSessionCompleted(event.data.object);
         break;
 
       default:

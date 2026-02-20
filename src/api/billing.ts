@@ -234,18 +234,27 @@ router.post('/buy-credits', authMiddleware, async (req: AuthRequest, res) => {
     const { creditPackage } = req.body;
 
     // Define credit packages
-    const creditPackages: Record<string, { credits: number; priceId: string }> = {
-      '500': {
-        credits: 500,
-        priceId: process.env.STRIPE_PRICE_ID_CREDITS_500 || '',
+    // Package 1: 50 credits for 50 euros (1:1 ratio)
+    // Package 2: 120 credits for 100 euros (20% bonus: 100 + 20 = 120)
+    // Package 3: 260 credits for 200 euros (30% bonus: 200 + 60 = 260)
+    const creditPackages: Record<string, { credits: number; priceEUR: number; priceId: string; bonus: string }> = {
+      '50': {
+        credits: 50,
+        priceEUR: 50,
+        priceId: process.env.STRIPE_PRICE_ID_CREDITS_50 || '',
+        bonus: '0%',
       },
-      '1000': {
-        credits: 1000,
-        priceId: process.env.STRIPE_PRICE_ID_CREDITS_1000 || '',
+      '120': {
+        credits: 120,
+        priceEUR: 100,
+        priceId: process.env.STRIPE_PRICE_ID_CREDITS_120 || '',
+        bonus: '20%',
       },
-      '5000': {
-        credits: 5000,
-        priceId: process.env.STRIPE_PRICE_ID_CREDITS_5000 || '',
+      '260': {
+        credits: 260,
+        priceEUR: 200,
+        priceId: process.env.STRIPE_PRICE_ID_CREDITS_260 || '',
+        bonus: '30%',
       },
     };
 
@@ -283,6 +292,8 @@ router.post('/buy-credits', authMiddleware, async (req: AuthRequest, res) => {
       metadata: {
         userId,
         credits: packageData.credits.toString(),
+        priceEUR: packageData.priceEUR.toString(),
+        bonus: packageData.bonus,
         type: 'credit_purchase',
       },
     });
@@ -291,6 +302,8 @@ router.post('/buy-credits', authMiddleware, async (req: AuthRequest, res) => {
       url: session.url,
       sessionId: session.id,
       credits: packageData.credits,
+      priceEUR: packageData.priceEUR,
+      bonus: packageData.bonus,
     });
   } catch (error: any) {
     console.error('[billing] Error creating credit purchase session:', error);

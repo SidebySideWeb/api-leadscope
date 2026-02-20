@@ -68,8 +68,24 @@ export async function handleCheckoutSessionCompleted(
 
     console.log(`[handleCheckoutSessionCompleted] Subscription created: ${subscription.id} for user ${userId}, plan: ${plan}`);
   } else if (session.mode === 'payment') {
-    // One-time payment (snapshot) - no subscription to create
-    console.log(`[handleCheckoutSessionCompleted] One-time payment completed for user ${userId}`);
+    // One-time payment - could be credit purchase or snapshot
+    // Check metadata to see if it's a credit purchase
+    if (session.metadata?.type === 'credit_purchase' && session.metadata?.credits) {
+      const credits = parseInt(session.metadata.credits, 10);
+      if (!isNaN(credits) && credits > 0) {
+        const { addCredits } = await import('./creditService.js');
+        await addCredits(
+          userId,
+          credits,
+          `Credit purchase: ${credits} credits (${session.metadata.bonus || '0%'} bonus)`,
+          session.id // Use session ID as reference
+        );
+        console.log(`[handleCheckoutSessionCompleted] Added ${credits} credits to user ${userId} from checkout session ${session.id}`);
+      }
+    } else {
+      // Other one-time payment (e.g., snapshot) - no action needed
+      console.log(`[handleCheckoutSessionCompleted] One-time payment completed for user ${userId}`);
+    }
   }
 }
 

@@ -567,13 +567,16 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     console.log(`   Crawl jobs created: ${crawlJobsCreated}`);
 
     // Mark discovery_run as completed
+    // Note: Even if no businesses were found, discovery is still considered complete
     try {
       if (typeof discoveryRun !== 'undefined') {
         await updateDiscoveryRun(discoveryRun.id, {
           status: 'completed',
           completed_at: new Date(),
         });
-        console.log(`[runDiscoveryJob] Marked discovery_run as completed: ${discoveryRun.id}`);
+        console.log(`[runDiscoveryJob] Marked discovery_run as completed: ${discoveryRun.id} (found ${discoveryResult.businessesFound} businesses)`);
+      } else {
+        console.warn('[runDiscoveryJob] discoveryRun is undefined, cannot mark as completed');
       }
     } catch (updateError) {
       console.error('[runDiscoveryJob] Failed to update discovery_run status to completed:', updateError);

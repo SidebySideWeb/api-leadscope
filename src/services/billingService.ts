@@ -156,3 +156,50 @@ export async function handleInvoicePaymentSucceeded(data: {
     `Stripe invoice payment succeeded: ${data.subscription}`
   );
 }
+
+/**
+ * Handle Stripe checkout.session.completed webhook
+ * Used for one-time credit purchases
+ */
+export async function handleCheckoutSessionCompleted(session: {
+  id: string;
+  customer_email?: string;
+  metadata?: {
+    userId?: string;
+    credits?: string;
+    priceEUR?: string;
+    bonus?: string;
+    type?: string;
+  };
+  amount_total?: number;
+}): Promise<void> {
+  // Only handle credit purchases (not subscriptions)
+  if (session.metadata?.type !== 'credit_purchase') {
+    return;
+  }
+
+  const userId = session.metadata?.userId;
+  const creditsStr = session.metadata?.credits;
+
+  if (!userId || !creditsStr) {
+    console.warn(`[billingService] Missing userId or credits in checkout session ${session.id}`);
+    return;
+  }
+
+  const credits = parseInt(creditsStr, 10);
+  if (isNaN(credits) || credits <= 0) {
+    console.warn(`[billingService] Invalid credits amount: ${creditsStr}`);
+    return;
+  }
+
+  // Add credits to user account
+  const { addCredits } = await import('./creditService.js');
+  await addCredits(
+    userId,
+    credits,
+    `Credit purchase: ${credits} credits (${session.metadata.bonus || '0%'} bonus)`,
+    session.id // Use session ID as reference
+  );
+
+  console.log(`[billingService] Added ${credits} credits to user ${userId} from checkout session ${session.id}`);
+}
