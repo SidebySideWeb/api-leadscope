@@ -106,6 +106,7 @@ export async function fetchGemiCompaniesForMunicipality(
 
   const allCompanies: GemiCompany[] = [];
   let resultsOffset = 0;
+  const resultsSize = 200; // Maximum results per request as per API documentation
   let totalCount = 0;
   let hasMore = true;
 
@@ -134,7 +135,7 @@ export async function fetchGemiCompaniesForMunicipality(
     try {
       const params: any = {
         resultsOffset,
-        resultsSize: 100, // Use 'resultsSize' instead of 'limit'
+        resultsSize, // Maximum 200 results per request
         resultsSortBy: '+arGemi', // Sort by AR GEMI ascending
       };
 
@@ -317,7 +318,13 @@ export async function fetchGemiCompaniesForMunicipality(
       }
 
       // Check if there are more results
-      resultsOffset += validCompanies.length;
+      // Increment offset by resultsSize (200) to get the next page, not by the number of results received
+      // This ensures proper pagination even if some results are filtered out
+      resultsOffset += resultsSize;
+      
+      // Continue if:
+      // 1. We got results in this batch (might be less than resultsSize if near the end)
+      // 2. AND (we don't know totalCount yet OR we haven't reached the total)
       hasMore = validCompanies.length > 0 && (totalCount === 0 || resultsOffset < totalCount);
 
       console.log(`[GEMI] Fetched ${validCompanies.length} companies (total: ${allCompanies.length}/${totalCount})`);

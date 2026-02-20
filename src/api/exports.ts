@@ -199,9 +199,12 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
       const filters = row.filters || {};
       const tier = filters.tier || 'starter';
       
-      // Determine status: if file_path is empty/null, export is still processing
-      const isProcessing = !row.file_path || row.file_path.trim() === '';
-      const status = isProcessing ? 'processing' : 'completed';
+      // Determine status: check if export failed, is processing, or completed
+      const filePath = row.file_path || '';
+      const isFailed = filePath.startsWith('FAILED:');
+      const isProcessing = !filePath || filePath.trim() === '' || isFailed;
+      const status = isFailed ? 'failed' : (isProcessing ? 'processing' : 'completed');
+      const errorMessage = isFailed ? filePath.replace('FAILED: ', '') : null;
       
       // Use Next.js API route for downloads (better CORS handling)
       // Frontend will proxy to backend
@@ -219,7 +222,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         rows_total: row.total_rows,
         file_path: row.file_path,
         download_url: downloadUrl,
-        status: status, // 'processing' or 'completed'
+        status: status, // 'processing', 'completed', or 'failed'
+        error: errorMessage || undefined,
         created_at: row.created_at.toISOString(),
         expires_at: row.expires_at ? row.expires_at.toISOString() : null,
       };
@@ -434,9 +438,22 @@ async function processExportAsync(
       console.log(`[processExportAsync] ✅ All jobs completed after ${waitResult.waitedSeconds}s - proceeding with export ${exportId}`);
     }
 
-    // Generate export
-    const filePath = await runDatasetExport(datasetId, tier, format);
-    console.log(`[processExportAsync] Export ${exportId} generated:`, filePath);
+    // Generate export with timeout (10 minutes max)
+    console.log(`[processExportAsync] Starting export generation for ${exportId}...`);
+    let filePath: string;
+    try {
+      const exportTimeout = 600000; // 10 minutes
+      filePath = await Promise.race([
+        runDatasetExport(datasetId, tier, format),
+        new Promise<string>((_, reject) => 
+          setTimeout(() => reject(new Error('Export generation timeout after 10 minutes')), exportTimeout)
+        )
+      ]);
+      console.log(`[processExportAsync] Export ${exportId} generated:`, filePath);
+    } catch (exportError: any) {
+      console.error(`[processExportAsync] Export generation failed for ${exportId}:`, exportError);
+      throw new Error(`Export generation failed: ${exportError.message || 'Unknown error'}`);
+    }
 
     // Update export record with file path and row count
     const { getDatasetById } = await import('../db/datasets.js');
@@ -457,14 +474,27 @@ async function processExportAsync(
     }
 
   } catch (error: any) {
-    console.error(`[processExportAsync] Error processing export ${exportId}:`, error);
-    // Mark export as failed (file_path stays empty/null)
-    await pool.query(
-      'UPDATE exports SET total_rows = 0 WHERE id = $1',
-      [exportId]
-    ).catch(updateError => {
+    console.error(`[processExportAsync] ❌ Error processing export ${exportId}:`, error);
+    console.error(`[processExportAsync] Error stack:`, error.stack);
+    
+    // Mark export as failed by setting a special file_path value
+    // This allows us to distinguish between "processing" and "failed"
+    try {
+      await pool.query(
+        'UPDATE exports SET file_path = $1, total_rows = 0 WHERE id = $2',
+        [`FAILED: ${error.message || 'Unknown error'}`, exportId]
+      );
+      console.log(`[processExportAsync] Marked export ${exportId} as failed`);
+    } catch (updateError: any) {
       console.error(`[processExportAsync] Failed to update export ${exportId} status:`, updateError);
-    });
+      // Try to at least set total_rows to 0 to indicate failure
+      await pool.query(
+        'UPDATE exports SET total_rows = 0 WHERE id = $1',
+        [exportId]
+      ).catch(finalError => {
+        console.error(`[processExportAsync] Failed to update export ${exportId} total_rows:`, finalError);
+      });
+    }
   }
 }
 
@@ -495,8 +525,11 @@ router.get('/:id/status', authMiddleware, async (req: AuthRequest, res): Promise
     }
 
     const exportRow = exportResult.rows[0];
-    const isProcessing = !exportRow.file_path || exportRow.file_path.trim() === '';
-    const status = isProcessing ? 'processing' : 'completed';
+    const filePath = exportRow.file_path || '';
+    const isFailed = filePath.startsWith('FAILED:');
+    const isProcessing = !filePath || filePath.trim() === '' || isFailed;
+    const status = isFailed ? 'failed' : (isProcessing ? 'processing' : 'completed');
+    const errorMessage = isFailed ? filePath.replace('FAILED: ', '') : null;
 
     res.json({
       id: exportId,
@@ -539,6 +572,16 @@ router.get('/:id/download', authMiddleware, async (req: AuthRequest, res): Promi
 
     const exportRow = exportResult.rows[0];
     
+    // Check if export failed
+    if (exportRow.file_path && exportRow.file_path.startsWith('FAILED:')) {
+      res.status(500).json({ 
+        error: 'Export failed',
+        status: 'failed',
+        message: exportRow.file_path.replace('FAILED: ', '')
+      });
+      return;
+    }
+    
     // Check if file exists and is ready (not processing)
     if (!exportRow.file_path || exportRow.file_path.trim() === '') {
       res.status(202).json({ 
@@ -577,5 +620,47 @@ router.get('/:id/download', authMiddleware, async (req: AuthRequest, res): Promi
     }
   }
 });
+
+/**
+ * Cleanup function to mark stuck exports as failed
+ * Should be called periodically (e.g., via cron job or on server startup)
+ */
+export async function cleanupStuckExports(): Promise<number> {
+  try {
+    // Find exports that have been processing for more than 30 minutes
+    const stuckExportsResult = await pool.query<{ id: string; created_at: Date }>(
+      `SELECT id, created_at 
+       FROM exports 
+       WHERE (file_path IS NULL OR file_path = '') 
+         AND created_at < NOW() - INTERVAL '30 minutes'`
+    );
+
+    if (stuckExportsResult.rows.length === 0) {
+      return 0;
+    }
+
+    console.log(`[cleanupStuckExports] Found ${stuckExportsResult.rows.length} stuck exports, marking as failed...`);
+
+    let cleaned = 0;
+    for (const row of stuckExportsResult.rows) {
+      const ageMinutes = Math.floor((Date.now() - row.created_at.getTime()) / 60000);
+      try {
+        await pool.query(
+          'UPDATE exports SET file_path = $1, total_rows = 0 WHERE id = $2',
+          [`FAILED: Export timed out after ${ageMinutes} minutes`, row.id]
+        );
+        cleaned++;
+        console.log(`[cleanupStuckExports] Marked export ${row.id} as failed (stuck for ${ageMinutes} minutes)`);
+      } catch (error: any) {
+        console.error(`[cleanupStuckExports] Failed to mark export ${row.id} as failed:`, error.message);
+      }
+    }
+
+    return cleaned;
+  } catch (error: any) {
+    console.error('[cleanupStuckExports] Error cleaning up stuck exports:', error);
+    return 0;
+  }
+}
 
 export default router;
