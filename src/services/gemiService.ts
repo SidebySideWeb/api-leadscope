@@ -85,14 +85,14 @@ export interface GemiCompaniesResponse {
 }
 
 /**
- * Fetch companies from GEMI API for a specific municipality or prefecture
+ * Fetch companies from GEMI API for a specific municipality, multiple municipalities, or prefecture
  * Automatically handles pagination
- * @param municipalityGemiId - Municipality GEMI ID (optional if prefectureGemiId is provided)
+ * @param municipalityGemiId - Municipality GEMI ID or array of IDs (optional if prefectureGemiId is provided)
  * @param activityId - Activity/Industry GEMI ID (optional)
  * @param prefectureGemiId - Prefecture GEMI ID (optional if municipalityGemiId is provided)
  */
 export async function fetchGemiCompaniesForMunicipality(
-  municipalityGemiId?: number,
+  municipalityGemiId?: number | number[],
   activityId?: number,
   prefectureGemiId?: number
 ): Promise<GemiCompany[]> {
@@ -109,8 +109,17 @@ export async function fetchGemiCompaniesForMunicipality(
   let totalCount = 0;
   let hasMore = true;
 
-  const locationType = municipalityGemiId ? 'municipality' : 'prefecture';
-  const locationId = municipalityGemiId || prefectureGemiId;
+  // Normalize municipalityGemiId to array for consistent handling
+  const municipalityIds = municipalityGemiId 
+    ? (Array.isArray(municipalityGemiId) ? municipalityGemiId : [municipalityGemiId])
+    : [];
+
+  const locationType = municipalityGemiId 
+    ? (municipalityIds.length > 1 ? `${municipalityIds.length} municipalities` : 'municipality')
+    : 'prefecture';
+  const locationId = municipalityGemiId 
+    ? (municipalityIds.length > 1 ? municipalityIds.join(',') : String(municipalityIds[0]))
+    : String(prefectureGemiId);
   console.log(`[GEMI] Fetching companies for ${locationType} ${locationId}...`);
 
   while (hasMore) {
@@ -126,7 +135,8 @@ export async function fetchGemiCompaniesForMunicipality(
 
       // Use municipality if provided, otherwise use prefecture
       if (municipalityGemiId) {
-        params.municipalities = municipalityGemiId; // Use 'municipalities' (plural) as per API
+        // GEMI API supports arrays for municipalities parameter
+        params.municipalities = municipalityIds.length === 1 ? municipalityIds[0] : municipalityIds;
       } else if (prefectureGemiId) {
         params.prefectures = prefectureGemiId; // Use 'prefectures' (plural) for prefecture-level queries
       }
@@ -307,7 +317,9 @@ export async function fetchGemiCompaniesForMunicipality(
       // Handle 404 as "no businesses found" rather than an error
       if (error.response && error.response.status === 404) {
         const locationDesc = municipalityGemiId 
-          ? `municipality ${municipalityGemiId}` 
+          ? (municipalityIds.length > 1 
+              ? `${municipalityIds.length} municipalities` 
+              : `municipality ${municipalityIds[0]}`)
           : `prefecture ${prefectureGemiId}`;
         console.log(`[GEMI] No businesses found for ${locationDesc}${activityId ? ` and activity ${activityId}` : ''} (404)`);
         // Return empty array - this is a valid response meaning no businesses match the criteria
@@ -325,7 +337,9 @@ export async function fetchGemiCompaniesForMunicipality(
   }
 
   const locationDesc = municipalityGemiId 
-    ? `municipality ${municipalityGemiId}` 
+    ? (municipalityIds.length > 1 
+        ? `${municipalityIds.length} municipalities` 
+        : `municipality ${municipalityIds[0]}`)
     : `prefecture ${prefectureGemiId}`;
   console.log(`[GEMI] Completed fetching ${allCompanies.length} companies for ${locationDesc}`);
   return allCompanies;
