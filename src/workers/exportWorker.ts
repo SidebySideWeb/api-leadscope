@@ -12,11 +12,11 @@ import {
 } from '../billing/entitlements.js';
 
 interface RawExportRow {
-  business_id: number;
+  business_id: string; // UUID
   dataset_id: string;
   business_name: string;
-  industry: string;
-  city: string;
+  industry: string | null;
+  city: string | null;
   website: string | null;
   last_crawled_at: Date | null;
   contact_id: number | null;
@@ -58,16 +58,51 @@ function scoreContact(pageType: string | null): number {
 async function queryDatasetContacts(
   datasetId: string
 ): Promise<RawExportRow[]> {
-  const result = await pool.query<RawExportRow>(
+  // First, get all businesses with their basic info (one row per business)
+  const businessesResult = await pool.query<{
+    business_id: string;
+    dataset_id: string;
+    business_name: string;
+    industry: string | null;
+    city: string | null;
+    website: string | null;
+    last_crawled_at: Date | null;
+  }>(
     `
-    SELECT
+    SELECT DISTINCT
       b.id AS business_id,
       b.dataset_id,
       b.name AS business_name,
       i.name AS industry,
       c.name AS city,
       w.url AS website,
-      w.last_crawled_at,
+      w.last_crawled_at
+    FROM businesses b
+    LEFT JOIN datasets d ON d.id = b.dataset_id
+    LEFT JOIN industries i ON i.id = d.industry_id
+    LEFT JOIN cities c ON c.id = d.city_id
+    LEFT JOIN websites w ON w.business_id = b.id
+    WHERE b.dataset_id = $1
+    ORDER BY b.name ASC
+    `,
+    [datasetId]
+  );
+
+  // Then get all contacts for these businesses
+  const businessIds = businessesResult.rows.map(r => r.business_id);
+  const contactsResult = businessIds.length > 0 ? await pool.query<{
+    business_id: string;
+    contact_id: number;
+    email: string | null;
+    phone: string | null;
+    mobile: string | null;
+    is_generic: boolean | null;
+    source_url: string | null;
+    page_type: string | null;
+  }>(
+    `
+    SELECT
+      cs.business_id,
       ct.id AS contact_id,
       ct.email,
       ct.phone,
@@ -75,26 +110,86 @@ async function queryDatasetContacts(
       ct.is_generic,
       cs.source_url,
       cs.page_type
-    FROM businesses b
-    LEFT JOIN datasets d ON d.id = b.dataset_id
-    LEFT JOIN industries i ON i.id = d.industry_id
-    LEFT JOIN cities c ON c.id = d.city_id
-    LEFT JOIN websites w ON w.business_id = b.id
-    LEFT JOIN contact_sources cs ON cs.business_id = b.id
-    LEFT JOIN contacts ct ON ct.id = cs.contact_id
-    WHERE b.dataset_id = $1
-    ORDER BY b.name ASC, ct.last_verified_at DESC NULLS LAST
+    FROM contact_sources cs
+    JOIN contacts ct ON ct.id = cs.contact_id
+    WHERE cs.business_id = ANY($1)
+    ORDER BY cs.business_id, cs.found_at DESC
     `,
-    [datasetId]
-  );
+    [businessIds]
+  ) : { rows: [] };
 
-  return result.rows;
+  // Create a map of contacts by business_id
+  type ContactRow = {
+    business_id: string;
+    contact_id: number;
+    email: string | null;
+    phone: string | null;
+    mobile: string | null;
+    is_generic: boolean | null;
+    source_url: string | null;
+    page_type: string | null;
+  };
+  const contactsByBusiness = new Map<string, ContactRow[]>();
+  for (const contact of contactsResult.rows) {
+    if (!contactsByBusiness.has(contact.business_id)) {
+      contactsByBusiness.set(contact.business_id, []);
+    }
+    contactsByBusiness.get(contact.business_id)!.push(contact);
+  }
+
+  // Combine businesses with their contacts
+  const rawRows: RawExportRow[] = [];
+  for (const business of businessesResult.rows) {
+    const contacts = contactsByBusiness.get(business.business_id) || [];
+    
+    if (contacts.length === 0) {
+      // Business with no contacts - still include it
+      rawRows.push({
+        business_id: business.business_id,
+        dataset_id: business.dataset_id,
+        business_name: business.business_name,
+        industry: business.industry,
+        city: business.city,
+        website: business.website,
+        last_crawled_at: business.last_crawled_at,
+        contact_id: null,
+        email: null,
+        phone: null,
+        mobile: null,
+        is_generic: null,
+        source_url: null,
+        page_type: null,
+      });
+    } else {
+      // Business with contacts - one row per contact
+      for (const contact of contacts) {
+        rawRows.push({
+          business_id: business.business_id,
+          dataset_id: business.dataset_id,
+          business_name: business.business_name,
+          industry: business.industry,
+          city: business.city,
+          website: business.website,
+          last_crawled_at: business.last_crawled_at,
+          contact_id: contact.contact_id,
+          email: contact.email,
+          phone: contact.phone,
+          mobile: contact.mobile,
+          is_generic: contact.is_generic,
+          source_url: contact.source_url,
+          page_type: contact.page_type,
+        });
+      }
+    }
+  }
+
+  return rawRows;
 }
 
 async function countPagesCrawledForDataset(datasetId: string): Promise<
-  Map<number, number>
+  Map<string, number>
 > {
-  const result = await pool.query<{ business_id: number; pages: number }>(
+  const result = await pool.query<{ business_id: string; pages: number }>(
     `
     SELECT
       w.business_id,
@@ -109,7 +204,7 @@ async function countPagesCrawledForDataset(datasetId: string): Promise<
     [datasetId]
   );
 
-  const map = new Map<number, number>();
+  const map = new Map<string, number>();
   for (const row of result.rows) {
     map.set(row.business_id, Number(row.pages) || 0);
   }
@@ -118,18 +213,21 @@ async function countPagesCrawledForDataset(datasetId: string): Promise<
 
 function aggregateRows(
   rawRows: RawExportRow[],
-  pagesMap: Map<number, number>,
+  pagesMap: Map<string, number>,
   tier: ExportTier,
   datasetId: string
 ): AggregatedRow[] {
-  const byBusiness = new Map<number, AggregatedRow & { contacts: RawExportRow[] }>();
+  const byBusiness = new Map<string, AggregatedRow & { contacts: RawExportRow[] }>();
 
   for (const row of rawRows) {
+    // Only process rows that have a business_id (skip NULL business rows from LEFT JOINs)
+    if (!row.business_id) continue;
+    
     if (!byBusiness.has(row.business_id)) {
       byBusiness.set(row.business_id, {
-        business_name: row.business_name,
-        industry: row.industry,
-        city: row.city,
+        business_name: row.business_name || 'Unknown Business',
+        industry: row.industry || 'Unknown Industry',
+        city: row.city || 'Unknown City',
         website: row.website,
         best_email: null,
         best_phone: null,
@@ -137,7 +235,10 @@ function aggregateRows(
       });
     }
     const agg = byBusiness.get(row.business_id)!;
-    agg.contacts.push(row);
+    // Only add contact if it has contact_id (skip NULL contacts from LEFT JOINs)
+    if (row.contact_id) {
+      agg.contacts.push(row);
+    }
   }
 
   const result: AggregatedRow[] = [];
@@ -303,8 +404,30 @@ export async function runDatasetExport(
   }
 
   const rawRows = await queryDatasetContacts(datasetId);
+  console.log(`[exportWorker] Query returned ${rawRows.length} raw rows for dataset ${datasetId}`);
+  
+  if (rawRows.length === 0) {
+    console.warn(`[exportWorker] No businesses found for dataset ${datasetId}. Checking if businesses exist...`);
+    // Check if businesses exist in the dataset
+    const businessCheck = await pool.query<{ count: string }>(
+      'SELECT COUNT(*) as count FROM businesses WHERE dataset_id = $1',
+      [datasetId]
+    );
+    const businessCount = parseInt(businessCheck.rows[0]?.count || '0', 10);
+    console.log(`[exportWorker] Found ${businessCount} businesses in dataset ${datasetId}`);
+    
+    if (businessCount === 0) {
+      throw new Error(`No businesses found in dataset ${datasetId}. Please ensure the dataset contains businesses before exporting.`);
+    }
+  }
+  
   const pagesMap = await countPagesCrawledForDataset(datasetId);
   const aggregated = aggregateRows(rawRows, pagesMap, tier, datasetId);
+  console.log(`[exportWorker] Aggregated ${aggregated.length} businesses for export`);
+  
+  if (aggregated.length === 0) {
+    throw new Error(`No data to export. The dataset may not have any businesses with valid data.`);
+  }
 
   const columns = buildColumnsForTier(tier);
   const watermark =
