@@ -245,8 +245,9 @@ async function queryExportData(filters: {
       ct.last_verified_at,
       CASE WHEN ct.is_active THEN 'active' ELSE 'removed' END as contact_status
     FROM businesses b
-    JOIN industries i ON b.industry_id = i.id
-    JOIN cities c ON b.city_id = c.id
+    LEFT JOIN datasets d ON d.id = b.dataset_id
+    LEFT JOIN industries i ON i.id = d.industry_id
+    LEFT JOIN cities c ON c.id = d.city_id
     LEFT JOIN websites w ON w.business_id = b.id
     JOIN contact_sources cs ON cs.source_url LIKE '%' || REPLACE(REPLACE(w.url, 'https://', ''), 'http://', '') || '%'
        OR cs.source_url = w.url
@@ -258,12 +259,12 @@ async function queryExportData(filters: {
   let paramCount = 1;
 
   if (filters.industryId) {
-    query += ` AND b.industry_id = $${paramCount++}`;
+    query += ` AND d.industry_id = $${paramCount++}`;
     params.push(filters.industryId);
   }
 
   if (filters.cityId) {
-    query += ` AND b.city_id = $${paramCount++}`;
+    query += ` AND d.city_id = $${paramCount++}`;
     params.push(filters.cityId);
   }
 

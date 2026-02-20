@@ -76,8 +76,9 @@ async function queryDatasetContacts(
       cs.source_url,
       cs.page_type
     FROM businesses b
-    JOIN industries i ON b.industry_id = i.id
-    JOIN cities c ON b.city_id = c.id
+    LEFT JOIN datasets d ON d.id = b.dataset_id
+    LEFT JOIN industries i ON i.id = d.industry_id
+    LEFT JOIN cities c ON c.id = d.city_id
     LEFT JOIN websites w ON w.business_id = b.id
     LEFT JOIN contact_sources cs ON cs.business_id = b.id
     LEFT JOIN contacts ct ON ct.id = cs.contact_id
