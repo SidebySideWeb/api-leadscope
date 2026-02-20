@@ -36,24 +36,18 @@ interface AggregatedRow {
   website: string | null;
 }
 
-function scoreContact(pageType: string | null): number {
-  const pt = (pageType || '').toLowerCase();
-  if (pt === 'contact') return 0.9;
-  if (pt === 'homepage' || pt === 'footer') return 0.7;
-  if (pt === 'about' || pt === 'company') return 0.5;
-  return 0.4;
-}
-
 async function queryDatasetContacts(
   datasetId: string
 ): Promise<RawExportRow[]> {
-  // First, get all businesses with their basic info (one row per business)
+  // Get all businesses with their data directly from businesses table
   const businessesResult = await pool.query<{
     business_id: string;
     business_name: string;
     ar_gemi: string | null;
     prefecture: string | null;
     last_gemi_sync: Date | null;
+    email: string | null;
+    phone: string | null;
     website: string | null;
   }>(
     `
@@ -63,6 +57,8 @@ async function queryDatasetContacts(
       b.ar_gemi,
       p.descr AS prefecture,
       b.updated_at AS last_gemi_sync,
+      b.email,
+      b.phone,
       COALESCE(w.url, b.website_url) AS website
     FROM businesses b
     LEFT JOIN prefectures p ON p.id = b.prefecture_id
@@ -73,98 +69,22 @@ async function queryDatasetContacts(
     [datasetId]
   );
 
-  // Then get all contacts for these businesses
-  const businessIds = businessesResult.rows.map(r => r.business_id);
-  const contactsResult = businessIds.length > 0 ? await pool.query<{
-    business_id: string;
-    contact_id: number;
-    email: string | null;
-    phone: string | null;
-    mobile: string | null;
-    is_generic: boolean | null;
-    source_url: string | null;
-    page_type: string | null;
-  }>(
-    `
-    SELECT
-      cs.business_id,
-      ct.id AS contact_id,
-      ct.email,
-      ct.phone,
-      ct.mobile,
-      ct.is_generic,
-      cs.source_url,
-      cs.page_type
-    FROM contact_sources cs
-    JOIN contacts ct ON ct.id = cs.contact_id
-    WHERE cs.business_id = ANY($1)
-    ORDER BY cs.business_id, cs.found_at DESC
-    `,
-    [businessIds]
-  ) : { rows: [] };
-
-  // Create a map of contacts by business_id
-  type ContactRow = {
-    business_id: string;
-    contact_id: number;
-    email: string | null;
-    phone: string | null;
-    mobile: string | null;
-    is_generic: boolean | null;
-    source_url: string | null;
-    page_type: string | null;
-  };
-  const contactsByBusiness = new Map<string, ContactRow[]>();
-  for (const contact of contactsResult.rows) {
-    if (!contactsByBusiness.has(contact.business_id)) {
-      contactsByBusiness.set(contact.business_id, []);
-    }
-    contactsByBusiness.get(contact.business_id)!.push(contact);
-  }
-
-  // Combine businesses with their contacts
-  const rawRows: RawExportRow[] = [];
-  for (const business of businessesResult.rows) {
-    const contacts = contactsByBusiness.get(business.business_id) || [];
-    
-    if (contacts.length === 0) {
-      // Business with no contacts - still include it
-      rawRows.push({
-        business_id: business.business_id,
-        business_name: business.business_name,
-        ar_gemi: business.ar_gemi,
-        prefecture: business.prefecture,
-        last_gemi_sync: business.last_gemi_sync,
-        website: business.website,
-        contact_id: null,
-        email: null,
-        phone: null,
-        mobile: null,
-        is_generic: null,
-        source_url: null,
-        page_type: null,
-      });
-    } else {
-      // Business with contacts - one row per contact
-      for (const contact of contacts) {
-        rawRows.push({
-          business_id: business.business_id,
-          business_name: business.business_name,
-          ar_gemi: business.ar_gemi,
-          prefecture: business.prefecture,
-          last_gemi_sync: business.last_gemi_sync,
-          website: business.website,
-          contact_id: contact.contact_id,
-          email: contact.email,
-          phone: contact.phone,
-          mobile: contact.mobile,
-          is_generic: contact.is_generic,
-          source_url: contact.source_url,
-          page_type: contact.page_type,
-        });
-      }
-    }
-  }
+  // Convert to RawExportRow format (one row per business)
+  const rawRows: RawExportRow[] = businessesResult.rows.map(business => ({
+    business_id: business.business_id,
+    business_name: business.business_name,
+    ar_gemi: business.ar_gemi,
+    prefecture: business.prefecture,
+    last_gemi_sync: business.last_gemi_sync,
+    website: business.website,
+    contact_id: null,
+    email: business.email,
+    phone: business.phone,
+    mobile: null,
+    is_generic: null,
+    source_url: null,
+    page_type: null,
+  }));
 
   return rawRows;
 }
@@ -200,70 +120,17 @@ function aggregateRows(
   tier: ExportTier,
   datasetId: string
 ): AggregatedRow[] {
-  const byBusiness = new Map<string, AggregatedRow & { contacts: RawExportRow[] }>();
-
-  for (const row of rawRows) {
-    // Only process rows that have a business_id (skip NULL business rows from LEFT JOINs)
-    if (!row.business_id) continue;
-    
-    if (!byBusiness.has(row.business_id)) {
-      byBusiness.set(row.business_id, {
-        business_name: row.business_name || 'Unknown Business',
-        ar_gemi: row.ar_gemi,
-        prefecture: row.prefecture,
-        last_gemi_sync: row.last_gemi_sync ? row.last_gemi_sync.toISOString() : null,
-        website: row.website,
-        email: null,
-        phone: null,
-        contacts: []
-      });
-    }
-    const agg = byBusiness.get(row.business_id)!;
-    // Only add contact if it has contact_id (skip NULL contacts from LEFT JOINs)
-    if (row.contact_id) {
-      agg.contacts.push(row);
-    }
-  }
-
-  const result: AggregatedRow[] = [];
-
-  for (const [businessId, agg] of byBusiness.entries()) {
-    const contacts = agg.contacts;
-
-    // Find best email and phone from contacts
-    let bestEmail: string | null = null;
-    let bestPhone: string | null = null;
-    let bestEmailScore = 0;
-    let bestPhoneScore = 0;
-
-    for (const c of contacts) {
-      const pageType = c.page_type;
-      const score = scoreContact(pageType);
-
-      if (c.email && score > bestEmailScore) {
-        bestEmail = c.email;
-        bestEmailScore = score;
-      }
-
-      const phoneValue = c.phone || c.mobile;
-      if (phoneValue && score > bestPhoneScore) {
-        bestPhone = phoneValue;
-        bestPhoneScore = score;
-      }
-    }
-
-    const base: AggregatedRow = {
-      business_name: agg.business_name,
-      ar_gemi: agg.ar_gemi,
-      prefecture: agg.prefecture,
-      last_gemi_sync: agg.last_gemi_sync,
-      email: bestEmail,
-      phone: bestPhone,
-      website: agg.website
-    };
-
-    result.push(base);
-  }
+  // Since we're getting data directly from businesses table, each row is already one business
+  // Just convert to AggregatedRow format
+  const result: AggregatedRow[] = rawRows.map(row => ({
+    business_name: row.business_name || 'Unknown Business',
+    ar_gemi: row.ar_gemi,
+    prefecture: row.prefecture,
+    last_gemi_sync: row.last_gemi_sync ? row.last_gemi_sync.toISOString() : null,
+    email: row.email,
+    phone: row.phone || row.mobile, // Use phone or mobile from businesses table
+    website: row.website
+  }));
 
   return result;
 }
