@@ -558,13 +558,97 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         
         try {
           // Fetch companies from GEMI API (supports municipality, multiple municipalities, or prefecture)
-          // IMPORTANT: Make separate API calls for each activity ID to ensure we get all results
-          // (GEMI API may not properly support multiple activities in a single call)
+          // ENHANCEMENT: Make separate API calls for each municipality + activity combination
+          // This ensures maximum reliability and completeness, especially for large prefectures like Attica
           let allCompanies: any[] = [];
           let totalSearchesExecuted = 0;
           
-          // If we have multiple activity IDs, make separate calls for each
-          if (activityIds && activityIds.length > 1) {
+          // Determine if we should make separate calls per municipality
+          // If we have many municipalities (e.g., Attica has ~60), make separate calls for better reliability
+          const shouldSplitByMunicipality = municipalityGemiId && municipalityGemiId.length > 10;
+          
+          if (shouldSplitByMunicipality && municipalityGemiId) {
+            console.log(`[runDiscoveryJob] Large number of municipalities (${municipalityGemiId.length}), making separate calls per municipality for maximum reliability...`);
+            
+            // Make separate calls for each municipality + activity combination
+            for (let m = 0; m < municipalityGemiId.length; m++) {
+              const singleMunicipalityId = municipalityGemiId[m];
+              console.log(`[runDiscoveryJob] Processing municipality ${m + 1}/${municipalityGemiId.length}: municipality_gemi_id=${singleMunicipalityId}`);
+              
+              // For each municipality, query all activities
+              if (activityIds && activityIds.length > 1) {
+                // Multiple activities: make separate call for each activity
+                for (let a = 0; a < activityIds.length; a++) {
+                  const activityId = activityIds[a];
+                  console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}, Activity ${a + 1}/${activityIds.length}: activity_id=${activityId}`);
+                  
+                  let currentOffset: number | undefined = undefined;
+                  let hasMore = true;
+                  let municipalityActivityCompanies: any[] = [];
+
+                  while (hasMore) {
+                    const result = await fetchGemiCompaniesForMunicipality(
+                      singleMunicipalityId, // Single municipality
+                      activityId, // Single activity
+                      undefined, // No prefecture when using municipality
+                      currentOffset
+                    );
+
+                    municipalityActivityCompanies = municipalityActivityCompanies.concat(result.companies);
+                    currentOffset = result.nextOffset;
+                    hasMore = result.hasMore;
+                    totalSearchesExecuted++;
+
+                    console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}, Activity ${activityId}: Fetched ${result.companies.length} companies (total: ${municipalityActivityCompanies.length}), nextOffset: ${currentOffset}, hasMore: ${hasMore}`);
+
+                    // If we hit the safety limit but there's more data, continue fetching
+                    if (!hasMore && currentOffset >= 10000) {
+                      console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}, Activity ${activityId}: Hit safety limit at offset ${currentOffset}, continuing...`);
+                      hasMore = true;
+                    } else if (!hasMore) {
+                      break;
+                    }
+                  }
+                  
+                  console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}, Activity ${activityId}: Total ${municipalityActivityCompanies.length} companies found`);
+                  allCompanies = allCompanies.concat(municipalityActivityCompanies);
+                }
+              } else {
+                // Single activity (or no activity filter) - single call per municipality
+                const activityId = activityIds && activityIds.length > 0 ? activityIds[0] : undefined;
+                let currentOffset: number | undefined = undefined;
+                let hasMore = true;
+                let municipalityCompanies: any[] = [];
+
+                while (hasMore) {
+                  const result = await fetchGemiCompaniesForMunicipality(
+                    singleMunicipalityId,
+                    activityId,
+                    undefined,
+                    currentOffset
+                  );
+
+                  municipalityCompanies = municipalityCompanies.concat(result.companies);
+                  currentOffset = result.nextOffset;
+                  hasMore = result.hasMore;
+                  totalSearchesExecuted++;
+
+                  console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}: Fetched ${result.companies.length} companies (total: ${municipalityCompanies.length}), nextOffset: ${currentOffset}, hasMore: ${hasMore}`);
+
+                  if (!hasMore && currentOffset >= 10000) {
+                    console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}: Hit safety limit at offset ${currentOffset}, continuing...`);
+                    hasMore = true;
+                  } else if (!hasMore) {
+                    break;
+                  }
+                }
+                
+                console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}: Total ${municipalityCompanies.length} companies found`);
+                allCompanies = allCompanies.concat(municipalityCompanies);
+              }
+            }
+          } else if (activityIds && activityIds.length > 1) {
+            // Multiple activities but few municipalities - make separate calls per activity
             console.log(`[runDiscoveryJob] Making separate API calls for each of ${activityIds.length} activity IDs to ensure complete results...`);
             
             for (let i = 0; i < activityIds.length; i++) {
