@@ -1,6 +1,7 @@
 import express from 'express';
 import { authMiddleware, type AuthRequest } from '../middleware/auth.js';
 import { pool } from '../config/database.js';
+import { randomUUID } from 'crypto';
 import { runDatasetExport } from '../workers/exportWorker.js';
 import { verifyDatasetOwnership } from '../db/datasets.js';
 import { enforceExport } from '../services/enforcementService.js';
@@ -25,10 +26,9 @@ async function checkDatasetJobsComplete(datasetId: string): Promise<{
   const crawlJobsResult = await pool.query<{ count: number }>(
     `SELECT COUNT(*) as count
      FROM crawl_jobs cj
-     JOIN websites w ON w.id = cj.website_id
-     JOIN businesses b ON b.id = w.business_id
+     JOIN businesses b ON b.id = cj.business_id
      WHERE b.dataset_id = $1
-       AND cj.status IN ('pending', 'running')`,
+       AND cj.status IN ('queued', 'running')`,
     [datasetId]
   );
   const pendingCrawlJobs = parseInt(crawlJobsResult.rows[0]?.count.toString() || '0');
@@ -36,8 +36,7 @@ async function checkDatasetJobsComplete(datasetId: string): Promise<{
   const runningCrawlJobsResult = await pool.query<{ count: number }>(
     `SELECT COUNT(*) as count
      FROM crawl_jobs cj
-     JOIN websites w ON w.id = cj.website_id
-     JOIN businesses b ON b.id = w.business_id
+     JOIN businesses b ON b.id = cj.business_id
      WHERE b.dataset_id = $1
        AND cj.status = 'running'`,
     [datasetId]
@@ -411,17 +410,16 @@ async function processExportAsync(
 
     // Before exporting, ensure crawl jobs are created for businesses with websites
     try {
-      const { createCrawlJob } = await import('../db/crawlJobs.js');
       const { pool } = await import('../config/database.js');
       
       // Find businesses in this dataset that have websites but no crawl jobs or incomplete crawling
-      const businessesNeedingCrawl = await pool.query<{ business_id: number; website_id: number }>(
-        `SELECT DISTINCT b.id AS business_id, w.id AS website_id
+      const businessesNeedingCrawl = await pool.query<{ business_id: string; website_url: string }>(
+        `SELECT DISTINCT b.id AS business_id, b.website_url
          FROM businesses b
-         JOIN websites w ON w.business_id = b.id
-         LEFT JOIN crawl_jobs cj ON cj.website_id = w.id AND cj.status IN ('pending', 'running', 'completed')
+         LEFT JOIN crawl_jobs cj ON cj.business_id = b.id AND cj.status IN ('queued', 'running', 'success')
          WHERE b.dataset_id = $1
-           AND (cj.id IS NULL OR (cj.status = 'completed' AND w.last_crawled_at IS NULL))
+           AND b.website_url IS NOT NULL
+           AND (cj.id IS NULL OR (cj.status = 'success' AND cj.finished_at IS NULL))
          LIMIT 50`,
         [datasetId]
       );
@@ -431,13 +429,17 @@ async function processExportAsync(
         let crawlJobsCreated = 0;
         for (const row of businessesNeedingCrawl.rows) {
           try {
-            await createCrawlJob(row.website_id, 'discovery', 25);
+            // Create crawl job using business_id and website_url (new schema)
+            const jobId = randomUUID();
+            await pool.query(
+              `INSERT INTO crawl_jobs (id, business_id, website_url, status, pages_limit, pages_crawled, created_at)
+               VALUES ($1, $2, $3, 'queued', 25, 0, NOW())
+               ON CONFLICT DO NOTHING`,
+              [jobId, row.business_id, row.website_url]
+            );
             crawlJobsCreated++;
           } catch (error: any) {
-            // If crawl job already exists, skip
-            if (error.code !== '23505') {
-              console.error(`[processExportAsync] Error creating crawl job for website ${row.website_id}:`, error.message);
-            }
+            console.error(`[processExportAsync] Error creating crawl job for business ${row.business_id}:`, error.message);
           }
         }
         console.log(`[processExportAsync] Created ${crawlJobsCreated} crawl jobs`);

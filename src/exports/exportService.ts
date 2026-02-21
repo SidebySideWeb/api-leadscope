@@ -234,9 +234,9 @@ async function queryExportData(filters: {
     SELECT DISTINCT
       b.name as company_name,
       i.name as industry,
-      c.name as city,
+      NULL as city,
       b.address,
-      w.url as website,
+      b.website_url as website,
       ct.email,
       ct.phone,
       ct.mobile,
@@ -247,10 +247,11 @@ async function queryExportData(filters: {
     FROM businesses b
     LEFT JOIN datasets d ON d.id = b.dataset_id
     LEFT JOIN industries i ON i.id = d.industry_id
-    LEFT JOIN cities c ON c.id = d.city_id
-    LEFT JOIN websites w ON w.business_id = b.id
-    JOIN contact_sources cs ON cs.source_url LIKE '%' || REPLACE(REPLACE(w.url, 'https://', ''), 'http://', '') || '%'
-       OR cs.source_url = w.url
+    LEFT JOIN contact_sources cs ON cs.business_id = b.id
+       OR (b.website_url IS NOT NULL AND (
+         cs.source_url LIKE '%' || REPLACE(REPLACE(b.website_url, 'https://', ''), 'http://', '') || '%'
+         OR cs.source_url = b.website_url
+       ))
     JOIN contacts ct ON ct.id = cs.contact_id
     WHERE ct.id IS NOT NULL
   `;
@@ -287,7 +288,7 @@ async function queryExportData(filters: {
   }
 
   if (filters.hasWebsite) {
-    query += ` AND w.url IS NOT NULL`;
+    query += ` AND b.website_url IS NOT NULL`;
   }
 
   if (filters.hasEmail) {

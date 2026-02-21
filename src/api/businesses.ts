@@ -64,11 +64,10 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
         b.email,
         d.city_id,
         d.industry_id,
-        c.name as city_name,
+        NULL as city_name,
         i.name as industry_name
       FROM businesses b
       LEFT JOIN datasets d ON d.id = b.dataset_id
-      LEFT JOIN cities c ON c.id = d.city_id
       LEFT JOIN industries i ON i.id = d.industry_id
       WHERE b.dataset_id = $1
     `;
@@ -233,12 +232,8 @@ router.get('/dataset/:datasetId/contacts', authMiddleware, async (req: AuthReque
       });
     }
 
-    // Get websites
-    const websitesResult = await pool.query<{ business_id: string; url: string }>(
-      'SELECT business_id, url FROM websites WHERE business_id = ANY($1)',
-      [businessIds]
-    );
-    const websiteMap = new Map(websitesResult.rows.map(w => [w.business_id, w.url]));
+    // Websites are now stored directly in businesses.website_url, no need to query websites table
+    const websiteMap = new Map<string, string>();
 
     // Get ALL contacts for these businesses
     const contactsResult = await pool.query<{
@@ -414,11 +409,10 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res) => {
         b.email,
         d.city_id,
         d.industry_id,
-        c.name as city_name,
+        NULL as city_name,
         i.name as industry_name
       FROM businesses b
       LEFT JOIN datasets d ON d.id = b.dataset_id
-      LEFT JOIN cities c ON c.id = d.city_id
       LEFT JOIN industries i ON i.id = d.industry_id
       WHERE b.id = $1`,
       [businessId]

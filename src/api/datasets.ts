@@ -471,7 +471,7 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res): Promis
         b.updated_at,
         d.city_id,
         d.industry_id,
-        c.name as city_name,
+        NULL as city_name,
         i.name as industry_name,
         b.website_url,
         b.phone,
@@ -487,7 +487,6 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res): Promis
         cs.finished_at as finished_at
       FROM businesses b
       LEFT JOIN datasets d ON d.id = b.dataset_id
-      LEFT JOIN cities c ON c.id = d.city_id
       LEFT JOIN industries i ON i.id = d.industry_id
       LEFT JOIN crawl_stats cs ON cs.business_id = b.id
       LEFT JOIN contact_counts cc ON cc.business_id = b.id
