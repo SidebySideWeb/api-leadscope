@@ -14,10 +14,10 @@ if (!GEMI_API_KEY) {
   console.warn('⚠️  WARNING: GEMI_API_KEY not set. GEMI API calls will fail.');
 }
 
-// Rate limiter: 8 requests per minute = 7.5 seconds between requests
-// After 8 calls, wait 60 seconds before continuing
-const RATE_LIMIT_DELAY_MS = 7500; // 7.5 seconds between calls
-const RATE_LIMIT_CALLS_PER_WINDOW = 8; // 8 calls per window
+// Rate limiter: 5 requests per minute = 12 seconds between requests (more conservative)
+// After 5 calls, wait 60 seconds before continuing
+const RATE_LIMIT_DELAY_MS = 12000; // 12 seconds between calls (more conservative)
+const RATE_LIMIT_CALLS_PER_WINDOW = 5; // 5 calls per window (reduced from 8 to avoid 429 errors)
 const RATE_LIMIT_WINDOW_RESET_MS = 60000; // 60 seconds to reset the window
 
 class RateLimiter {
@@ -71,6 +71,14 @@ class RateLimiter {
     this.pendingRequest = null;
     
     console.log(`[GEMI Rate Limiter] Call ${this.callCount}/${RATE_LIMIT_CALLS_PER_WINDOW} in current window`);
+  }
+
+  // Reset rate limiter window (useful after 429 errors)
+  reset(): void {
+    this.callCount = 0;
+    this.windowStartTime = Date.now();
+    this.lastRequestTime = Date.now();
+    console.log(`[GEMI Rate Limiter] Window reset manually`);
   }
 }
 
@@ -205,7 +213,32 @@ export async function fetchGemiCompaniesForMunicipality(
       console.log(`[GEMI] Request URL: ${GEMI_API_BASE_URL}/companies`);
       console.log(`[GEMI] Expected next offset after this request: ${resultsOffset + resultsSize}`);
 
-      const response = await gemiClient.get<any>('/companies', { params });
+      // Retry logic for 429 rate limit errors with exponential backoff
+      let response: any;
+      let retryCount = 0;
+      const maxRetries = 5;
+      const baseRetryDelay = 60000; // Start with 60 seconds for 429 errors
+      
+      while (retryCount <= maxRetries) {
+        try {
+          response = await gemiClient.get<any>('/companies', { params });
+          break; // Success, exit retry loop
+        } catch (error: any) {
+          if (error.response?.status === 429 && retryCount < maxRetries) {
+            // Rate limit exceeded - wait with exponential backoff
+            const retryDelay = baseRetryDelay * Math.pow(2, retryCount); // 60s, 120s, 240s, 480s, 960s
+            retryCount++;
+            console.warn(`[GEMI] Rate limit exceeded (429), retry ${retryCount}/${maxRetries} after ${retryDelay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+            // Reset rate limiter window after 429 error
+            rateLimiter.reset();
+            continue;
+          } else {
+            // Re-throw if not a 429 error or max retries reached
+            throw error;
+          }
+        }
+      }
       
       console.log(`[GEMI] Response status: ${response.status}`);
 
