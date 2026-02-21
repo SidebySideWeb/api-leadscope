@@ -86,13 +86,22 @@ const gemiClient: AxiosInstance = axios.create({
   params: {}, // Will be populated per request
 });
 
-// Add API key to requests - use query parameter as per API documentation
+// Add API key to requests - GEMI API expects it as a header
 gemiClient.interceptors.request.use((config) => {
-  if (GEMI_API_KEY) {
-    // Use api_key as query parameter (as per Postman test)
-    config.params = config.params || {};
-    config.params.api_key = GEMI_API_KEY;
+  if (!GEMI_API_KEY || GEMI_API_KEY.trim() === '') {
+    console.error('[GEMI] ⚠️  ERROR: GEMI_API_KEY is not set or is empty!');
+    throw new Error('GEMI_API_KEY is not configured. Please set the GEMI_API_KEY environment variable.');
   }
+  
+  // GEMI API expects API key in X-API-Key header
+  config.headers = config.headers || {};
+  config.headers['X-API-Key'] = GEMI_API_KEY;
+  
+  // Also try as query parameter (some APIs accept both)
+  config.params = config.params || {};
+  config.params.api_key = GEMI_API_KEY;
+  
+  console.log(`[GEMI] API key added to request headers (key length: ${GEMI_API_KEY.length}, first 4 chars: ${GEMI_API_KEY.substring(0, 4)}...)`);
   return config;
 });
 
