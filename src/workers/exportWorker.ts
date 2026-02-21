@@ -37,20 +37,12 @@ interface AggregatedRow {
 }
 
 async function queryDatasetContacts(
-  datasetId: string
+  datasetId: string,
+  startRow?: number,
+  endRow?: number
 ): Promise<RawExportRow[]> {
-  // Get all businesses with their data directly from businesses table
-  const businessesResult = await pool.query<{
-    business_id: string;
-    business_name: string;
-    ar_gemi: string | null;
-    prefecture: string | null;
-    last_gemi_sync: Date | null;
-    email: string | null;
-    phone: string | null;
-    website: string | null;
-  }>(
-    `
+  // Build query with optional row range (alphabetical order by default)
+  let query = `
     SELECT DISTINCT
       b.id AS business_id,
       b.name AS business_name,
@@ -65,9 +57,29 @@ async function queryDatasetContacts(
     LEFT JOIN websites w ON w.business_id = b.id
     WHERE b.dataset_id = $1
     ORDER BY b.name ASC
-    `,
-    [datasetId]
-  );
+  `;
+  
+  const queryParams: any[] = [datasetId];
+  
+  // Add LIMIT and OFFSET if row range is specified
+  if (startRow !== undefined && endRow !== undefined) {
+    const limit = endRow - startRow + 1;
+    const offset = startRow - 1; // OFFSET is 0-based
+    query += ` LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
+    queryParams.push(limit, offset);
+  }
+  
+  // Get businesses with their data directly from businesses table
+  const businessesResult = await pool.query<{
+    business_id: string;
+    business_name: string;
+    ar_gemi: string | null;
+    prefecture: string | null;
+    last_gemi_sync: Date | null;
+    email: string | null;
+    phone: string | null;
+    website: string | null;
+  }>(query, queryParams);
 
   // Convert to RawExportRow format (one row per business)
   const rawRows: RawExportRow[] = businessesResult.rows.map(business => ({
@@ -177,7 +189,9 @@ function buildCsvContent(
 export async function runDatasetExport(
   datasetId: string,
   tierInput: string,
-  formatInput: string
+  formatInput: string,
+  startRow?: number,
+  endRow?: number
 ): Promise<string> {
   const tier = parseTier(tierInput);
   const format = parseFormat(formatInput) as ExportFormat;
@@ -191,7 +205,7 @@ export async function runDatasetExport(
     throw new Error(`Dataset ${datasetId} not found`);
   }
 
-  const rawRows = await queryDatasetContacts(datasetId);
+  const rawRows = await queryDatasetContacts(datasetId, startRow, endRow);
   console.log(`[exportWorker] Query returned ${rawRows.length} raw rows for dataset ${datasetId}`);
   
   if (rawRows.length === 0) {

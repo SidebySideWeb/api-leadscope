@@ -514,27 +514,52 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         try {
           // Fetch companies from GEMI API (supports municipality, multiple municipalities, or prefecture)
           // Pass activity IDs as array (the GEMI service will handle single vs multiple)
-          const companies = await fetchGemiCompaniesForMunicipality(
-            municipalityGemiId,
-            activityIds && activityIds.length > 0 ? activityIds : undefined,
-            prefectureGemiId
-          );
+          // Continue fetching if we hit the safety limit (10,000 results)
+          let allCompanies: any[] = [];
+          let currentOffset: number | undefined = undefined;
+          let totalSearchesExecuted = 0;
+          let hasMore = true;
 
-          console.log(`[runDiscoveryJob] Fetched ${companies.length} companies from GEMI API`);
+          while (hasMore) {
+            const result = await fetchGemiCompaniesForMunicipality(
+              municipalityGemiId,
+              activityIds && activityIds.length > 0 ? activityIds : undefined,
+              prefectureGemiId,
+              currentOffset
+            );
+
+            allCompanies = allCompanies.concat(result.companies);
+            currentOffset = result.nextOffset;
+            hasMore = result.hasMore;
+            totalSearchesExecuted++;
+
+            console.log(`[runDiscoveryJob] Fetched ${result.companies.length} companies (total: ${allCompanies.length}), nextOffset: ${currentOffset}, hasMore: ${hasMore}`);
+
+            // If we hit the safety limit but there's more data, continue fetching
+            if (!hasMore && currentOffset >= 10000) {
+              console.log(`[runDiscoveryJob] Hit safety limit at offset ${currentOffset}, continuing to fetch more...`);
+              hasMore = true; // Continue fetching from this offset
+            } else if (!hasMore) {
+              // No more data available
+              break;
+            }
+          }
+
+          console.log(`[runDiscoveryJob] Total fetched ${allCompanies.length} companies from GEMI API in ${totalSearchesExecuted} batch(es)`);
 
           // Import companies to database (pass discoveryRunId if available)
           const importResult = await importGemiCompaniesToDatabase(
-            companies,
+            allCompanies,
             datasetId,
             input.userId || 'system',
             input.discoveryRunId || undefined // Pass discoveryRunId to link businesses
           );
 
           discoveryResult = {
-            businessesFound: companies.length,
+            businessesFound: allCompanies.length,
             businessesCreated: importResult.inserted,
             businessesUpdated: importResult.updated,
-            searchesExecuted: 1, // One GEMI API call
+            searchesExecuted: totalSearchesExecuted,
             errors: [],
           };
 

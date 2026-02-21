@@ -32,16 +32,16 @@ export async function processGemiFetchJob(job: GemiFetchJob): Promise<{
 
   try {
     // Fetch companies from GEMI API
-    const companies = await fetchGemiCompaniesForMunicipality(
+    const result = await fetchGemiCompaniesForMunicipality(
       job.municipality_gemi_id,
       job.activity_id
     );
 
-    console.log(`[GEMI Worker] Fetched ${companies.length} companies from GEMI API`);
+    console.log(`[GEMI Worker] Fetched ${result.companies.length} companies from GEMI API`);
 
     // Import to database
     const importResult = await importGemiCompaniesToDatabase(
-      companies,
+      result.companies,
       job.dataset_id,
       job.user_id
     );
@@ -54,7 +54,7 @@ export async function processGemiFetchJob(job: GemiFetchJob): Promise<{
 
     return {
       success: true,
-      companiesFetched: companies.length,
+      companiesFetched: result.companies.length,
       companiesImported: importResult.inserted + importResult.updated,
       inserted: importResult.inserted,
       updated: importResult.updated,

@@ -15,11 +15,16 @@ if (!GEMI_API_KEY) {
 }
 
 // Rate limiter: 8 requests per minute = 7.5 seconds between requests
-const RATE_LIMIT_DELAY_MS = 7500; // 7.5 seconds
+// After 8 calls, wait 60 seconds before continuing
+const RATE_LIMIT_DELAY_MS = 7500; // 7.5 seconds between calls
+const RATE_LIMIT_CALLS_PER_WINDOW = 8; // 8 calls per window
+const RATE_LIMIT_WINDOW_RESET_MS = 60000; // 60 seconds to reset the window
 
 class RateLimiter {
   private lastRequestTime: number = 0;
   private pendingRequest: Promise<void> | null = null;
+  private callCount: number = 0;
+  private windowStartTime: number = Date.now();
 
   async acquire(): Promise<void> {
     if (this.pendingRequest) {
@@ -27,6 +32,32 @@ class RateLimiter {
     }
 
     const now = Date.now();
+    const timeSinceWindowStart = now - this.windowStartTime;
+
+    // Reset window if 60 seconds have passed
+    if (timeSinceWindowStart >= RATE_LIMIT_WINDOW_RESET_MS) {
+      this.callCount = 0;
+      this.windowStartTime = now;
+      console.log(`[GEMI Rate Limiter] Window reset after ${timeSinceWindowStart}ms`);
+    }
+
+    // If we've made 8 calls in this window, wait until the window resets
+    if (this.callCount >= RATE_LIMIT_CALLS_PER_WINDOW) {
+      const timeUntilReset = RATE_LIMIT_WINDOW_RESET_MS - timeSinceWindowStart;
+      if (timeUntilReset > 0) {
+        console.log(`[GEMI Rate Limiter] Reached ${RATE_LIMIT_CALLS_PER_WINDOW} calls, waiting ${timeUntilReset}ms for window reset...`);
+        this.pendingRequest = new Promise((resolve) => setTimeout(resolve, timeUntilReset));
+        await this.pendingRequest;
+        // Reset after waiting
+        this.callCount = 0;
+        this.windowStartTime = Date.now();
+        this.lastRequestTime = Date.now();
+        this.pendingRequest = null;
+        return;
+      }
+    }
+
+    // Normal delay between requests (7.5 seconds)
     const timeSinceLastRequest = now - this.lastRequestTime;
     const delayNeeded = Math.max(0, RATE_LIMIT_DELAY_MS - timeSinceLastRequest);
 
@@ -36,7 +67,10 @@ class RateLimiter {
     }
 
     this.lastRequestTime = Date.now();
+    this.callCount++;
     this.pendingRequest = null;
+    
+    console.log(`[GEMI Rate Limiter] Call ${this.callCount}/${RATE_LIMIT_CALLS_PER_WINDOW} in current window`);
   }
 }
 
@@ -94,8 +128,9 @@ export interface GemiCompaniesResponse {
 export async function fetchGemiCompaniesForMunicipality(
   municipalityGemiId?: number | number[],
   activityId?: number | number[],
-  prefectureGemiId?: number
-): Promise<GemiCompany[]> {
+  prefectureGemiId?: number,
+  startOffset?: number
+): Promise<{ companies: GemiCompany[]; nextOffset: number; hasMore: boolean }> {
   if (!GEMI_API_KEY) {
     throw new Error('GEMI_API_KEY is not configured');
   }
@@ -105,10 +140,11 @@ export async function fetchGemiCompaniesForMunicipality(
   }
 
   const allCompanies: GemiCompany[] = [];
-  let resultsOffset = 0;
+  let resultsOffset = startOffset || 0;
   const resultsSize = 200; // Maximum results per request as per API documentation
   let totalCount = 0;
   let hasMore = true;
+  const SAFETY_LIMIT = 10000; // Safety limit per call
 
   // Normalize municipalityGemiId to array for consistent handling
   const municipalityIds = municipalityGemiId 
@@ -121,12 +157,12 @@ export async function fetchGemiCompaniesForMunicipality(
   const locationId = municipalityGemiId 
     ? (municipalityIds.length > 1 ? municipalityIds.join(',') : String(municipalityIds[0]))
     : String(prefectureGemiId);
-  const activityDesc = activityId 
+  const initialActivityDesc = activityId 
     ? (Array.isArray(activityId) 
         ? `${activityId.length} activities: [${activityId.join(', ')}]`
         : `activity ${activityId}`)
     : 'all activities';
-  console.log(`[GEMI] Fetching companies for ${locationType} ${locationId} with ${activityDesc}...`);
+  console.log(`[GEMI] Fetching companies for ${locationType} ${locationId} with ${initialActivityDesc}...`);
 
   while (hasMore) {
     // Acquire rate limiter lock
@@ -137,6 +173,7 @@ export async function fetchGemiCompaniesForMunicipality(
         resultsOffset,
         resultsSize, // Maximum 200 results per request
         resultsSortBy: '+arGemi', // Sort by AR GEMI ascending
+        isActive: true, // Always fetch only active businesses
       };
 
       // Use municipality if provided, otherwise use prefecture
@@ -336,9 +373,12 @@ export async function fetchGemiCompaniesForMunicipality(
         console.log(`[GEMI] No more results: validCompanies=${validCompanies.length}, totalCount=${totalCount || 'unknown'}, currentOffset=${resultsOffset}`);
       }
 
-      // Safety check to prevent infinite loops
-      if (resultsOffset >= 10000) {
-        console.warn(`[GEMI] Reached safety limit of 10000 results, stopping pagination`);
+      // Safety check: if we reach 10,000 results in this call, stop and return
+      // The caller can continue by calling again with startOffset
+      if (resultsOffset >= SAFETY_LIMIT) {
+        console.warn(`[GEMI] Reached safety limit of ${SAFETY_LIMIT} results at offset ${resultsOffset}`);
+        console.warn(`[GEMI] Returning ${allCompanies.length} companies. To continue, call again with startOffset=${resultsOffset}`);
+        hasMore = false;
         break;
       }
     } catch (error: any) {
@@ -379,8 +419,18 @@ export async function fetchGemiCompaniesForMunicipality(
         ? `${municipalityIds.length} municipalities` 
         : `municipality ${municipalityIds[0]}`)
     : `prefecture ${prefectureGemiId}`;
-  console.log(`[GEMI] Completed fetching ${allCompanies.length} companies for ${locationDesc}`);
-  return allCompanies;
+  const finalActivityDesc = activityId 
+    ? (Array.isArray(activityId) 
+        ? ` and ${activityId.length} activities: [${activityId.join(', ')}]`
+        : ` and activity ${activityId}`)
+    : '';
+  console.log(`[GEMI] ✅ Fetched ${allCompanies.length} companies for ${locationDesc}${finalActivityDesc} (offset: ${resultsOffset})`);
+
+  return {
+    companies: allCompanies,
+    nextOffset: resultsOffset,
+    hasMore: hasMore && resultsOffset < SAFETY_LIMIT
+  };
 }
 
 /**

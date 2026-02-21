@@ -263,9 +263,9 @@ router.get('/', authMiddleware, async (req: AuthRequest, res) => {
 router.post('/run', authMiddleware, async (req: AuthRequest, res): Promise<void> => {
   try {
     const userId = req.userId!;
-    const { datasetId, format } = req.body;
+    const { datasetId, format, start_row, end_row } = req.body;
 
-    console.log('[exports/run] Request:', { userId, datasetId, format });
+    console.log('[exports/run] Request:', { userId, datasetId, format, start_row, end_row });
 
     // Validate input
     if (!datasetId) {
@@ -285,16 +285,35 @@ router.post('/run', authMiddleware, async (req: AuthRequest, res): Promise<void>
       return;
     }
 
-    // Estimate row count for enforcement
+    // Get total row count
     const countResult = await pool.query<{ count: number }>(
       'SELECT COUNT(*) as count FROM businesses WHERE dataset_id = $1',
       [datasetId]
     );
-    const estimatedRows = parseInt(countResult.rows[0]?.count.toString() || '0');
+    const totalRows = parseInt(countResult.rows[0]?.count.toString() || '0');
 
-    // Enforce export limits and credits
+    // Validate row range if provided
+    let startRow: number | undefined;
+    let endRow: number | undefined;
+    let rowsToExport = totalRows;
+
+    if (start_row !== undefined || end_row !== undefined) {
+      startRow = start_row !== undefined ? parseInt(String(start_row), 10) : 1;
+      endRow = end_row !== undefined ? parseInt(String(end_row), 10) : totalRows;
+
+      if (isNaN(startRow) || isNaN(endRow) || startRow < 1 || endRow < startRow || endRow > totalRows) {
+        res.status(400).json({ 
+          error: `Invalid row range. Start must be >= 1, end must be >= start, and end must be <= ${totalRows}` 
+        });
+        return;
+      }
+
+      rowsToExport = endRow - startRow + 1;
+    }
+
+    // Enforce export limits and credits (based on actual rows to export)
     try {
-      await enforceExport(userId, estimatedRows);
+      await enforceExport(userId, rowsToExport);
     } catch (error: any) {
       if (error.code === 'EXPORT_LIMIT_REACHED' || error.code === 'CREDIT_LIMIT_REACHED') {
         res.status(403).json({
@@ -346,11 +365,14 @@ router.post('/run', authMiddleware, async (req: AuthRequest, res): Promise<void>
       format: format,
       tier: tier,
       status: 'processing',
-      message: 'Export job created. Processing in background...'
+      message: 'Export job created. Processing in background...',
+      rows_to_export: rowsToExport,
+      start_row: startRow,
+      end_row: endRow
     });
 
     // Process export asynchronously (don't await - let it run in background)
-    processExportAsync(exportRecord.id, datasetId, tier, format, userId).catch(error => {
+    processExportAsync(exportRecord.id, datasetId, tier, format, userId, startRow, endRow).catch(error => {
       console.error(`[exports/run] Error processing export ${exportRecord.id} async:`, error);
       // Update export record to mark as failed
       pool.query(
@@ -380,7 +402,9 @@ async function processExportAsync(
   datasetId: string,
   tier: string,
   format: 'csv' | 'xlsx',
-  userId: string
+  userId: string,
+  startRow?: number,
+  endRow?: number
 ): Promise<void> {
   try {
     console.log(`[processExportAsync] Starting export ${exportId} for dataset ${datasetId}`);
@@ -444,7 +468,7 @@ async function processExportAsync(
     try {
       const exportTimeout = 600000; // 10 minutes
       filePath = await Promise.race([
-        runDatasetExport(datasetId, tier, format),
+        runDatasetExport(datasetId, tier, format, startRow, endRow),
         new Promise<string>((_, reject) => 
           setTimeout(() => reject(new Error('Export generation timeout after 10 minutes')), exportTimeout)
         )
