@@ -432,11 +432,13 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       errors: [],
     };
 
-    // STEP 2: If no results found, fetch from GEMI API
-    if (existingCount === 0) {
-      console.log(`[runDiscoveryJob] No existing businesses found, fetching from GEMI API...`);
-      
-      let municipalityGemiId: number[] | undefined;
+    // STEP 2: Always fetch from GEMI API to get latest data and new businesses
+    // Even if businesses exist, we need to:
+    // 1. Update existing businesses with latest information from GEMI
+    // 2. Add any new businesses that were added to GEMI since last discovery
+    console.log(`[runDiscoveryJob] Fetching from GEMI API to update existing businesses and add new ones...`);
+    
+    let municipalityGemiId: number[] | undefined;
       let prefectureGemiId: number | undefined;
       
       // Use municipality_gemi_id directly if available (preferred)
@@ -793,73 +795,6 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
           };
         }
       }
-    } else {
-      // Businesses already exist in local DB, but we need to link them to this dataset
-      console.log(`[runDiscoveryJob] Found ${existingCount} existing businesses, linking them to dataset ${datasetId}...`);
-      
-      // Update existing businesses to link them to this dataset and discovery run
-      let updatedCount = 0;
-      try {
-        // Build WHERE clause based on discovery criteria
-        let whereClause = '';
-        const updateParams: any[] = [datasetId, discoveryRun.id];
-        let paramIndex = 3;
-        
-        if (finalMunicipalityId) {
-          whereClause += ` AND municipality_id = $${paramIndex++}`;
-          updateParams.push(finalMunicipalityId);
-        } else if (finalMunicipalityGemiId) {
-          // Get municipality IDs from GEMI IDs
-          const municipalityGemiIds = Array.isArray(finalMunicipalityGemiId) 
-            ? finalMunicipalityGemiId 
-            : [finalMunicipalityGemiId];
-          whereClause += ` AND municipality_id IN (
-            SELECT id FROM municipalities WHERE gemi_id = ANY($${paramIndex++}::text[])
-          )`;
-          updateParams.push(municipalityGemiIds.map(String));
-        } else if (finalPrefectureId || finalPrefectureGemiId) {
-          const prefectureIdToUse = finalPrefectureId || 
-            (finalPrefectureGemiId ? await (async () => {
-              const prefResult = await pool.query<{ id: string }>(
-                'SELECT id FROM prefectures WHERE gemi_id = $1',
-                [String(finalPrefectureGemiId)]
-              );
-              return prefResult.rows[0]?.id;
-            })() : null);
-          
-          if (prefectureIdToUse) {
-            whereClause += ` AND prefecture_id = $${paramIndex++}`;
-            updateParams.push(prefectureIdToUse);
-          }
-        }
-        
-        // Update businesses to link them to this dataset
-        const updateResult = await pool.query<{ count: string }>(
-          `UPDATE businesses 
-           SET dataset_id = $1, 
-               discovery_run_id = COALESCE($2, discovery_run_id),
-               updated_at = NOW()
-           WHERE dataset_id IS NULL OR dataset_id != $1
-             ${whereClause}
-           RETURNING id`,
-          updateParams
-        );
-        
-        updatedCount = updateResult.rowCount || 0;
-        console.log(`[runDiscoveryJob] Linked ${updatedCount} existing businesses to dataset ${datasetId}`);
-      } catch (updateError: any) {
-        console.error(`[runDiscoveryJob] Error linking existing businesses to dataset:`, updateError.message);
-        // Continue even if update fails - businesses still exist
-      }
-      
-      discoveryResult = {
-        businessesFound: existingCount,
-        businessesCreated: 0,
-        businessesUpdated: updatedCount,
-        searchesExecuted: 0,
-        errors: [],
-      };
-    }
     
     console.log(`[runDiscoveryJob] GEMI discovery completed:`, {
       businessesFound: discoveryResult.businessesFound,
