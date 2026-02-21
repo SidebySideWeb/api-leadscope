@@ -441,15 +441,15 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res): Promis
       `
       WITH crawl_stats AS (
         SELECT
-          w.business_id,
+          cj.business_id,
           COUNT(DISTINCT cp.id) AS pages_visited,
           MAX(cj.pages_limit) AS pages_limit,
-          BOOL_OR(cj.status = 'completed') AS any_completed,
-          MAX(cj.completed_at) AS finished_at
-        FROM websites w
-        JOIN crawl_jobs cj ON cj.website_id = w.id
+          BOOL_OR(cj.status = 'success') AS any_completed,
+          MAX(cj.finished_at) AS finished_at
+        FROM crawl_jobs cj
         LEFT JOIN crawl_pages cp ON cp.crawl_job_id = cj.id
-        GROUP BY w.business_id
+        WHERE cj.business_id IS NOT NULL
+        GROUP BY cj.business_id
       ),
       contact_counts AS (
         SELECT
@@ -574,10 +574,9 @@ router.get('/:id/crawl/status', authMiddleware, async (req: AuthRequest, res): P
     const crawlJobsResult = await pool.query<{ count: number }>(
       `SELECT COUNT(*) as count
        FROM crawl_jobs cj
-       JOIN websites w ON w.id = cj.website_id
-       JOIN businesses b ON b.id = w.business_id
+       JOIN businesses b ON b.id = cj.business_id
        WHERE b.dataset_id = $1
-         AND cj.status IN ('pending', 'running')`,
+         AND cj.status IN ('queued', 'running')`,
       [datasetId]
     );
     const pendingCrawlJobs = parseInt(crawlJobsResult.rows[0]?.count.toString() || '0');
@@ -585,8 +584,7 @@ router.get('/:id/crawl/status', authMiddleware, async (req: AuthRequest, res): P
     const runningCrawlJobsResult = await pool.query<{ count: number }>(
       `SELECT COUNT(*) as count
        FROM crawl_jobs cj
-       JOIN websites w ON w.id = cj.website_id
-       JOIN businesses b ON b.id = w.business_id
+       JOIN businesses b ON b.id = cj.business_id
        WHERE b.dataset_id = $1
          AND cj.status = 'running'`,
       [datasetId]
@@ -596,10 +594,9 @@ router.get('/:id/crawl/status', authMiddleware, async (req: AuthRequest, res): P
     const completedCrawlJobsResult = await pool.query<{ count: number }>(
       `SELECT COUNT(*) as count
        FROM crawl_jobs cj
-       JOIN websites w ON w.id = cj.website_id
-       JOIN businesses b ON b.id = w.business_id
+       JOIN businesses b ON b.id = cj.business_id
        WHERE b.dataset_id = $1
-         AND cj.status = 'completed'`,
+         AND cj.status = 'success'`,
       [datasetId]
     );
     const completedCrawlJobs = parseInt(completedCrawlJobsResult.rows[0]?.count.toString() || '0');
@@ -607,8 +604,7 @@ router.get('/:id/crawl/status', authMiddleware, async (req: AuthRequest, res): P
     const failedCrawlJobsResult = await pool.query<{ count: number }>(
       `SELECT COUNT(*) as count
        FROM crawl_jobs cj
-       JOIN websites w ON w.id = cj.website_id
-       JOIN businesses b ON b.id = w.business_id
+       JOIN businesses b ON b.id = cj.business_id
        WHERE b.dataset_id = $1
          AND cj.status = 'failed'`,
       [datasetId]
