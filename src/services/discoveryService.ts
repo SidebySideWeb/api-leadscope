@@ -461,7 +461,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         console.log(`[runDiscoveryJob] Resolved municipality_id to gemi_id: [${municipalityGemiId.join(', ')}]`);
       } else if (finalPrefectureGemiId || finalPrefectureId) {
         // When prefecture is selected but no municipalities are provided,
-        // use prefecture-level query directly
+        // ENHANCEMENT: Fetch ALL municipalities in the prefecture for maximum results
         if (!finalPrefectureGemiId && finalPrefectureId) {
           const prefectureResult = await pool.query<{ gemi_id: string }>(
             'SELECT gemi_id FROM prefectures WHERE id = $1',
@@ -472,10 +472,39 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
           }
         }
         
-        if (finalPrefectureGemiId) {
-          // Use prefecture directly for GEMI API call (prefecture-level query)
-          prefectureGemiId = finalPrefectureGemiId;
-          console.log(`[runDiscoveryJob] Using prefecture-level query for prefecture_gemi_id: ${prefectureGemiId}`);
+        if (finalPrefectureGemiId || finalPrefectureId) {
+          // Fetch all municipalities in this prefecture for maximum coverage
+          const prefectureIdForQuery = finalPrefectureId || (await pool.query<{ id: string }>(
+            'SELECT id FROM prefectures WHERE gemi_id = $1',
+            [String(finalPrefectureGemiId)]
+          )).rows[0]?.id;
+          
+          if (prefectureIdForQuery) {
+            const municipalitiesResult = await pool.query<{ gemi_id: string }>(
+              'SELECT gemi_id FROM municipalities WHERE prefecture_id = $1 AND gemi_id IS NOT NULL',
+              [prefectureIdForQuery]
+            );
+            
+            if (municipalitiesResult.rows.length > 0) {
+              // Use all municipalities in the prefecture for maximum results
+              municipalityGemiId = municipalitiesResult.rows
+                .map(row => parseInt(row.gemi_id, 10))
+                .filter(id => !isNaN(id));
+              
+              console.log(`[runDiscoveryJob] Prefecture selected: Found ${municipalityGemiId.length} municipalities, using all for maximum results`);
+              console.log(`[runDiscoveryJob] Municipality GEMI IDs: [${municipalityGemiId.slice(0, 10).join(', ')}${municipalityGemiId.length > 10 ? '...' : ''}]`);
+            } else {
+              // Fallback: Use prefecture-level query if no municipalities found
+              if (finalPrefectureGemiId) {
+                prefectureGemiId = finalPrefectureGemiId;
+                console.log(`[runDiscoveryJob] No municipalities found for prefecture, using prefecture-level query: ${prefectureGemiId}`);
+              } else {
+                throw new Error(`Prefecture not found: ${finalPrefectureId || finalPrefectureGemiId}`);
+              }
+            }
+          } else {
+            throw new Error(`Prefecture not found: ${finalPrefectureId || finalPrefectureGemiId}`);
+          }
         } else {
           throw new Error(`Prefecture not found: ${finalPrefectureId || finalPrefectureGemiId}`);
         }
