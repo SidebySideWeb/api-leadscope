@@ -2,7 +2,7 @@ import express, { Response } from 'express';
 import { authMiddleware, type AuthRequest } from '../middleware/auth.js';
 import { runDiscoveryJob } from '../services/discoveryService.js';
 import { getIndustries } from '../db/industries.js';
-import { getCities } from '../db/cities.js';
+// Note: cities table may not exist, so getCities() is not imported
 import { pool } from '../config/database.js';
 import { createDiscoveryRun, getDiscoveryRunById } from '../db/discoveryRuns.js';
 import { getDatasetById, verifyDatasetOwnership } from '../db/datasets.js';
@@ -271,65 +271,9 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       const municipality = municipalityResult.rows[0];
       console.log(`[discovery] Found municipality: ${municipality.descr} (${municipality.descr_en})`);
       
-      // Find matching city by name (try multiple strategies)
-      let cityResult = await pool.query<{ id: string; name: string }>(
-        `SELECT id, name FROM cities 
-         WHERE name ILIKE $1 OR name ILIKE $2 OR normalized_name ILIKE $1 OR normalized_name ILIKE $2
-         LIMIT 1`,
-        [municipality.descr, municipality.descr_en]
-      );
-      
-      // Strategy 1: Try exact match with cleaned names (remove extra spaces, slashes)
-      if (cityResult.rows.length === 0) {
-        const cleanDescr = municipality.descr.split('/')[0].trim(); // Take first part before "/"
-        const cleanDescrEn = municipality.descr_en?.split('/')[0].trim() || '';
-        cityResult = await pool.query<{ id: string; name: string }>(
-          `SELECT id, name FROM cities 
-           WHERE name ILIKE $1 OR name ILIKE $2 OR normalized_name ILIKE $1 OR normalized_name ILIKE $2
-           LIMIT 1`,
-          [cleanDescr, cleanDescrEn]
-        );
-      }
-      
-      // Strategy 2: Try partial match with cleaned name
-      if (cityResult.rows.length === 0) {
-        const cleanDescr = municipality.descr.split('/')[0].trim();
-        cityResult = await pool.query<{ id: string; name: string }>(
-          `SELECT id, name FROM cities 
-           WHERE name ILIKE $1 OR normalized_name ILIKE $1
-           LIMIT 1`,
-          [`%${cleanDescr}%`]
-        );
-      }
-      
-      // Strategy 3: Try matching any word from the municipality name
-      if (cityResult.rows.length === 0) {
-        const words = municipality.descr.split(/[\s\/]+/).filter(w => w.length > 2);
-        for (const word of words) {
-          cityResult = await pool.query<{ id: string; name: string }>(
-            `SELECT id, name FROM cities 
-             WHERE name ILIKE $1 OR normalized_name ILIKE $1
-             LIMIT 1`,
-            [`%${word}%`]
-          );
-          if (cityResult.rows.length > 0) break;
-        }
-      }
-      
-      // Strategy 4: Find a city in the same prefecture as fallback (try first word of municipality)
-      if (cityResult.rows.length === 0) {
-        console.log(`[discovery] No direct city match found, trying to find city in same prefecture...`);
-        const firstWord = municipality.descr.split(/[\s\/]+/)[0]?.trim();
-        if (firstWord && firstWord.length > 2) {
-          cityResult = await pool.query<{ id: string; name: string }>(
-            `SELECT id, name FROM cities 
-             WHERE name ILIKE $1 OR normalized_name ILIKE $1
-             ORDER BY CASE WHEN name ILIKE $2 THEN 1 ELSE 2 END
-             LIMIT 1`,
-            [`%${firstWord}%`, `${firstWord}%`]
-          );
-        }
-      }
+      // Note: cities table may not exist, so we skip city lookup
+      // Dataset will be created with null city_id when using municipality/prefecture
+      let cityResult = { rows: [] as { id: string; name: string }[] };
       
       // If no city match found, that's OK - we'll use municipality_id directly
       // Don't throw error, just log and proceed with municipality_id
@@ -388,14 +332,8 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     }
 
     // Get city name if city_id is provided (for logging)
-    let cityName = 'Unknown';
-    if (city_id) {
-      const cities = await getCities();
-      const city = cities.find((c) => String(c.id) === String(city_id));
-      if (city) {
-        cityName = city.name;
-      }
-    }
+    // Note: cities table may not exist, so we skip city lookup
+    let cityName = city_id ? `City ${city_id}` : 'Unknown';
 
     console.log('[API] Starting discovery job for:', { 
       industry: industry.name, 
@@ -467,46 +405,9 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       if (municipalityResult.rows.length > 0) {
         const municipality = municipalityResult.rows[0];
         
-        // Try to find matching city by name
-        const cityResult = await pool.query<{ id: string; name: string }>(
-          `SELECT id, name FROM cities 
-           WHERE name ILIKE $1 OR name ILIKE $2 OR normalized_name ILIKE $1 OR normalized_name ILIKE $2
-           LIMIT 1`,
-          [municipality.descr, municipality.descr_en]
-        );
-        
-        if (cityResult.rows.length > 0) {
-          datasetCityId = cityResult.rows[0].id;
-          console.log(`[API] Found matching city: ${cityResult.rows[0].name} (${datasetCityId})`);
-        } else {
-          // Try to find any city in the same prefecture
-          const prefectureCitiesResult = await pool.query<{ id: string; name: string }>(
-            `SELECT c.id, c.name FROM cities c
-             WHERE EXISTS (
-               SELECT 1 FROM municipalities m 
-               WHERE m.prefecture_id = $1 
-               AND (m.descr ILIKE '%' || c.name || '%' OR c.name ILIKE '%' || m.descr || '%')
-             )
-             LIMIT 1`,
-            [municipality.prefecture_id]
-          );
-          
-          if (prefectureCitiesResult.rows.length > 0) {
-            datasetCityId = prefectureCitiesResult.rows[0].id;
-            console.log(`[API] Found city in same prefecture: ${prefectureCitiesResult.rows[0].name} (${datasetCityId})`);
-          } else {
-            // Last resort: use Athens as default
-            const cities = await getCities();
-            const athens = cities.find(c => 
-              c.name.toLowerCase().includes('athens') || 
-              c.name.toLowerCase().includes('αθήνα')
-            );
-            if (athens) {
-              datasetCityId = athens.id;
-              console.log(`[API] Using default city (Athens) for dataset: ${datasetCityId}`);
-            }
-          }
-        }
+        // Note: cities table may not exist, so we skip city lookup
+        // Dataset will be created with null city_id when using municipality/prefecture
+        console.log(`[API] Skipping city lookup (cities table may not exist). Creating dataset with null city_id.`);
       }
     }
     
@@ -538,21 +439,10 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     if (!finalDatasetId) {
       console.log('[API] Creating new dataset...');
       
-      // When using municipality_gemi_id, we can create dataset with null city_id
-      // Try to find a city if possible, but don't require it
+      // When using prefecture/municipality, we can create dataset with null city_id
+      // Note: cities table may not exist, so we skip city lookup
       if (!datasetCityId) {
-        console.log('[API] No city_id found, trying to use default city (Athens)...');
-        const cities = await getCities();
-        const athens = cities.find(c => 
-          c.name.toLowerCase().includes('athens') || 
-          c.name.toLowerCase().includes('αθήνα')
-        );
-        if (athens) {
-          datasetCityId = athens.id;
-          console.log(`[API] Using default city (Athens) for dataset: ${datasetCityId}`);
-        } else {
-          console.log('[API] Athens not found. Creating dataset with null city_id (using municipality_gemi_id directly).');
-        }
+        console.log('[API] No city_id found. Creating dataset with null city_id (using prefecture/municipality directly).');
       }
       
       // Create dataset - city_id can be null when using municipality_gemi_id
@@ -937,14 +827,13 @@ router.get('/runs', authMiddleware, async (req: AuthRequest, res) => {
         COUNT(b.id) as businesses_found,
         d.name as dataset_name,
         i.name as industry_name,
-        c.name as city_name
+        NULL as city_name
       FROM discovery_runs dr
       JOIN datasets d ON d.id = dr.dataset_id
       LEFT JOIN industries i ON i.id = d.industry_id
-      LEFT JOIN cities c ON c.id = d.city_id
       LEFT JOIN businesses b ON b.discovery_run_id = dr.id
       WHERE d.user_id = $1
-      GROUP BY dr.id, dr.dataset_id, dr.status, dr.created_at, dr.completed_at, d.name, i.name, c.name
+      GROUP BY dr.id, dr.dataset_id, dr.status, dr.created_at, dr.completed_at, d.name, i.name
       ORDER BY dr.created_at DESC
       LIMIT 100`,
       [userId]
