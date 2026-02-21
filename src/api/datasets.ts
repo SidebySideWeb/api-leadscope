@@ -92,11 +92,9 @@ router.get('/', authMiddleware, async (req: AuthRequest, res): Promise<void> => 
             d.last_refreshed_at,
             d.created_at,
             COUNT(DISTINCT b.id) as businesses_count,
-            COUNT(DISTINCT c.id) as contacts_count
+            COUNT(DISTINCT b.id) FILTER (WHERE b.email IS NOT NULL OR b.phone IS NOT NULL) as contacts_count
           FROM datasets d
           LEFT JOIN businesses b ON b.dataset_id = d.id
-          LEFT JOIN contact_sources cs ON cs.business_id = b.id
-          LEFT JOIN contacts c ON c.id = cs.contact_id
           WHERE d.user_id = $1
           GROUP BY d.id, d.user_id, d.name, d.city_id, d.industry_id, d.last_refreshed_at, d.created_at
           ORDER BY d.created_at DESC
@@ -317,10 +315,8 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res): Promise<void> 
       `
       SELECT 
         COUNT(DISTINCT b.id) as businesses_count,
-        COUNT(DISTINCT c.id) as contacts_count
+        COUNT(DISTINCT b.id) FILTER (WHERE b.email IS NOT NULL OR b.phone IS NOT NULL) as contacts_count
       FROM businesses b
-      LEFT JOIN contact_sources cs ON cs.business_id = b.id
-      LEFT JOIN contacts c ON c.id = cs.contact_id
       WHERE b.dataset_id = $1
       `,
       [datasetId]
@@ -453,12 +449,11 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res): Promis
       ),
       contact_counts AS (
         SELECT
-          cs.business_id,
-          COUNT(DISTINCT c.id) FILTER (WHERE c.contact_type = 'email' AND c.is_active = TRUE) AS emails_count,
-          COUNT(DISTINCT c.id) FILTER (WHERE c.contact_type IN ('phone','mobile') AND c.is_active = TRUE) AS phones_count
-        FROM contact_sources cs
-        JOIN contacts c ON c.id = cs.contact_id
-        GROUP BY cs.business_id
+          b.id as business_id,
+          CASE WHEN b.email IS NOT NULL AND b.email != '' THEN 1 ELSE 0 END AS emails_count,
+          CASE WHEN b.phone IS NOT NULL AND b.phone != '' THEN 1 ELSE 0 END AS phones_count
+        FROM businesses b
+        GROUP BY b.id
       )
       SELECT 
         b.id,
