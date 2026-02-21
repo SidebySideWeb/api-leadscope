@@ -594,9 +594,10 @@ export async function importGemiCompaniesToDatabase(
             website_url = COALESCE($6, website_url),
             phone = COALESCE($7, phone),
             email = COALESCE($8, email),
-            discovery_run_id = COALESCE($9, discovery_run_id),
+            dataset_id = $9,
+            discovery_run_id = COALESCE($10, discovery_run_id),
             updated_at = NOW()
-          WHERE id = $10`,
+          WHERE id = $11`,
           [
             insertValues[1], // name
             insertValues[2], // address
@@ -606,6 +607,7 @@ export async function importGemiCompaniesToDatabase(
             insertValues[6], // website_url
             insertValues[7], // phone
             insertValues[8], // email
+            insertValues[9], // dataset_id - always update to link to current dataset
             insertValues[11], // discovery_run_id
             businessId
           ]
