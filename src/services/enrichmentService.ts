@@ -395,12 +395,11 @@ export async function enrichBusinessEmail(businessId: string): Promise<{
   source: 'existing' | 'website' | 'facebook' | 'linkedin' | 'none';
 }> {
   try {
-    // Get business info including social media links
+    // Get business info - social media links are not stored in businesses table
     const businessResult = await pool.query<{
       email: string | null;
       website_url: string | null;
       name: string;
-      social_links: any;
       facebook_url: string | null;
       linkedin_url: string | null;
     }>(
@@ -408,9 +407,8 @@ export async function enrichBusinessEmail(businessId: string): Promise<{
          b.email, 
          b.website_url, 
          b.name,
-         b.social_links,
-         (SELECT url FROM social_media WHERE business_id = b.id AND platform = 'facebook' LIMIT 1) AS facebook_url,
-         (SELECT url FROM social_media WHERE business_id = b.id AND platform = 'linkedin' LIMIT 1) AS linkedin_url
+         NULL AS facebook_url,
+         NULL AS linkedin_url
        FROM businesses b
        WHERE b.id = $1`,
       [businessId]
@@ -450,17 +448,18 @@ export async function enrichBusinessEmail(businessId: string): Promise<{
       }
     }
 
-    // Step 2: Try to find email on Facebook page if it exists
-    if (!emailFound) {
-      // Get Facebook URL from social_media table or social_links JSONB
-      const facebookUrl = business.facebook_url || 
-                         (business.social_links?.facebook) ||
-                         (typeof business.social_links === 'object' && business.social_links !== null ? business.social_links.facebook : null);
-
+    // Step 2 & 3: Facebook and LinkedIn crawling disabled
+    // Note: social_media table and social_links column don't exist
+    // Social media URLs are not currently stored in businesses table
+    // TODO: Re-enable when social_media table is created or social URLs are added to businesses table
+    
+    // Facebook crawling - disabled
+    if (false && !emailFound) {
+      const facebookUrl = business.facebook_url;
       if (facebookUrl) {
         console.log(`[Enrichment] Attempting to find email on Facebook page for business ${businessId}`);
         try {
-          const fbResult = await crawlFacebookContactInfo(facebookUrl);
+          const fbResult = await crawlFacebookContactInfo(facebookUrl!);
           
           if (fbResult.emails && fbResult.emails.length > 0) {
             const fbEmail = fbResult.emails[0].value; // Extract email value from result object
@@ -481,17 +480,13 @@ export async function enrichBusinessEmail(businessId: string): Promise<{
       }
     }
 
-    // Step 3: Try to find email on LinkedIn page if it exists
-    if (!emailFound) {
-      // Get LinkedIn URL from social_media table or social_links JSONB
-      const linkedinUrl = business.linkedin_url || 
-                         (business.social_links?.linkedin) ||
-                         (typeof business.social_links === 'object' && business.social_links !== null ? business.social_links.linkedin : null);
-
+    // LinkedIn crawling - disabled
+    if (false && !emailFound) {
+      const linkedinUrl = business.linkedin_url;
       if (linkedinUrl) {
         console.log(`[Enrichment] Attempting to find email on LinkedIn page for business ${businessId}`);
         try {
-          const liResult = await crawlLinkedInAbout(linkedinUrl);
+          const liResult = await crawlLinkedInAbout(linkedinUrl!);
           
           if (liResult.emails && liResult.emails.length > 0) {
             const liEmail = liResult.emails[0].value; // Extract email value from result object
