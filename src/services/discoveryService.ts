@@ -1,8 +1,7 @@
 import type { DiscoveryJobInput, JobResult } from '../types/jobs.js';
-import { createCrawlJob } from '../db/crawlJobs.js';
 import { pool } from '../config/database.js';
-import type { Website } from '../types/index.js';
 import { resolveDataset, markDatasetRefreshed } from './datasetResolver.js';
+import { randomUUID } from 'crypto';
 import { enforceDiscoveryLimits, type UserPlan } from '../limits/enforcePlanLimits.js';
 import { checkUsageLimit } from '../limits/usageLimits.js';
 import { getUserPermissions, checkPermission } from '../db/permissions.js';
@@ -635,29 +634,50 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
       console.log(`[runDiscoveryJob] Marked dataset as refreshed: ${datasetId}`);
     }
 
-    // Get count of websites created
-    const websitesResult = await pool.query<{ count: string }>(
+    // Get count of businesses with websites created in this discovery run
+    const businessesWithWebsitesResult = await pool.query<{ count: string }>(
       `SELECT COUNT(*) as count
-       FROM websites
-       WHERE created_at >= $1`,
-      [startTime]
+       FROM businesses
+       WHERE discovery_run_id = $1
+         AND website_url IS NOT NULL
+         AND website_url != ''`,
+      [discoveryRun.id]
     );
-    const totalWebsitesProcessed = parseInt(websitesResult.rows[0]?.count || '0', 10);
+    const totalWebsitesProcessed = parseInt(businessesWithWebsitesResult.rows[0]?.count || '0', 10);
 
-    // Create crawl jobs for all new websites
-    const websitesResult2 = await pool.query<Website>(
-      `SELECT * FROM websites WHERE created_at >= $1`,
-      [startTime]
+    // Create crawl jobs for all new businesses with websites
+    const businessesWithWebsites = await pool.query<{ id: string; website_url: string }>(
+      `SELECT id, website_url
+       FROM businesses
+       WHERE discovery_run_id = $1
+         AND website_url IS NOT NULL
+         AND website_url != ''`,
+      [discoveryRun.id]
     );
 
     let crawlJobsCreated = 0;
-    for (const website of websitesResult2.rows) {
+    for (const business of businessesWithWebsites.rows) {
       try {
-        await createCrawlJob(website.id);
+        // Create crawl job using business_id and website_url (new schema)
+        // Check if crawl job already exists for this business and website
+        const existingJob = await pool.query(
+          `SELECT id FROM crawl_jobs WHERE business_id = $1 AND website_url = $2 LIMIT 1`,
+          [business.id, business.website_url]
+        );
+        
+        if (existingJob.rows.length === 0) {
+          const jobId = randomUUID();
+          await pool.query(
+            `INSERT INTO crawl_jobs (id, business_id, website_url, status, pages_limit, pages_crawled, created_at)
+             VALUES ($1, $2, $3, 'queued', 25, 0, NOW())`,
+            [jobId, business.id, business.website_url]
+          );
+          crawlJobsCreated++;
+        }
         crawlJobsCreated++;
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        errors.push(`Failed to create crawl job for website ${website.id}: ${errorMsg}`);
+        errors.push(`Failed to create crawl job for business ${business.id}: ${errorMsg}`);
       }
     }
 
