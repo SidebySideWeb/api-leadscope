@@ -91,8 +91,26 @@ async function scrapeWithCheerio(url: string): Promise<{ emails: string[]; phone
     const phones = extractPhones(html);
 
     return { emails, phones };
-  } catch (error) {
-    console.error(`[Enrichment] Error scraping ${url} with Cheerio:`, error);
+  } catch (error: any) {
+    // Handle DNS errors and network errors gracefully (expected for invalid/expired domains)
+    const isDnsError = error?.code === 'ENOTFOUND' || 
+                      error?.code === 'ECONNREFUSED' ||
+                      error?.message?.includes('ENOTFOUND') ||
+                      error?.message?.includes('getaddrinfo');
+    const isNetworkError = error?.code === 'ETIMEDOUT' ||
+                          error?.code === 'ECONNRESET' ||
+                          error?.message?.includes('timeout');
+    
+    if (isDnsError) {
+      // DNS errors are expected for invalid/expired domains - log quietly
+      console.log(`[Enrichment] Website not found (DNS error): ${url}`);
+    } else if (isNetworkError) {
+      // Network errors are also common - log quietly
+      console.log(`[Enrichment] Network error for ${url}: ${error?.code || error?.message}`);
+    } else {
+      // Other errors might be important - log with more detail
+      console.warn(`[Enrichment] Error scraping ${url} with Cheerio: ${error?.message || error}`);
+    }
     return { emails: [], phones: [] };
   }
 }
@@ -169,8 +187,25 @@ async function scrapeWithPlaywright(url: string): Promise<{ emails: string[]; ph
     const phones = extractPhones(html);
 
     return { emails, phones };
-  } catch (error) {
-    console.error(`[Enrichment] Error scraping ${url} with Playwright:`, error);
+  } catch (error: any) {
+    // Handle DNS errors and network errors gracefully (expected for invalid/expired domains)
+    const isDnsError = error?.message?.includes('ERR_NAME_NOT_RESOLVED') ||
+                      error?.message?.includes('net::ERR_NAME_NOT_RESOLVED') ||
+                      error?.code === 'ENOTFOUND';
+    const isNetworkError = error?.message?.includes('timeout') ||
+                          error?.message?.includes('ERR_CONNECTION') ||
+                          error?.code === 'ETIMEDOUT';
+    
+    if (isDnsError) {
+      // DNS errors are expected for invalid/expired domains - log quietly
+      console.log(`[Enrichment] Website not found (DNS error): ${url}`);
+    } else if (isNetworkError) {
+      // Network errors are also common - log quietly
+      console.log(`[Enrichment] Network error for ${url}: ${error?.message?.substring(0, 100)}`);
+    } else {
+      // Other errors might be important - log with more detail
+      console.warn(`[Enrichment] Error scraping ${url} with Playwright: ${error?.message || error}`);
+    }
     return { emails: [], phones: [] };
   } finally {
     await page.close();
