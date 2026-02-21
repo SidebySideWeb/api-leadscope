@@ -462,6 +462,21 @@ async function processExportAsync(
       console.log(`[processExportAsync] ✅ All jobs completed after ${waitResult.waitedSeconds}s - proceeding with export ${exportId}`);
     }
 
+    // Enrich missing emails before export (website, Facebook, LinkedIn crawling)
+    try {
+      console.log(`[processExportAsync] Starting email enrichment for export ${exportId}...`);
+      const { enrichDatasetEmails } = await import('../services/enrichmentService.js');
+      
+      // Enrich emails for businesses in the export range
+      // Process more businesses to ensure we have emails for the export
+      const enrichmentResult = await enrichDatasetEmails(datasetId, 20, 20); // 20 per batch, 20 batches = 400 businesses
+      console.log(`[processExportAsync] Email enrichment completed: ${enrichmentResult.emailsFound} emails found from ${enrichmentResult.processed} businesses`);
+      console.log(`[processExportAsync] Email sources: ${enrichmentResult.sources.website} website, ${enrichmentResult.sources.facebook} facebook, ${enrichmentResult.sources.linkedin} linkedin`);
+    } catch (enrichError: any) {
+      // Don't fail export if enrichment fails, but log the error
+      console.error(`[processExportAsync] Email enrichment failed (continuing with export):`, enrichError);
+    }
+
     // Generate export with timeout (10 minutes max)
     console.log(`[processExportAsync] Starting export generation for ${exportId}...`);
     let filePath: string;

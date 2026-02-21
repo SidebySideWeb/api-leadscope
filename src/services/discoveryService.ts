@@ -564,6 +564,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
           };
 
           console.log(`[runDiscoveryJob] GEMI import completed: ${importResult.inserted} inserted, ${importResult.updated} updated`);
+          // Note: Email enrichment now happens only on export request, not during discovery
         } catch (error: any) {
           // 404 errors are handled in gemiService and return empty array, so they shouldn't reach here
           // But if they do, treat them as "no results" rather than an error

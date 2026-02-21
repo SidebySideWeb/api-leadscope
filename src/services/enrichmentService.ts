@@ -8,6 +8,7 @@ import { chromium, Browser, Page } from 'playwright';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { pool } from '../config/database.js';
+import { crawlFacebookContactInfo, crawlLinkedInAbout } from '../crawl/socialMediaCrawler.js';
 
 let browserInstance: Browser | null = null;
 
@@ -20,15 +21,38 @@ async function getBrowser(): Promise<Browser> {
 
 /**
  * Extract email addresses from HTML content
+ * Includes mailto: links and regex pattern matching
  */
 function extractEmails(html: string): string[] {
   const emails: string[] = [];
+  
+  // 1. Extract from mailto: links
+  const mailtoRegex = /mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
+  let mailtoMatch;
+  while ((mailtoMatch = mailtoRegex.exec(html)) !== null) {
+    emails.push(mailtoMatch[1]);
+  }
+  
+  // 2. Extract from regex pattern (general email pattern)
   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
   const matches = html.match(emailRegex);
   if (matches) {
     emails.push(...matches);
   }
-  return [...new Set(emails)]; // Remove duplicates
+  
+  // Filter out common non-business emails
+  const filtered = emails.filter(email => {
+    const lower = email.toLowerCase();
+    return !lower.includes('example.com') &&
+           !lower.includes('test.com') &&
+           !lower.includes('sample.com') &&
+           !lower.includes('placeholder') &&
+           !lower.includes('noreply') &&
+           !lower.includes('no-reply') &&
+           !lower.includes('donotreply');
+  });
+  
+  return [...new Set(filtered)]; // Remove duplicates
 }
 
 /**
@@ -71,6 +95,60 @@ async function scrapeWithCheerio(url: string): Promise<{ emails: string[]; phone
     console.error(`[Enrichment] Error scraping ${url} with Cheerio:`, error);
     return { emails: [], phones: [] };
   }
+}
+
+/**
+ * Crawl multiple pages from a website to find email
+ * Tries common contact pages: /contact, /about, /επικοινωνία
+ */
+async function crawlContactPages(baseUrl: string): Promise<{ emails: string[]; phones: string[] }> {
+  const allEmails: string[] = [];
+  const allPhones: string[] = [];
+  
+  // Common contact page paths (including Greek)
+  const contactPaths = [
+    '/contact',
+    '/about',
+    '/επικοινωνία',
+    '/contact-us',
+    '/about-us',
+    '/get-in-touch',
+    '/reach-us'
+  ];
+  
+  // Normalize base URL
+  const urlObj = new URL(baseUrl);
+  const base = `${urlObj.protocol}//${urlObj.host}`;
+  
+  for (const path of contactPaths) {
+    try {
+      const contactUrl = `${base}${path}`;
+      console.log(`[Enrichment] Trying contact page: ${contactUrl}`);
+      
+      const result = await scrapeWithCheerio(contactUrl);
+      
+      if (result.emails.length > 0 || result.phones.length > 0) {
+        allEmails.push(...result.emails);
+        allPhones.push(...result.phones);
+        console.log(`[Enrichment] Found ${result.emails.length} emails, ${result.phones.length} phones on ${contactUrl}`);
+        // If we found emails, we can stop (optional - could continue to find more)
+        if (result.emails.length > 0) {
+          break; // Found email, no need to check other pages
+        }
+      }
+      
+      // Small delay between requests
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (error) {
+      // Continue to next page if this one fails
+      continue;
+    }
+  }
+  
+  return {
+    emails: [...new Set(allEmails)],
+    phones: [...new Set(allPhones)]
+  };
 }
 
 /**
@@ -156,9 +234,13 @@ export async function enrichBusiness(businessId: string): Promise<{
       url = `https://${url}`;
     }
 
-    console.log(`[Enrichment] Scraping ${url} for business ${businessId}`);
+    console.log(`[Enrichment] Starting comprehensive email search for ${url} (business ${businessId})`);
 
-    // Try Cheerio first (faster), fallback to Playwright if needed
+    let allEmails: string[] = [];
+    let allPhones: string[] = [];
+
+    // Step 1: Fetch homepage and search for mailto: and regex emails
+    console.log(`[Enrichment] Step 1: Fetching homepage ${url}`);
     let result = await scrapeWithCheerio(url);
 
     // If no results and site might be JS-heavy, try Playwright
@@ -166,6 +248,32 @@ export async function enrichBusiness(businessId: string): Promise<{
       console.log(`[Enrichment] No results with Cheerio, trying Playwright for ${url}`);
       result = await scrapeWithPlaywright(url);
     }
+
+    allEmails.push(...result.emails);
+    allPhones.push(...result.phones);
+    console.log(`[Enrichment] Homepage: Found ${result.emails.length} emails, ${result.phones.length} phones`);
+
+    // Step 2: If no email found, crawl contact pages
+    if (result.emails.length === 0 && !hasEmail) {
+      console.log(`[Enrichment] Step 2: No email on homepage, crawling contact pages...`);
+      const contactResult = await crawlContactPages(url);
+      allEmails.push(...contactResult.emails);
+      allPhones.push(...contactResult.phones);
+      console.log(`[Enrichment] Contact pages: Found ${contactResult.emails.length} emails, ${contactResult.phones.length} phones`);
+    }
+
+    // Step 3: Optional deep crawl (if still no email found)
+    // This could crawl more pages, but for now we'll skip to avoid being too aggressive
+    // Can be enabled later if needed
+
+    // Remove duplicates
+    const uniqueEmails = [...new Set(allEmails)];
+    const uniquePhones = [...new Set(allPhones)];
+
+    result = {
+      emails: uniqueEmails,
+      phones: uniquePhones
+    };
 
     // Save found contacts directly to businesses table
     let emailsFound = 0;
@@ -270,6 +378,218 @@ export async function enrichMissingContacts(batchSize: number = 10): Promise<{
     processed: businessesResult.rows.length,
     emailsFound: totalEmailsFound,
     phonesFound: totalPhonesFound,
+  };
+}
+
+// Google search removed - email enrichment now only uses website, Facebook, and LinkedIn crawling
+
+/**
+ * Enrich business with email using fallback chain:
+ * 1. Check if email already exists
+ * 2. Crawl website if exists (homepage + contact pages)
+ * 3. Crawl Facebook page if exists
+ * 4. Crawl LinkedIn page if exists
+ */
+export async function enrichBusinessEmail(businessId: string): Promise<{
+  emailFound: boolean;
+  source: 'existing' | 'website' | 'facebook' | 'linkedin' | 'none';
+}> {
+  try {
+    // Get business info including social media links
+    const businessResult = await pool.query<{
+      email: string | null;
+      website_url: string | null;
+      name: string;
+      social_links: any;
+      facebook_url: string | null;
+      linkedin_url: string | null;
+    }>(
+      `SELECT 
+         b.email, 
+         b.website_url, 
+         b.name,
+         b.social_links,
+         (SELECT url FROM social_media WHERE business_id = b.id AND platform = 'facebook' LIMIT 1) AS facebook_url,
+         (SELECT url FROM social_media WHERE business_id = b.id AND platform = 'linkedin' LIMIT 1) AS linkedin_url
+       FROM businesses b
+       WHERE b.id = $1`,
+      [businessId]
+    );
+
+    if (businessResult.rows.length === 0) {
+      return { emailFound: false, source: 'none' };
+    }
+
+    const business = businessResult.rows[0];
+
+    // Check if email already exists
+    if (business.email) {
+      console.log(`[Enrichment] Business ${businessId} already has email: ${business.email}`);
+      return { emailFound: true, source: 'existing' };
+    }
+
+    let emailFound: string | null = null;
+    let source: 'website' | 'facebook' | 'linkedin' | 'none' = 'none';
+
+    // Step 1: Try to find email on website if it exists
+    if (business.website_url && !emailFound) {
+      console.log(`[Enrichment] Attempting to find email on website for business ${businessId}`);
+      const enrichResult = await enrichBusiness(businessId);
+      
+      if (enrichResult.emailsFound > 0) {
+        // Check if email was saved
+        const checkResult = await pool.query<{ email: string | null }>(
+          `SELECT email FROM businesses WHERE id = $1`,
+          [businessId]
+        );
+        if (checkResult.rows[0]?.email) {
+          emailFound = checkResult.rows[0].email;
+          source = 'website';
+          console.log(`[Enrichment] Found email on website: ${emailFound}`);
+        }
+      }
+    }
+
+    // Step 2: Try to find email on Facebook page if it exists
+    if (!emailFound) {
+      // Get Facebook URL from social_media table or social_links JSONB
+      const facebookUrl = business.facebook_url || 
+                         (business.social_links?.facebook) ||
+                         (typeof business.social_links === 'object' && business.social_links !== null ? business.social_links.facebook : null);
+
+      if (facebookUrl) {
+        console.log(`[Enrichment] Attempting to find email on Facebook page for business ${businessId}`);
+        try {
+          const fbResult = await crawlFacebookContactInfo(facebookUrl);
+          
+          if (fbResult.emails && fbResult.emails.length > 0) {
+            const fbEmail = fbResult.emails[0].value; // Extract email value from result object
+            // Save email to database
+            await pool.query(
+              `UPDATE businesses 
+               SET email = $1, updated_at = NOW()
+               WHERE id = $2`,
+              [fbEmail, businessId]
+            );
+            emailFound = fbEmail;
+            source = 'facebook';
+            console.log(`[Enrichment] Found email on Facebook: ${emailFound}`);
+          }
+        } catch (error: any) {
+          console.warn(`[Enrichment] Facebook crawl failed for business ${businessId}:`, error.message);
+        }
+      }
+    }
+
+    // Step 3: Try to find email on LinkedIn page if it exists
+    if (!emailFound) {
+      // Get LinkedIn URL from social_media table or social_links JSONB
+      const linkedinUrl = business.linkedin_url || 
+                         (business.social_links?.linkedin) ||
+                         (typeof business.social_links === 'object' && business.social_links !== null ? business.social_links.linkedin : null);
+
+      if (linkedinUrl) {
+        console.log(`[Enrichment] Attempting to find email on LinkedIn page for business ${businessId}`);
+        try {
+          const liResult = await crawlLinkedInAbout(linkedinUrl);
+          
+          if (liResult.emails && liResult.emails.length > 0) {
+            const liEmail = liResult.emails[0].value; // Extract email value from result object
+            // Save email to database
+            await pool.query(
+              `UPDATE businesses 
+               SET email = $1, updated_at = NOW()
+               WHERE id = $2`,
+              [liEmail, businessId]
+            );
+            emailFound = liEmail;
+            source = 'linkedin';
+            console.log(`[Enrichment] Found email on LinkedIn: ${emailFound}`);
+          }
+        } catch (error: any) {
+          console.warn(`[Enrichment] LinkedIn crawl failed for business ${businessId}:`, error.message);
+        }
+      }
+    }
+
+    // Note: Google search removed - only website, Facebook, and LinkedIn crawling
+
+    return {
+      emailFound: !!emailFound,
+      source: emailFound ? source : 'none'
+    };
+  } catch (error: any) {
+    console.error(`[Enrichment] Error enriching email for business ${businessId}:`, error);
+    return { emailFound: false, source: 'none' };
+  }
+}
+
+/**
+ * Enrich businesses in a dataset that are missing email
+ * Processes in batches to avoid overwhelming the system
+ */
+export async function enrichDatasetEmails(
+  datasetId: string,
+  batchSize: number = 10,
+  maxBatches: number = 10
+): Promise<{
+  processed: number;
+  emailsFound: number;
+  sources: { website: number; facebook: number; linkedin: number; existing: number };
+}> {
+  console.log(`[Enrichment] Starting email enrichment for dataset ${datasetId}`);
+  
+  let totalProcessed = 0;
+  let totalEmailsFound = 0;
+  const sources = { website: 0, facebook: 0, linkedin: 0, existing: 0 };
+
+  for (let batch = 0; batch < maxBatches; batch++) {
+    // Find businesses in dataset missing email
+    const businessesResult = await pool.query<{ id: string }>(
+      `SELECT b.id
+       FROM businesses b
+       WHERE b.dataset_id = $1
+         AND (b.email IS NULL OR b.email = '')
+       LIMIT $2`,
+      [datasetId, batchSize]
+    );
+
+    if (businessesResult.rows.length === 0) {
+      console.log(`[Enrichment] No more businesses to enrich in dataset ${datasetId}`);
+      break;
+    }
+
+    console.log(`[Enrichment] Processing batch ${batch + 1}/${maxBatches}: ${businessesResult.rows.length} businesses`);
+
+    for (const business of businessesResult.rows) {
+      const result = await enrichBusinessEmail(business.id);
+      totalProcessed++;
+      
+      if (result.emailFound) {
+        totalEmailsFound++;
+        if (result.source === 'website') sources.website++;
+        else if (result.source === 'facebook') sources.facebook++;
+        else if (result.source === 'linkedin') sources.linkedin++;
+        else if (result.source === 'existing') sources.existing++;
+      }
+
+      // Small delay between businesses to avoid rate limiting
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+
+    // Delay between batches
+    if (batch < maxBatches - 1 && businessesResult.rows.length === batchSize) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
+
+  console.log(`[Enrichment] Email enrichment completed for dataset ${datasetId}: ${totalEmailsFound} emails found from ${totalProcessed} businesses`);
+  console.log(`[Enrichment] Sources: ${sources.website} website, ${sources.facebook} facebook, ${sources.linkedin} linkedin, ${sources.existing} existing`);
+
+  return {
+    processed: totalProcessed,
+    emailsFound: totalEmailsFound,
+    sources
   };
 }
 
