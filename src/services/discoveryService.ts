@@ -368,34 +368,51 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     }
 
     // STEP 1: Check local database first for existing businesses
-    // Filter by dataset_id and municipality_id or prefecture_id
+    // Check for businesses matching the criteria (municipality/prefecture) regardless of dataset_id
+    // This allows us to find businesses created in previous discovery runs and link them to this dataset
     console.log(`[runDiscoveryJob] Checking local database for existing businesses...`);
     let existingBusinessesResult;
     if (finalMunicipalityId) {
       existingBusinessesResult = await pool.query<{ count: string }>(
         `SELECT COUNT(*) as count
          FROM businesses
-         WHERE dataset_id = $1
-           AND municipality_id = $2`,
-        [datasetId, finalMunicipalityId]
+         WHERE municipality_id = $1`,
+        [finalMunicipalityId]
+      );
+    } else if (finalMunicipalityGemiId) {
+      // Check by municipality GEMI ID
+      const municipalityGemiIds = Array.isArray(finalMunicipalityGemiId) 
+        ? finalMunicipalityGemiId 
+        : [finalMunicipalityGemiId];
+      existingBusinessesResult = await pool.query<{ count: string }>(
+        `SELECT COUNT(*) as count
+         FROM businesses
+         WHERE municipality_id IN (
+           SELECT id FROM municipalities WHERE gemi_id = ANY($1::text[])
+         )`,
+        [municipalityGemiIds.map(String)]
       );
     } else if (finalPrefectureId) {
       // When only prefecture is available, check by prefecture_id
       existingBusinessesResult = await pool.query<{ count: string }>(
         `SELECT COUNT(*) as count
          FROM businesses
-         WHERE dataset_id = $1
-           AND prefecture_id = $2`,
-        [datasetId, finalPrefectureId]
+         WHERE prefecture_id = $1`,
+        [finalPrefectureId]
       );
-    } else {
-      // Fallback: check by dataset_id only (less precise but still valid)
+    } else if (finalPrefectureGemiId) {
+      // Check by prefecture GEMI ID
       existingBusinessesResult = await pool.query<{ count: string }>(
         `SELECT COUNT(*) as count
          FROM businesses
-         WHERE dataset_id = $1`,
-        [datasetId]
+         WHERE prefecture_id IN (
+           SELECT id FROM prefectures WHERE gemi_id = $1
+         )`,
+        [String(finalPrefectureGemiId)]
       );
+    } else {
+      // Fallback: can't check without location criteria
+      existingBusinessesResult = { rows: [{ count: '0' }] };
     }
     
     const existingCount = parseInt(existingBusinessesResult.rows[0]?.count || '0', 10);
@@ -609,12 +626,68 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         }
       }
     } else {
-      // Businesses already exist in local DB, no need to fetch from GEMI
-      console.log(`[runDiscoveryJob] Using existing businesses from local database`);
+      // Businesses already exist in local DB, but we need to link them to this dataset
+      console.log(`[runDiscoveryJob] Found ${existingCount} existing businesses, linking them to dataset ${datasetId}...`);
+      
+      // Update existing businesses to link them to this dataset and discovery run
+      let updatedCount = 0;
+      try {
+        // Build WHERE clause based on discovery criteria
+        let whereClause = '';
+        const updateParams: any[] = [datasetId, discoveryRun.id];
+        let paramIndex = 3;
+        
+        if (finalMunicipalityId) {
+          whereClause += ` AND municipality_id = $${paramIndex++}`;
+          updateParams.push(finalMunicipalityId);
+        } else if (finalMunicipalityGemiId) {
+          // Get municipality IDs from GEMI IDs
+          const municipalityGemiIds = Array.isArray(finalMunicipalityGemiId) 
+            ? finalMunicipalityGemiId 
+            : [finalMunicipalityGemiId];
+          whereClause += ` AND municipality_id IN (
+            SELECT id FROM municipalities WHERE gemi_id = ANY($${paramIndex++}::text[])
+          )`;
+          updateParams.push(municipalityGemiIds.map(String));
+        } else if (finalPrefectureId || finalPrefectureGemiId) {
+          const prefectureIdToUse = finalPrefectureId || 
+            (finalPrefectureGemiId ? await (async () => {
+              const prefResult = await pool.query<{ id: string }>(
+                'SELECT id FROM prefectures WHERE gemi_id = $1',
+                [String(finalPrefectureGemiId)]
+              );
+              return prefResult.rows[0]?.id;
+            })() : null);
+          
+          if (prefectureIdToUse) {
+            whereClause += ` AND prefecture_id = $${paramIndex++}`;
+            updateParams.push(prefectureIdToUse);
+          }
+        }
+        
+        // Update businesses to link them to this dataset
+        const updateResult = await pool.query<{ count: string }>(
+          `UPDATE businesses 
+           SET dataset_id = $1, 
+               discovery_run_id = COALESCE($2, discovery_run_id),
+               updated_at = NOW()
+           WHERE dataset_id IS NULL OR dataset_id != $1
+             ${whereClause}
+           RETURNING id`,
+          updateParams
+        );
+        
+        updatedCount = updateResult.rowCount || 0;
+        console.log(`[runDiscoveryJob] Linked ${updatedCount} existing businesses to dataset ${datasetId}`);
+      } catch (updateError: any) {
+        console.error(`[runDiscoveryJob] Error linking existing businesses to dataset:`, updateError.message);
+        // Continue even if update fails - businesses still exist
+      }
+      
       discoveryResult = {
         businessesFound: existingCount,
         businessesCreated: 0,
-        businessesUpdated: 0,
+        businessesUpdated: updatedCount,
         searchesExecuted: 0,
         errors: [],
       };
