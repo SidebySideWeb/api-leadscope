@@ -529,50 +529,105 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         
         try {
           // Fetch companies from GEMI API (supports municipality, multiple municipalities, or prefecture)
-          // Pass activity IDs as array (the GEMI service will handle single vs multiple)
-          // Continue fetching if we hit the safety limit (10,000 results)
+          // IMPORTANT: Make separate API calls for each activity ID to ensure we get all results
+          // (GEMI API may not properly support multiple activities in a single call)
           let allCompanies: any[] = [];
-          let currentOffset: number | undefined = undefined;
           let totalSearchesExecuted = 0;
-          let hasMore = true;
+          
+          // If we have multiple activity IDs, make separate calls for each
+          if (activityIds && activityIds.length > 1) {
+            console.log(`[runDiscoveryJob] Making separate API calls for each of ${activityIds.length} activity IDs to ensure complete results...`);
+            
+            for (let i = 0; i < activityIds.length; i++) {
+              const activityId = activityIds[i];
+              console.log(`[runDiscoveryJob] Fetching activity ${i + 1}/${activityIds.length}: activity_id=${activityId}`);
+              
+              let currentOffset: number | undefined = undefined;
+              let hasMore = true;
+              let activityCompanies: any[] = [];
 
-          while (hasMore) {
-            const result = await fetchGemiCompaniesForMunicipality(
-              municipalityGemiId,
-              activityIds && activityIds.length > 0 ? activityIds : undefined,
-              prefectureGemiId,
-              currentOffset
-            );
+              while (hasMore) {
+                const result = await fetchGemiCompaniesForMunicipality(
+                  municipalityGemiId,
+                  activityId, // Single activity ID per call
+                  prefectureGemiId,
+                  currentOffset
+                );
 
-            allCompanies = allCompanies.concat(result.companies);
-            currentOffset = result.nextOffset;
-            hasMore = result.hasMore;
-            totalSearchesExecuted++;
+                activityCompanies = activityCompanies.concat(result.companies);
+                currentOffset = result.nextOffset;
+                hasMore = result.hasMore;
+                totalSearchesExecuted++;
 
-            console.log(`[runDiscoveryJob] Fetched ${result.companies.length} companies (total: ${allCompanies.length}), nextOffset: ${currentOffset}, hasMore: ${hasMore}`);
+                console.log(`[runDiscoveryJob] Activity ${activityId}: Fetched ${result.companies.length} companies (total for this activity: ${activityCompanies.length}), nextOffset: ${currentOffset}, hasMore: ${hasMore}`);
 
-            // If we hit the safety limit but there's more data, continue fetching
-            if (!hasMore && currentOffset >= 10000) {
-              console.log(`[runDiscoveryJob] Hit safety limit at offset ${currentOffset}, continuing to fetch more...`);
-              hasMore = true; // Continue fetching from this offset
-            } else if (!hasMore) {
-              // No more data available
-              break;
+                // If we hit the safety limit but there's more data, continue fetching
+                if (!hasMore && currentOffset >= 10000) {
+                  console.log(`[runDiscoveryJob] Activity ${activityId}: Hit safety limit at offset ${currentOffset}, continuing to fetch more...`);
+                  hasMore = true; // Continue fetching from this offset
+                } else if (!hasMore) {
+                  // No more data available for this activity
+                  break;
+                }
+              }
+              
+              console.log(`[runDiscoveryJob] Activity ${activityId}: Total ${activityCompanies.length} companies found`);
+              allCompanies = allCompanies.concat(activityCompanies);
+            }
+          } else {
+            // Single activity ID (or no activity filter) - use original logic
+            let currentOffset: number | undefined = undefined;
+            let hasMore = true;
+
+            while (hasMore) {
+              const result = await fetchGemiCompaniesForMunicipality(
+                municipalityGemiId,
+                activityIds && activityIds.length > 0 ? activityIds[0] : undefined,
+                prefectureGemiId,
+                currentOffset
+              );
+
+              allCompanies = allCompanies.concat(result.companies);
+              currentOffset = result.nextOffset;
+              hasMore = result.hasMore;
+              totalSearchesExecuted++;
+
+              console.log(`[runDiscoveryJob] Fetched ${result.companies.length} companies (total: ${allCompanies.length}), nextOffset: ${currentOffset}, hasMore: ${hasMore}`);
+
+              // If we hit the safety limit but there's more data, continue fetching
+              if (!hasMore && currentOffset >= 10000) {
+                console.log(`[runDiscoveryJob] Hit safety limit at offset ${currentOffset}, continuing to fetch more...`);
+                hasMore = true; // Continue fetching from this offset
+              } else if (!hasMore) {
+                // No more data available
+                break;
+              }
             }
           }
 
           console.log(`[runDiscoveryJob] Total fetched ${allCompanies.length} companies from GEMI API in ${totalSearchesExecuted} batch(es)`);
+          
+          // Remove duplicates based on ar_gemi (same business might appear in multiple activity results)
+          const uniqueCompanies = new Map<string, any>();
+          for (const company of allCompanies) {
+            const arGemi = company.ar_gemi || company.arGemi;
+            if (arGemi && !uniqueCompanies.has(arGemi)) {
+              uniqueCompanies.set(arGemi, company);
+            }
+          }
+          const deduplicatedCompanies = Array.from(uniqueCompanies.values());
+          console.log(`[runDiscoveryJob] Removed ${allCompanies.length - deduplicatedCompanies.length} duplicate companies (${deduplicatedCompanies.length} unique companies)`);
 
           // Import companies to database (pass discoveryRunId if available)
           const importResult = await importGemiCompaniesToDatabase(
-            allCompanies,
+            deduplicatedCompanies,
             datasetId,
             input.userId || 'system',
             input.discoveryRunId || undefined // Pass discoveryRunId to link businesses
           );
 
           discoveryResult = {
-            businessesFound: allCompanies.length,
+            businessesFound: deduplicatedCompanies.length,
             businessesCreated: importResult.inserted,
             businessesUpdated: importResult.updated,
             searchesExecuted: totalSearchesExecuted,
