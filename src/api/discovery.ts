@@ -34,7 +34,7 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     
     // CRITICAL: Check if body exists
     if (!req.body || typeof req.body !== 'object' || Object.keys(req.body).length === 0) {
-      const errorMsg = 'Invalid discovery request: request body is missing or empty. Expected JSON body with industry_id, city_id, dataset_id';
+      const errorMsg = 'Invalid discovery request: request body is missing or empty. Expected JSON body with industry_id/industry_group_id, municipality_gemi_id/prefecture_gemi_id, dataset_id';
       console.error('[API] Validation failed:', errorMsg);
       console.error('[API] req.body type:', typeof req.body);
       console.error('[API] req.body:', req.body);
@@ -55,7 +55,6 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     let municipality_id: string | undefined;
     let prefecture_gemi_id: number | undefined;
     let prefecture_id: string | undefined;
-    let city_id: string | undefined;
     let dataset_id: string | undefined;
     
     // Accept industry_group_id (new), industry_gemi_id (preferred), or industry_id (legacy)
@@ -80,7 +79,7 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       }
     }
     
-    // Accept municipality_gemi_id (preferred) or municipality_id/city_id (legacy)
+    // Accept municipality_gemi_id (preferred) or municipality_id
     if (req.body.municipality_gemi_id !== undefined) {
       municipality_gemi_id = typeof req.body.municipality_gemi_id === 'number'
         ? req.body.municipality_gemi_id
@@ -90,19 +89,6 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     } else if (req.body.municipalityId) {
       municipality_id = req.body.municipalityId;
       console.warn('[discovery] WARNING: Received camelCase municipalityId, converted to municipality_id. Please use municipality_gemi_id in future requests.');
-    } else if (req.body.city_id) {
-      const tempCityId = req.body.city_id;
-      // If city_id looks like a municipality ID (starts with "mun-"), treat it as municipality_id
-      if (tempCityId && tempCityId.startsWith('mun-')) {
-        console.log('[discovery] city_id looks like municipality ID, converting to municipality_id');
-        municipality_id = tempCityId;
-        city_id = undefined;
-      } else {
-        city_id = tempCityId;
-      }
-    } else if (req.body.cityId) {
-      city_id = req.body.cityId;
-      console.warn('[discovery] WARNING: Received camelCase cityId, converted to city_id. Please use municipality_gemi_id in future requests.');
     }
     
     // Accept prefecture_gemi_id or prefecture_id (for prefecture-level discovery)
@@ -131,11 +117,11 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       console.warn('[discovery] WARNING: Received camelCase datasetId, converted to dataset_id. Please use snake_case in future requests.');
     }
     
-    console.log('[discovery] payload:', { industry_gemi_id, industry_id, industry_group_id, municipality_gemi_id, municipality_id, prefecture_gemi_id, prefecture_id, city_id, dataset_id });
+    console.log('[discovery] payload:', { industry_gemi_id, industry_id, industry_group_id, municipality_gemi_id, municipality_id, prefecture_gemi_id, prefecture_id, dataset_id });
     
     // CRITICAL: Explicit validation
     // Industry: (industry_group_id OR industry_gemi_id OR industry_id) - exactly one
-    // Location: (municipality_gemi_id OR municipality_id OR prefecture_gemi_id OR prefecture_id OR city_id) - at least one
+    // Location: (municipality_gemi_id OR municipality_id OR prefecture_gemi_id OR prefecture_id) - at least one
     // dataset_id is optional and will be auto-resolved if missing
     
     // Validate industry selection - must have exactly one
@@ -152,8 +138,8 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     }
     
     // Validate location - must have at least one location identifier
-    if (!municipality_gemi_id && !municipality_id && !prefecture_gemi_id && !prefecture_id && !city_id) {
-      throw new Error('Invalid discovery request: missing required field: municipality_gemi_id OR municipality_id OR prefecture_gemi_id OR prefecture_id OR city_id');
+    if (!municipality_gemi_id && !municipality_id && !prefecture_gemi_id && !prefecture_id) {
+      throw new Error('Invalid discovery request: missing required field: municipality_gemi_id OR municipality_id OR prefecture_gemi_id OR prefecture_id');
     }
 
     // Handle industry_group_id: if provided, fetch industries from group
@@ -253,50 +239,13 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       console.log(`[discovery] Resolved municipality_gemi_id ${municipality_gemi_id} to municipality_id ${municipality_id}`);
     }
     
-    // If municipality_id is provided, map it to city_id (for dataset creation)
-    if (municipality_id && !city_id) {
-      console.log(`[discovery] Mapping municipality_id ${municipality_id} to city_id...`);
-      
-      // Find municipality by ID (could be "mun-XXXXX" format or UUID)
-      const municipalityResult = await pool.query<{ id: string; descr: string; descr_en: string }>(
-        `SELECT id, descr, descr_en FROM municipalities 
-         WHERE id = $1 OR gemi_id = $2`,
-        [municipality_id, municipality_id.replace('mun-', '')]
-      );
-      
-      if (municipalityResult.rows.length === 0) {
-        throw new Error(`Municipality with ID ${municipality_id} not found`);
-      }
-      
-      const municipality = municipalityResult.rows[0];
-      console.log(`[discovery] Found municipality: ${municipality.descr} (${municipality.descr_en})`);
-      
-      // Note: cities table may not exist, so we skip city lookup
-      // Dataset will be created with null city_id when using municipality/prefecture
-      let cityResult = { rows: [] as { id: string; name: string }[] };
-      
-      // If no city match found, that's OK - we'll use municipality_id directly
-      // Don't throw error, just log and proceed with municipality_id
-      if (cityResult.rows.length > 0) {
-        city_id = cityResult.rows[0].id;
-        console.log(`[discovery] Mapped municipality "${municipality.descr}" to city: ${cityResult.rows[0].name} (${city_id})`);
-      } else {
-        console.log(`[discovery] No city match found for municipality "${municipality.descr}". Will use municipality_id directly.`);
-      }
-    }
-    
-    // Validate city_id is UUID after mapping (if provided)
-    const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    if (city_id && !uuidRegex.test(city_id)) {
-      throw new Error(`Invalid discovery request: city_id must be a valid UUID after mapping, got: ${city_id}`);
-    }
-    
-    // If we have municipality_id but no city_id, that's fine - we'll use municipality directly
-    if (municipality_id && !city_id) {
-      console.log(`[discovery] Using municipality_id ${municipality_id} directly (no city mapping needed)`);
+    // We use municipalities directly - no city mapping needed
+    if (municipality_id) {
+      console.log(`[discovery] Using municipality_id ${municipality_id} directly`);
     }
     
     // dataset_id is optional, but if provided, must be valid UUID
+    const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
     if (dataset_id && !uuidRegex.test(dataset_id)) {
       throw new Error(`Invalid discovery request: dataset_id must be a valid UUID, got: ${dataset_id}`);
     }
@@ -331,14 +280,10 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    // Get city name if city_id is provided (for logging)
-    // Note: cities table may not exist, so we skip city lookup
-    let cityName = city_id ? `City ${city_id}` : 'Unknown';
-
     console.log('[API] Starting discovery job for:', { 
       industry: industry.name, 
       municipality: municipalityName,
-      city: cityName || 'N/A (using municipality directly)'
+      prefecture: prefecture_gemi_id || prefecture_id || 'N/A'
     });
 
     // Generate descriptive dataset name (used for both initial creation and mismatch cases)
@@ -373,8 +318,6 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       } else {
         locationName = municipalityName;
       }
-    } else if (city_id) {
-      locationName = cityName;
     }
     
     // Generate dataset name: "Industry Group - Region - Municipality (if exists)"
@@ -386,87 +329,21 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     datasetName = `${industryNameForDataset} - ${locationName}${municipalityPart}`;
 
     // Find or resolve dataset ID FIRST (before creating discovery_run)
-    // dataset_id is optional - if not provided, find or create one
-    // When using municipality_id, find a matching city or use a default
+    // dataset_id is optional - if not provided, create one with null city_id (using municipalities)
     let finalDatasetId = dataset_id;
-    let datasetCityId = city_id;
     
-    // If we have municipality_id but no city_id, try to find a matching city
-    if (municipality_id && !datasetCityId) {
-      console.log(`[API] Finding city for municipality_id ${municipality_id}...`);
+    if (!finalDatasetId) {
+      console.log('[API] dataset_id not provided, creating new dataset with null city_id (using municipalities)...');
       
-      // Get municipality info
-      const municipalityResult = await pool.query<{ descr: string; descr_en: string; prefecture_id: string }>(
-        `SELECT descr, descr_en, prefecture_id FROM municipalities 
-         WHERE id = $1 OR gemi_id = $2`,
-        [municipality_id, municipality_id.replace('mun-', '')]
+      // Create dataset directly with null city_id (we use municipalities, not cities)
+      const { getOrCreateDataset } = await import('../db/datasets.js');
+      const dataset = await getOrCreateDataset(
+        userId,
+        null, // city_id is null when using municipality/prefecture
+        industry.id,
+        datasetName
       );
-      
-      if (municipalityResult.rows.length > 0) {
-        const municipality = municipalityResult.rows[0];
-        
-        // Note: cities table may not exist, so we skip city lookup
-        // Dataset will be created with null city_id when using municipality/prefecture
-        console.log(`[API] Skipping city lookup (cities table may not exist). Creating dataset with null city_id.`);
-      }
-    }
-    
-    if (!finalDatasetId) {
-      console.log('[API] dataset_id not provided, attempting to find existing dataset...');
-      
-      // If we have city_id (from municipality lookup or direct), use it for dataset lookup
-      if (datasetCityId) {
-        const existingDataset = await pool.query<{ id: string }>(
-          `
-          SELECT id FROM datasets
-          WHERE user_id = $1
-            AND city_id = $2
-            AND industry_id = $3
-          ORDER BY created_at DESC
-          LIMIT 1
-          `,
-          [userId, datasetCityId, industry_id!]
-        );
-        finalDatasetId = existingDataset.rows[0]?.id;
-      }
-      
-      if (finalDatasetId) {
-        console.log('[API] Found existing dataset:', finalDatasetId);
-      }
-    }
-
-    // If dataset doesn't exist yet, create it synchronously so we can link discovery_run to it
-    if (!finalDatasetId) {
-      console.log('[API] Creating new dataset...');
-      
-      // When using prefecture/municipality, we can create dataset with null city_id
-      // Note: cities table may not exist, so we skip city lookup
-      if (!datasetCityId) {
-        console.log('[API] No city_id found. Creating dataset with null city_id (using prefecture/municipality directly).');
-      }
-      
-      // Create dataset - city_id can be null when using municipality_gemi_id
-      if (datasetCityId) {
-        const { resolveDataset } = await import('../services/datasetResolver.js');
-        const resolverResult = await resolveDataset({
-          userId,
-          cityId: datasetCityId,
-          industryId: industry.id,
-          municipalityName: municipalityName !== 'Unknown' ? municipalityName : undefined,
-          datasetName,
-        });
-        finalDatasetId = resolverResult.dataset.id;
-      } else {
-        // Create dataset directly with null city_id (bypassing resolver which requires cityId)
-        const { getOrCreateDataset } = await import('../db/datasets.js');
-        const dataset = await getOrCreateDataset(
-          userId,
-          null, // city_id is null when using municipality_gemi_id directly
-          industry.id,
-          datasetName
-        );
-        finalDatasetId = dataset.id;
-      }
+      finalDatasetId = dataset.id;
       console.log('[API] Created dataset for discovery_run:', finalDatasetId);
     }
     
@@ -487,38 +364,30 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     }
     
     // CRITICAL: Verify dataset matches requested industry
-    // Note: city_id matching is relaxed when using municipality_id
     if (dataset.industry_id !== industry.id) {
       console.error(`[API] Dataset industry mismatch detected:`);
       console.error(`[API]   Requested: industry_id=${industry.id} (${industry.name})`);
       console.error(`[API]   Dataset: industry_id=${dataset.industry_id}`);
       console.error(`[API]   Creating new dataset instead of reusing mismatched one...`);
       
-      // Create a new dataset that matches the request
-      const { resolveDataset: resolveDatasetForMismatch } = await import('../services/datasetResolver.js');
-      
-      // Use the datasetCityId we already resolved (from municipality or direct city_id)
-      if (!datasetCityId) {
-        throw new Error('Cannot create dataset: city_id is required.');
-      }
-      
-      const resolverResult = await resolveDatasetForMismatch({
+      // Create a new dataset that matches the request (with null city_id, using municipalities)
+      const { getOrCreateDataset } = await import('../db/datasets.js');
+      const newDataset = await getOrCreateDataset(
         userId,
-        cityId: datasetCityId,
-        industryId: industry.id,
-        municipalityName: municipalityName !== 'Unknown' ? municipalityName : undefined,
-        datasetName,
-      });
-      finalDatasetId = resolverResult.dataset.id;
+        null, // city_id is null when using municipality/prefecture
+        industry.id,
+        datasetName
+      );
+      finalDatasetId = newDataset.id;
       console.log(`[API] Created new matching dataset: ${finalDatasetId}`);
       
       // Re-fetch the dataset to ensure we have the correct one
-      const newDataset = await getDatasetById(finalDatasetId);
-      if (!newDataset) {
+      const fetchedDataset = await getDatasetById(finalDatasetId);
+      if (!fetchedDataset) {
         throw new Error(`Failed to create matching dataset`);
       }
       // Update dataset reference for rest of function
-      Object.assign(dataset, newDataset);
+      Object.assign(dataset, fetchedDataset);
     }
 
     // CRITICAL: Create discovery_run at the VERY START (synchronously, before returning)
@@ -544,7 +413,6 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       municipality_id: municipality_id || undefined,
       prefecture_gemi_id: prefecture_gemi_id || undefined,
       prefecture_id: prefecture_id || undefined,
-      city_id: city_id || undefined,
       datasetId: finalDatasetId,
       discoveryRunId: discoveryRun.id
     });
@@ -557,7 +425,6 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       industry_id: industry.id, // Internal industry_id (resolved from gemi_id if needed)
       industry_gemi_id: industry_gemi_id, // GEMI industry ID (preferred)
       industry_group_id: industry_group_id || undefined, // Industry group ID (if provided)
-      city_id: city_id || undefined, // Use city_id if available (for backward compatibility)
       municipality_id: municipality_id || undefined, // Internal municipality_id (resolved from gemi_id if needed)
       municipality_gemi_id: municipality_gemi_id, // GEMI municipality ID (preferred)
       prefecture_id: prefecture_id || undefined, // Internal prefecture_id
