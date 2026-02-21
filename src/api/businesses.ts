@@ -202,10 +202,9 @@ router.get('/dataset/:datasetId/contacts', authMiddleware, async (req: AuthReque
       name: string;
       address: string | null;
       postal_code: string | null;
-      google_place_id: string | null;
       created_at: Date;
     }>(
-      `SELECT id, name, address, postal_code, google_place_id, created_at
+      `SELECT id, name, address, postal_code, created_at
        FROM businesses
        WHERE dataset_id = $1
        ORDER BY created_at DESC

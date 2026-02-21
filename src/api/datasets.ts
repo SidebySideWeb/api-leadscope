@@ -3,9 +3,8 @@ import { authMiddleware, type AuthRequest } from '../middleware/auth.js';
 import { pool } from '../config/database.js';
 import { getDatasetById, verifyDatasetOwnership } from '../db/datasets.js';
 import { getIndustries } from '../db/industries.js';
-import { getCities } from '../db/cities.js';
+// Note: cities table may not exist, so getCities() is not imported
 import type { Industry } from '../types/index.js';
-import type { City } from '../types/index.js';
 
 const router = express.Router();
 
@@ -155,13 +154,11 @@ router.get('/', authMiddleware, async (req: AuthRequest, res): Promise<void> => 
 
     // Get industries and cities for name mapping
     let industries: Industry[] = [];
-    let cities: City[] = [];
+    let cities: Array<{ id: string; name: string }> = [];
     try {
-      [industries, cities] = await Promise.all([
-        getIndustries(),
-        getCities(),
-      ]);
-      console.log('[datasets] Loaded', industries.length, 'industries and', cities.length, 'cities');
+      industries = await getIndustries();
+      // Note: cities table may not exist, so we skip getCities()
+      console.log('[datasets] Loaded', industries.length, 'industries');
     } catch (lookupError: any) {
       console.error('[datasets] Error fetching industries/cities:', {
         message: lookupError.message,
@@ -172,7 +169,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res): Promise<void> => 
     }
 
     const industryMap = new Map(industries.map((i: Industry) => [i.id, i.name]));
-    const cityMap = new Map(cities.map((c: City) => [c.id, c.name]));
+    const cityMap = new Map(cities.map((c) => [c.id, c.name]));
 
     const datasets = result.rows.map(row => {
       const now = new Date();
@@ -332,17 +329,16 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res): Promise<void> 
     const counts = countsResult.rows[0];
 
     // Get industries and cities for name mapping
-    const [industries, cities] = await Promise.all([
-      getIndustries(),
-      getCities(),
-    ]);
+    const industries = await getIndustries();
+    // Note: cities table may not exist, so we skip getCities()
+    const cities: any[] = []; // Empty array since cities table doesn't exist
 
     // Direct UUID lookup - all IDs are UUID
     const industry = dataset.industry_id 
       ? (industries.find((i: Industry) => i.id === dataset.industry_id)?.name || 'Unknown')
       : 'Unknown';
     const city = dataset.city_id
-      ? (cities.find((c: City) => c.id === dataset.city_id)?.name || 'Unknown')
+      ? (cities.find((c) => c.id === dataset.city_id)?.name || 'Unknown')
       : 'Unknown';
 
     const lastRefresh = dataset.last_refreshed_at ? new Date(dataset.last_refreshed_at) : null;

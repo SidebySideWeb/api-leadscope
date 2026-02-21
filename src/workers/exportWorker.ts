@@ -51,10 +51,9 @@ async function queryDatasetContacts(
       b.updated_at AS last_gemi_sync,
       b.email,
       b.phone,
-      COALESCE(w.url, b.website_url) AS website
+      b.website_url AS website
     FROM businesses b
     LEFT JOIN prefectures p ON p.id = b.prefecture_id
-    LEFT JOIN websites w ON w.business_id = b.id
     WHERE b.dataset_id = $1
     ORDER BY b.name ASC
   `;
@@ -107,14 +106,13 @@ async function countPagesCrawledForDataset(datasetId: string): Promise<
   const result = await pool.query<{ business_id: string; pages: number }>(
     `
     SELECT
-      w.business_id,
+      cj.business_id,
       COUNT(cp.id) AS pages
     FROM crawl_pages cp
     JOIN crawl_jobs cj ON cp.crawl_job_id = cj.id
-    JOIN websites w ON cj.website_id = w.id
-    JOIN businesses b ON w.business_id = b.id
+    JOIN businesses b ON cj.business_id = b.id
     WHERE b.dataset_id = $1
-    GROUP BY w.business_id
+    GROUP BY cj.business_id
     `,
     [datasetId]
   );
