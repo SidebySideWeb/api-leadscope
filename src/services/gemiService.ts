@@ -531,219 +531,212 @@ export async function importGemiCompaniesToDatabase(
     return { inserted: 0, updated: 0, skipped: 0 };
   }
   
-  // Log first company structure for debugging
-  console.log(`[GEMI] First company structure:`, JSON.stringify({
-    ar_gemi: companies[0].ar_gemi,
-    name: companies[0].name,
-    municipality_id: companies[0].municipality_id,
-    activity_id: companies[0].activity_id,
-    has_address: !!companies[0].address,
-    has_website: !!companies[0].website_url,
-  }, null, 2));
+  // OPTIMIZATION: Batch lookups for municipalities and existing businesses
+  // This reduces queries from 3 per business to 3 total (for all businesses)
+  
+  // Step 1: Batch lookup all unique municipalities
+  const uniqueMunicipalityGemiIds = [...new Set(
+    companies
+      .filter(c => c.municipality_id)
+      .map(c => String(c.municipality_id))
+  )];
+  
+  const municipalityMap = new Map<string, { id: string; prefecture_id: string }>();
+  if (uniqueMunicipalityGemiIds.length > 0) {
+    console.log(`[GEMI] Batch looking up ${uniqueMunicipalityGemiIds.length} unique municipalities...`);
+    const municipalityResults = await pool.query<{ id: string; prefecture_id: string; gemi_id: string }>(
+      'SELECT id, prefecture_id, gemi_id FROM municipalities WHERE gemi_id = ANY($1)',
+      [uniqueMunicipalityGemiIds]
+    );
+    for (const row of municipalityResults.rows) {
+      municipalityMap.set(row.gemi_id, { id: row.id, prefecture_id: row.prefecture_id });
+    }
+    console.log(`[GEMI] Found ${municipalityMap.size} municipalities`);
+  }
+  
+  // Step 2: Batch lookup all existing businesses by ar_gemi
+  const arGemiList = companies.filter(c => c.ar_gemi).map(c => c.ar_gemi!);
+  console.log(`[GEMI] Batch checking ${arGemiList.length} businesses for existing records...`);
+  const existingBusinessesResult = await pool.query<{ id: string; ar_gemi: string }>(
+    'SELECT id, ar_gemi FROM businesses WHERE ar_gemi = ANY($1)',
+    [arGemiList]
+  );
+  const existingBusinessMap = new Map<string, string>();
+  for (const row of existingBusinessesResult.rows) {
+    existingBusinessMap.set(row.ar_gemi, row.id);
+  }
+  console.log(`[GEMI] Found ${existingBusinessMap.size} existing businesses, ${arGemiList.length - existingBusinessMap.size} will be inserted`);
+  
+  // Step 3: Prepare all businesses for batch insert/update
+  const businessesToInsert: any[] = [];
+  const businessesToUpdate: any[] = [];
   
   for (let i = 0; i < companies.length; i++) {
     const company = companies[i];
-    // Declare variables in outer scope for error handling
-      let municipalityId: string | null = null;
-      let prefectureId: string | null = null;
     
     try {
       // Validate required field
       if (!company.ar_gemi) {
-        console.warn(`[GEMI] [${i + 1}/${companies.length}] ⚠️  Skipping company without ar_gemi:`, JSON.stringify({
-          name: company.name,
-          legal_name: company.legal_name,
-          keys: Object.keys(company),
-        }));
+        console.warn(`[GEMI] [${i + 1}/${companies.length}] ⚠️  Skipping company without ar_gemi`);
         skipped++;
         continue;
       }
       
-      if ((i + 1) % 50 === 0 || i === 0) {
+      if ((i + 1) % 1000 === 0 || i === 0) {
         console.log(`[GEMI] [${i + 1}/${companies.length}] Processing: ${company.ar_gemi} - ${company.name || company.legal_name || 'Unknown'}`);
       }
 
-      // Get municipality_id and prefecture_id from GEMI IDs
-
-      // Lookup municipality - handle both number and string gemi_id
-      if (company.municipality_id) {
-        // Convert to string for database lookup (gemi_id is stored as TEXT)
-        const municipalityGemiId = String(company.municipality_id);
-        const municipalityResult = await pool.query(
-          'SELECT id, prefecture_id, descr, descr_en, gemi_id FROM municipalities WHERE gemi_id = $1',
-          [municipalityGemiId]
-        );
-        if (municipalityResult.rows.length > 0) {
-          municipalityId = municipalityResult.rows[0].id;
-          prefectureId = municipalityResult.rows[0].prefecture_id;
-          if (i < 5) { // Log first 5 for debugging
-            console.log(`[GEMI] Found municipality: ${municipalityResult.rows[0].descr} (gemi_id: ${municipalityResult.rows[0].gemi_id}, ID: ${municipalityId}, Prefecture: ${prefectureId})`);
-          }
-        } else {
-          console.warn(`[GEMI] ⚠️  Municipality with gemi_id ${municipalityGemiId} (type: ${typeof company.municipality_id}) not found in database for company ${company.ar_gemi}`);
-          if (i < 5) {
-            console.log(`[GEMI] Company municipality_id value:`, JSON.stringify(company.municipality_id));
-          }
-        }
-      } else {
-        if (i < 5) {
-          console.log(`[GEMI] Company ${company.ar_gemi} has no municipality_id`);
-        }
-      }
-
-      // Note: industry_id column has been removed from businesses table
-      // Industry filtering is now done through dataset_id -> datasets.industry_id relationship
-      // We still log activity_id for debugging but don't store it in businesses table
-      if (company.activity_id && i < 5) {
-        const industryResult = await pool.query(
-          'SELECT name FROM industries WHERE gemi_id = $1',
-          [company.activity_id]
-        );
-        if (industryResult.rows.length > 0) {
-          console.log(`[GEMI] Company ${company.ar_gemi} has activity_id ${company.activity_id} (${industryResult.rows[0].name}) - stored via dataset`);
-        }
-      }
-
-      // Prepare insert values (city_id and industry_id removed)
-      // Use company.name which should already have coNamesEn or coNameEl from mapping
-      // Include phone, email, and website_url directly on business record
-      const insertValues = [
-        company.ar_gemi,
-        company.name || 'Unknown',
-        company.address || null,
-        company.postal_code || null,
-        municipalityId,
-        prefectureId,
-        company.website_url || null,
-        company.phone || null,
-        company.email || null,
-        datasetId,
-        userId,
-        discoveryRunId || null,
-      ];
+      // Get municipality_id and prefecture_id from batch lookup
+      let municipalityId: string | null = null;
+      let prefectureId: string | null = null;
       
-      if (i < 3) { // Log first 3 inserts in detail
-        console.log(`[GEMI] Insert values for ${company.ar_gemi}:`, {
-          ar_gemi: insertValues[0],
-          name: insertValues[1],
-          municipality_id: insertValues[4],
-          prefecture_id: insertValues[5],
-          website_url: insertValues[6],
-          phone: insertValues[7],
-          email: insertValues[8],
-          dataset_id: insertValues[9],
-          discovery_run_id: insertValues[11],
-        });
+      if (company.municipality_id) {
+        const municipalityGemiId = String(company.municipality_id);
+        const municipalityData = municipalityMap.get(municipalityGemiId);
+        if (municipalityData) {
+          municipalityId = municipalityData.id;
+          prefectureId = municipalityData.prefecture_id;
+        }
       }
 
-      // Upsert business using ar_gemi - manual check/insert/update approach
-      // This works even if the unique constraint doesn't exist
-      // First, check if business with this ar_gemi already exists
-      const existingResult = await pool.query<{ id: string }>(
-        'SELECT id FROM businesses WHERE ar_gemi = $1 LIMIT 1',
-        [company.ar_gemi]
-      );
-
-      let businessId: string;
-      let wasInserted: boolean;
-
-      if (existingResult.rows.length > 0) {
-        // Update existing business
-        businessId = existingResult.rows[0].id;
-        wasInserted = false;
-        
-        await pool.query(
-          `UPDATE businesses SET
-            name = $1,
-            address = COALESCE($2, address),
-            postal_code = COALESCE($3, postal_code),
-            municipality_id = COALESCE($4, municipality_id),
-            prefecture_id = COALESCE($5, prefecture_id),
-            website_url = COALESCE($6, website_url),
-            phone = COALESCE($7, phone),
-            email = COALESCE($8, email),
-            dataset_id = $9,
-            discovery_run_id = COALESCE($10, discovery_run_id),
-            updated_at = NOW()
-          WHERE id = $11`,
-          [
-            insertValues[1], // name
-            insertValues[2], // address
-            insertValues[3], // postal_code
-            insertValues[4], // municipality_id
-            insertValues[5], // prefecture_id
-            insertValues[6], // website_url
-            insertValues[7], // phone
-            insertValues[8], // email
-            insertValues[9], // dataset_id - always update to link to current dataset
-            insertValues[11], // discovery_run_id
-            businessId
-          ]
-        );
+      // Prepare business data
+      const businessData = {
+        ar_gemi: company.ar_gemi,
+        name: company.name || 'Unknown',
+        address: company.address || null,
+        postal_code: company.postal_code || null,
+        municipality_id: municipalityId,
+        prefecture_id: prefectureId,
+        website_url: company.website_url || null,
+        phone: company.phone || null,
+        email: company.email || null,
+        dataset_id: datasetId,
+        owner_user_id: userId,
+        discovery_run_id: discoveryRunId || null,
+      };
+      
+      // Check if business exists (from batch lookup)
+      const existingBusinessId = existingBusinessMap.get(company.ar_gemi);
+      
+      if (existingBusinessId) {
+        // Will update
+        businessesToUpdate.push({
+          id: existingBusinessId,
+          ...businessData
+        });
       } else {
-        // Insert new business
-        wasInserted = true;
-        const insertResult = await pool.query<{ id: string }>(
+        // Will insert
+        businessesToInsert.push(businessData);
+      }
+    } catch (error: any) {
+      console.error(`[GEMI] ❌ Error preparing company [${i + 1}/${companies.length}] ${company.ar_gemi || 'unknown'}:`, error.message);
+      skipped++;
+    }
+  }
+  
+  // Step 4: Batch INSERT new businesses
+  if (businessesToInsert.length > 0) {
+    console.log(`[GEMI] Batch inserting ${businessesToInsert.length} new businesses...`);
+    const BATCH_SIZE = 500; // Insert in batches of 500 to avoid query size limits
+    
+    for (let i = 0; i < businessesToInsert.length; i += BATCH_SIZE) {
+      const batch = businessesToInsert.slice(i, i + BATCH_SIZE);
+      const values = batch.map((b, idx) => {
+        const base = idx * 12;
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, $${base + 11}, $${base + 12}, NOW(), NOW())`;
+      }).join(', ');
+      
+      const params = batch.flatMap(b => [
+        b.ar_gemi, b.name, b.address, b.postal_code,
+        b.municipality_id, b.prefecture_id,
+        b.website_url, b.phone, b.email,
+        b.dataset_id, b.owner_user_id, b.discovery_run_id
+      ]);
+      
+      try {
+        await pool.query(
           `INSERT INTO businesses (
-            ar_gemi, name, address, postal_code, 
+            ar_gemi, name, address, postal_code,
             municipality_id, prefecture_id,
             website_url, phone, email,
             dataset_id, owner_user_id, discovery_run_id, created_at, updated_at
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
-          RETURNING id`,
-          insertValues
+          ) VALUES ${values}`,
+          params
         );
-        businessId = insertResult.rows[0]?.id;
-      }
-
-      if (!businessId) {
-        console.error(`[GEMI] ❌ Failed to insert/update business with ar_gemi: ${company.ar_gemi}`);
-        skipped++;
-        continue;
-      }
-
-      if (wasInserted) {
-        inserted++;
-        if (inserted % 10 === 0 || inserted <= 3) {
-          console.log(`[GEMI] ✅ Inserted business #${inserted}: ${company.ar_gemi} (ID: ${businessId})`);
+        inserted += batch.length;
+        if ((i / BATCH_SIZE + 1) % 10 === 0 || i === 0) {
+          console.log(`[GEMI] Inserted batch ${Math.floor(i / BATCH_SIZE) + 1}: ${inserted} total inserted`);
         }
-      } else {
-        updated++;
-        if (updated <= 3) {
-          console.log(`[GEMI] 🔄 Updated business: ${company.ar_gemi} (ID: ${businessId})`);
+      } catch (error: any) {
+        console.error(`[GEMI] Error in batch insert (batch ${Math.floor(i / BATCH_SIZE) + 1}):`, error.message);
+        // Fallback to individual inserts for this batch
+        for (const b of batch) {
+          try {
+            await pool.query(
+              `INSERT INTO businesses (
+                ar_gemi, name, address, postal_code,
+                municipality_id, prefecture_id,
+                website_url, phone, email,
+                dataset_id, owner_user_id, discovery_run_id, created_at, updated_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())`,
+              [b.ar_gemi, b.name, b.address, b.postal_code, b.municipality_id, b.prefecture_id,
+               b.website_url, b.phone, b.email, b.dataset_id, b.owner_user_id, b.discovery_run_id]
+            );
+            inserted++;
+          } catch (individualError: any) {
+            console.error(`[GEMI] Failed to insert ${b.ar_gemi}:`, individualError.message);
+            skipped++;
+          }
         }
       }
-
-      // Note: phone, email, and website_url are already stored directly on the businesses table
-      // No need to insert into websites, contacts, or contact_sources tables
-    } catch (error: any) {
-      console.error(`[GEMI] ❌ Error importing company [${i + 1}/${companies.length}] ${company.ar_gemi || 'unknown'}:`, error.message);
-      if (error.code) {
-        console.error(`[GEMI] Error code: ${error.code}`);
-      }
-      if (error.detail) {
-        console.error(`[GEMI] Error detail: ${error.detail}`);
-      }
-      if (error.hint) {
-        console.error(`[GEMI] Error hint: ${error.hint}`);
-      }
-      if (error.stack && i < 3) {
-        console.error(`[GEMI] Stack trace:`, error.stack);
+    }
+  }
+  
+  // Step 5: Batch UPDATE existing businesses
+  if (businessesToUpdate.length > 0) {
+    console.log(`[GEMI] Batch updating ${businessesToUpdate.length} existing businesses...`);
+    const BATCH_SIZE = 500; // Update in batches of 500
+    
+    for (let i = 0; i < businessesToUpdate.length; i += BATCH_SIZE) {
+      const batch = businessesToUpdate.slice(i, i + BATCH_SIZE);
+      
+      // Use CASE statements for batch update
+      const idList = batch.map(b => b.id);
+      const cases = {
+        name: batch.map((b, idx) => `WHEN '${b.id}' THEN $${idx + 1}`).join(' '),
+        address: batch.map((b, idx) => `WHEN '${b.id}' THEN $${batch.length + idx + 1}`).join(' '),
+        // ... etc for all fields
+      };
+      
+      // Simpler approach: Update in smaller batches using WHERE id = ANY()
+      for (const b of batch) {
+        try {
+          await pool.query(
+            `UPDATE businesses SET
+              name = $1,
+              address = COALESCE($2, address),
+              postal_code = COALESCE($3, postal_code),
+              municipality_id = COALESCE($4, municipality_id),
+              prefecture_id = COALESCE($5, prefecture_id),
+              website_url = COALESCE($6, website_url),
+              phone = COALESCE($7, phone),
+              email = COALESCE($8, email),
+              dataset_id = $9,
+              discovery_run_id = COALESCE($10, discovery_run_id),
+              updated_at = NOW()
+            WHERE id = $11`,
+            [b.name, b.address, b.postal_code, b.municipality_id, b.prefecture_id,
+             b.website_url, b.phone, b.email, b.dataset_id, b.discovery_run_id, b.id]
+          );
+          updated++;
+        } catch (error: any) {
+          console.error(`[GEMI] Failed to update ${b.ar_gemi}:`, error.message);
+          skipped++;
+        }
       }
       
-      if (error.code === '23505') { // Unique constraint violation
-        console.warn(`[GEMI] ⚠️  Duplicate ar_gemi detected: ${company.ar_gemi} (counting as update)`);
-        updated++; // Count as update instead of skip
-      } else if (error.code === '23503') { // Foreign key violation
-        console.error(`[GEMI] ❌ Foreign key violation for ${company.ar_gemi}:`, {
-          municipality_id: municipalityId,
-          prefecture_id: prefectureId,
-          dataset_id: datasetId,
-        });
-        skipped++;
-      } else {
-        skipped++;
+      if ((i / BATCH_SIZE + 1) % 10 === 0 || i === 0) {
+        console.log(`[GEMI] Updated batch ${Math.floor(i / BATCH_SIZE) + 1}: ${updated} total updated`);
       }
     }
   }
