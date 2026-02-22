@@ -807,7 +807,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     logDiscoveryAction({
       userId: input.userId || 'unknown',
       datasetId,
-      resultSummary: `Discovery completed: ${discoveryResult.businessesFound} businesses found, ${discoveryResult.businessesCreated} created, ${crawlJobsCreated} crawl jobs created`,
+      resultSummary: `Discovery completed: ${discoveryResult.businessesFound} businesses found, ${discoveryResult.businessesCreated} created (GEMI data only)`,
       gated: isGated,
       error: errors.length > 0 ? errors.join('; ') : null,
       metadata: {
@@ -821,7 +821,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         contacts_created: 0, // Contacts are created in extraction phase, not discovery
         extraction_jobs_created: 0, // Extraction jobs are created separately
         // Note: websites_created removed - websites are created in extraction phase
-        crawl_jobs_created: crawlJobsCreated,
+        crawl_jobs_created: 0, // Crawl jobs removed - only GEMI data
         duration_seconds: (endTime.getTime() - startTime.getTime()) / 1000,
         is_reused: isReused,
         upgrade_hint: upgradeHint,
@@ -833,7 +833,7 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
     console.log(`   Businesses found: ${discoveryResult.businessesFound}`);
     console.log(`   Businesses created: ${discoveryResult.businessesCreated}`);
     // Note: Websites are created in extraction phase, not discovery
-    console.log(`   Crawl jobs created: ${crawlJobsCreated}`);
+    // Crawl jobs removed - only GEMI data is saved
 
     // Mark discovery_run as completed
     // Note: Even if no businesses were found, discovery is still considered complete

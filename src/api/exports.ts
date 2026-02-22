@@ -408,76 +408,8 @@ async function processExportAsync(
   try {
     console.log(`[processExportAsync] Starting export ${exportId} for dataset ${datasetId}`);
 
-    // Before exporting, ensure crawl jobs are created for businesses with websites
-    try {
-      const { pool } = await import('../config/database.js');
-      
-      // Find businesses in this dataset that have websites but no crawl jobs or incomplete crawling
-      const businessesNeedingCrawl = await pool.query<{ business_id: string; website_url: string }>(
-        `SELECT DISTINCT b.id AS business_id, b.website_url
-         FROM businesses b
-         LEFT JOIN crawl_jobs cj ON cj.business_id = b.id AND cj.status IN ('queued', 'running', 'success')
-         WHERE b.dataset_id = $1
-           AND b.website_url IS NOT NULL
-           AND (cj.id IS NULL OR (cj.status = 'success' AND cj.finished_at IS NULL))
-         LIMIT 50`,
-        [datasetId]
-      );
-
-      if (businessesNeedingCrawl.rows.length > 0) {
-        console.log(`[processExportAsync] Creating ${businessesNeedingCrawl.rows.length} crawl jobs for businesses with websites...`);
-        let crawlJobsCreated = 0;
-        for (const row of businessesNeedingCrawl.rows) {
-          try {
-            // Create crawl job using business_id and website_url (new schema)
-            const jobId = randomUUID();
-            await pool.query(
-              `INSERT INTO crawl_jobs (id, business_id, website_url, status, pages_limit, pages_crawled, created_at)
-               VALUES ($1, $2, $3, 'queued', 25, 0, NOW())
-               ON CONFLICT DO NOTHING`,
-              [jobId, row.business_id, row.website_url]
-            );
-            crawlJobsCreated++;
-          } catch (error: any) {
-            console.error(`[processExportAsync] Error creating crawl job for business ${row.business_id}:`, error.message);
-          }
-        }
-        console.log(`[processExportAsync] Created ${crawlJobsCreated} crawl jobs`);
-      }
-    } catch (error) {
-      console.error('[processExportAsync] Error creating crawl jobs:', error);
-      // Continue anyway
-    }
-
-    // CRITICAL: Wait for all crawl and extraction jobs to complete before exporting
-    console.log(`[processExportAsync] Waiting for crawl and extraction jobs to complete for export ${exportId}...`);
-    const waitResult = await waitForDatasetJobsComplete(datasetId, 300); // Wait up to 5 minutes
-    
-    if (!waitResult.completed) {
-      console.warn(`[processExportAsync] ⚠️  Export ${exportId} proceeding with incomplete data after ${waitResult.waitedSeconds}s timeout:`, {
-        pendingCrawlJobs: waitResult.finalStatus.pendingCrawlJobs,
-        runningCrawlJobs: waitResult.finalStatus.runningCrawlJobs,
-        pendingExtractionJobs: waitResult.finalStatus.pendingExtractionJobs,
-        runningExtractionJobs: waitResult.finalStatus.runningExtractionJobs
-      });
-    } else {
-      console.log(`[processExportAsync] ✅ All jobs completed after ${waitResult.waitedSeconds}s - proceeding with export ${exportId}`);
-    }
-
-    // Enrich missing emails before export (website, Facebook, LinkedIn crawling)
-    try {
-      console.log(`[processExportAsync] Starting email enrichment for export ${exportId}...`);
-      const { enrichDatasetEmails } = await import('../services/enrichmentService.js');
-      
-      // Enrich emails for businesses in the export range
-      // Process more businesses to ensure we have emails for the export
-      const enrichmentResult = await enrichDatasetEmails(datasetId, 20, 20); // 20 per batch, 20 batches = 400 businesses
-      console.log(`[processExportAsync] Email enrichment completed: ${enrichmentResult.emailsFound} emails found from ${enrichmentResult.processed} businesses`);
-      console.log(`[processExportAsync] Email sources: ${enrichmentResult.sources.website} website, ${enrichmentResult.sources.facebook} facebook, ${enrichmentResult.sources.linkedin} linkedin`);
-    } catch (enrichError: any) {
-      // Don't fail export if enrichment fails, but log the error
-      console.error(`[processExportAsync] Email enrichment failed (continuing with export):`, enrichError);
-    }
+    // NOTE: Crawl jobs, extraction jobs, and email enrichment removed
+    // Only GEMI data is exported - no website crawling, no Google Places API, no enrichment
 
     // Generate export with timeout (10 minutes max)
     console.log(`[processExportAsync] Starting export generation for ${exportId}...`);
