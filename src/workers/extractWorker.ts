@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import { pool } from '../config/database.js';
 import { getCrawlPagesForBusiness } from '../db/crawlPages.js';
 import { getOrCreateContact } from '../db/contacts.js';
-import { createContactSource } from '../db/contactSources.js';
+// Note: contact_sources table removed - contacts are stored directly in businesses table
 import {
   type ExtractionJob,
   getQueuedExtractionJobs,
@@ -69,22 +69,19 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
 
     // FAST PATH: If this business already has both email and phone contacts, skip crawling & Place Details
     try {
-      const existingContactsResult = await pool.query<{
-        has_email: boolean | null;
-        has_phone: boolean | null;
+      // Check directly in businesses table (email and phone columns)
+      // Note: Business type may have different field names, so query directly
+      const businessContactsResult = await pool.query<{
+        email: string | null;
+        phone: string | null;
       }>(
-        `SELECT
-           BOOL_OR(c.contact_type = 'email')  AS has_email,
-           BOOL_OR(c.contact_type IN ('phone','mobile')) AS has_phone
-         FROM contact_sources cs
-         JOIN contacts c ON cs.contact_id = c.id
-         WHERE cs.business_id = $1::uuid`,
+        `SELECT email, phone FROM businesses WHERE id = $1`,
         [business.id]
       );
-
-      const contactRow = existingContactsResult.rows[0];
-      const alreadyHasEmail = contactRow?.has_email === true;
-      const alreadyHasPhone = contactRow?.has_phone === true;
+      
+      const businessContacts = businessContactsResult.rows[0];
+      const alreadyHasEmail = !!(businessContacts?.email && businessContacts.email.trim());
+      const alreadyHasPhone = !!(businessContacts?.phone && businessContacts.phone.trim());
 
       if (alreadyHasEmail && alreadyHasPhone) {
         console.log(
@@ -180,22 +177,33 @@ async function processExtractionJob(job: ExtractionJob): Promise<void> {
                   : false
               });
 
-              console.log(`[processExtractionJob] Contact created/found with id: ${contactRecord.id}, now creating contact_source...`);
+              console.log(`[processExtractionJob] Contact created/found with id: ${contactRecord.id}, now updating business...`);
 
-              // CRITICAL: Link contact to business via contact_sources
-              // This requires business_id to be passed, but contact_sources table links contact_id to business_id
-              // Let's check if we need to pass business_id
-              // Create contact_source with business_id if available
-              // Convert business.id to string (UUID) to match contact_sources.business_id type
-              await createContactSource({
-                contact_id: contactRecord.id,
-                business_id: business.id.toString(), // Convert to string (UUID) - businesses.id is UUID in DB
-                source_url: item.sourceUrl,
-                page_type: inferPageType(item.sourceUrl, `https://${business.name}`),
-                html_hash: page.hash
-              });
+              // Update business directly with email/phone (contact_sources table removed)
+              // Note: businesses table has email and phone columns directly
+              const updateFields: string[] = [];
+              const updateValues: any[] = [];
+              let paramIndex = 1;
+              
+              if (item.type === 'email') {
+                updateFields.push(`email = $${paramIndex++}`);
+                updateValues.push(item.value);
+              } else if (item.type === 'phone') {
+                updateFields.push(`phone = $${paramIndex++}`);
+                updateValues.push(item.value);
+              }
+              
+              if (updateFields.length > 0) {
+                updateValues.push(business.id);
+                await pool.query(
+                  `UPDATE businesses 
+                   SET ${updateFields.join(', ')}, updated_at = NOW()
+                   WHERE id = $${paramIndex}`,
+                  updateValues
+                );
+              }
 
-              console.log(`[processExtractionJob] Successfully persisted ${contactType} contact for business ${job.business_id}`);
+              console.log(`[processExtractionJob] Successfully updated business ${job.business_id} with ${contactType}`);
             } catch (error: any) {
               console.error(
                 `[processExtractionJob] CRITICAL ERROR persisting contact for business ${job.business_id}:`,
