@@ -284,9 +284,16 @@ router.post('/run', authMiddleware, async (req: AuthRequest, res): Promise<void>
       return;
     }
 
-    // Get total row count
+    // Get total row count (only businesses with email OR phone)
     const countResult = await pool.query<{ count: number }>(
-      'SELECT COUNT(*) as count FROM businesses WHERE dataset_id = $1',
+      `SELECT COUNT(*) as count 
+       FROM businesses 
+       WHERE dataset_id = $1
+         AND (
+           (email IS NOT NULL AND email != '') 
+           OR 
+           (phone IS NOT NULL AND phone != '')
+         )`,
       [datasetId]
     );
     const totalRows = parseInt(countResult.rows[0]?.count.toString() || '0');
@@ -432,9 +439,16 @@ async function processExportAsync(
     const { getDatasetById } = await import('../db/datasets.js');
     const dataset = await getDatasetById(datasetId);
     if (dataset) {
-      // Count businesses in dataset for total_rows
+      // Count businesses in dataset for total_rows (only businesses with email OR phone)
       const countResult = await pool.query<{ count: number }>(
-        'SELECT COUNT(*) as count FROM businesses WHERE dataset_id = $1',
+        `SELECT COUNT(*) as count 
+         FROM businesses 
+         WHERE dataset_id = $1
+           AND (
+             (email IS NOT NULL AND email != '') 
+             OR 
+             (phone IS NOT NULL AND phone != '')
+           )`,
         [datasetId]
       );
       const totalRows = parseInt(countResult.rows[0]?.count.toString() || '0');
@@ -527,14 +541,16 @@ router.get('/:id/download', authMiddleware, async (req: AuthRequest, res): Promi
     const userId = req.userId!;
     const exportId = req.params.id;
 
-    // Verify export belongs to user
+    // Verify export belongs to user and get dataset info
     const exportResult = await pool.query<{
       id: string;
       user_id: string;
       file_path: string;
       file_format: 'csv' | 'xlsx';
+      filters: any;
+      created_at: Date;
     }>(
-      'SELECT id, user_id, file_path, file_format FROM exports WHERE id = $1 AND user_id = $2',
+      'SELECT id, user_id, file_path, file_format, filters, created_at FROM exports WHERE id = $1 AND user_id = $2',
       [exportId, userId]
     );
 
@@ -570,8 +586,65 @@ router.get('/:id/download', authMiddleware, async (req: AuthRequest, res): Promi
       return;
     }
 
+    // Generate filename: "Prefecture - Industry - Date"
+    let filename = `export-${exportId}.${exportRow.file_format}`; // Fallback
+    try {
+      const datasetId = exportRow.filters?.dataset_id;
+      if (datasetId) {
+        // Get dataset info with prefecture and industry
+        const datasetResult = await pool.query<{
+          name: string;
+          industry_id: string;
+        }>(
+          `SELECT d.name, d.industry_id 
+           FROM datasets d 
+           WHERE d.id = $1`,
+          [datasetId]
+        );
+        
+        if (datasetResult.rows.length > 0) {
+          const dataset = datasetResult.rows[0];
+          
+          // Get industry name
+          const industryResult = await pool.query<{ name: string }>(
+            'SELECT name FROM industries WHERE id = $1',
+            [dataset.industry_id]
+          );
+          const industryName = industryResult.rows[0]?.name || 'Unknown';
+          
+          // Extract prefecture from dataset name (format: "Prefecture - Industry - Date")
+          // Or get prefecture from dataset's city/prefecture relationship
+          const prefectureResult = await pool.query<{ descr: string; descr_en: string }>(
+            `SELECT p.descr, p.descr_en 
+             FROM prefectures p
+             JOIN cities c ON c.prefecture_id = p.id
+             JOIN datasets d ON d.city_id = c.id
+             WHERE d.id = $1
+             LIMIT 1`,
+            [datasetId]
+          );
+          
+          let prefectureName = 'Unknown';
+          if (prefectureResult.rows.length > 0) {
+            prefectureName = prefectureResult.rows[0].descr_en || prefectureResult.rows[0].descr || 'Unknown';
+          } else {
+            // Try to extract from dataset name (format: "Prefecture - Industry - Date")
+            const nameParts = dataset.name.split(' - ');
+            if (nameParts.length >= 1) {
+              prefectureName = nameParts[0];
+            }
+          }
+          
+          const { formatExportFilename } = await import('../utils/nameFormatter.js');
+          filename = formatExportFilename(prefectureName, industryName, exportRow.created_at, exportRow.file_format);
+        }
+      }
+    } catch (error) {
+      console.error('[exports] Error generating filename, using fallback:', error);
+      // Use fallback filename
+    }
+
     // Set appropriate headers
-    const filename = `export-${exportId}.${exportRow.file_format}`;
     res.setHeader('Content-Type', exportRow.file_format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 

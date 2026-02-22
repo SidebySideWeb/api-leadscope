@@ -320,13 +320,10 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       }
     }
     
-    // Generate dataset name: "Industry Group - Region - Municipality (if exists)"
-    // Format: industry group - prefecture - municipality (if municipality exists)
-    let municipalityPart = '';
-    if (municipality_id && municipalityName !== 'Unknown') {
-      municipalityPart = ` - ${municipalityName}`;
-    }
-    datasetName = `${industryNameForDataset} - ${locationName}${municipalityPart}`;
+    // Generate dataset name: "Prefecture - Industry - Date (ddmoyr)"
+    // Format: prefecture - industry - 15Jan2025
+    const { formatDatasetName } = await import('../utils/nameFormatter.js');
+    datasetName = formatDatasetName(locationName, industryNameForDataset);
 
     // Find or resolve dataset ID FIRST (before creating discovery_run)
     // dataset_id is optional - if not provided, create one with null city_id (using municipalities)

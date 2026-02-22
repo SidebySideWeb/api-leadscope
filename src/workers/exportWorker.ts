@@ -42,6 +42,7 @@ async function queryDatasetContacts(
   endRow?: number
 ): Promise<RawExportRow[]> {
   // Build query with optional row range (alphabetical order by default)
+  // Only include businesses that have email OR phone (exclude businesses without contact details)
   let query = `
     SELECT DISTINCT
       b.id AS business_id,
@@ -55,6 +56,11 @@ async function queryDatasetContacts(
     FROM businesses b
     LEFT JOIN prefectures p ON p.id = b.prefecture_id
     WHERE b.dataset_id = $1
+      AND (
+        (b.email IS NOT NULL AND b.email != '') 
+        OR 
+        (b.phone IS NOT NULL AND b.phone != '')
+      )
     ORDER BY b.name ASC
   `;
   
