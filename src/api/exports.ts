@@ -613,26 +613,11 @@ router.get('/:id/download', authMiddleware, async (req: AuthRequest, res): Promi
           const industryName = industryResult.rows[0]?.name || 'Unknown';
           
           // Extract prefecture from dataset name (format: "Prefecture - Industry - Date")
-          // Or get prefecture from dataset's city/prefecture relationship
-          const prefectureResult = await pool.query<{ descr: string; descr_en: string }>(
-            `SELECT p.descr, p.descr_en 
-             FROM prefectures p
-             JOIN cities c ON c.prefecture_id = p.id
-             JOIN datasets d ON d.city_id = c.id
-             WHERE d.id = $1
-             LIMIT 1`,
-            [datasetId]
-          );
-          
+          // Dataset name is already in the correct format, so extract the first part
           let prefectureName = 'Unknown';
-          if (prefectureResult.rows.length > 0) {
-            prefectureName = prefectureResult.rows[0].descr_en || prefectureResult.rows[0].descr || 'Unknown';
-          } else {
-            // Try to extract from dataset name (format: "Prefecture - Industry - Date")
-            const nameParts = dataset.name.split(' - ');
-            if (nameParts.length >= 1) {
-              prefectureName = nameParts[0];
-            }
+          const nameParts = dataset.name.split(' - ');
+          if (nameParts.length >= 1) {
+            prefectureName = nameParts[0];
           }
           
           const { formatExportFilename } = await import('../utils/nameFormatter.js');

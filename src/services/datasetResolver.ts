@@ -78,24 +78,9 @@ export async function resolveDataset(
   }
 
   // Generate dataset name: "Prefecture - Industry - Date (ddmoyr)"
-  // Get prefecture name if we have city
-  let prefectureName = city.name; // Fallback to city name
-  if (city.prefecture_id) {
-    try {
-      const prefectureResult = await pool.query<{ descr: string; descr_en: string }>(
-        `SELECT descr, descr_en FROM prefectures WHERE id = $1 LIMIT 1`,
-        [city.prefecture_id]
-      );
-      if (prefectureResult.rows.length > 0) {
-        prefectureName = prefectureResult.rows[0].descr_en || prefectureResult.rows[0].descr || city.name;
-      }
-    } catch (e) {
-      // Ignore errors, use city name as fallback
-    }
-  }
-  
+  // Use municipalityName if provided (preferred), otherwise use city name
   const { formatDatasetName } = await import('../utils/nameFormatter.js');
-  const locationName = municipalityName || prefectureName;
+  const locationName = municipalityName || city.name;
   const finalDatasetName = datasetName || formatDatasetName(locationName, industry.name);
 
   // Get or create dataset (with reuse logic)
