@@ -237,23 +237,17 @@ async function queryExportData(filters: {
       NULL as city,
       b.address,
       b.website_url as website,
-      ct.email,
-      ct.phone,
-      ct.mobile,
-      cs.source_url,
-      ct.first_seen_at,
-      ct.last_verified_at,
-      CASE WHEN ct.is_active THEN 'active' ELSE 'removed' END as contact_status
+      b.email,
+      b.phone,
+      NULL as mobile,
+      b.website_url as source_url,
+      b.updated_at as first_seen_at,
+      b.updated_at as last_verified_at,
+      CASE WHEN b.email IS NOT NULL OR b.phone IS NOT NULL THEN 'active' ELSE 'removed' END as contact_status
     FROM businesses b
     LEFT JOIN datasets d ON d.id = b.dataset_id
     LEFT JOIN industries i ON i.id = d.industry_id
-    LEFT JOIN contact_sources cs ON cs.business_id = b.id
-       OR (b.website_url IS NOT NULL AND (
-         cs.source_url LIKE '%' || REPLACE(REPLACE(b.website_url, 'https://', ''), 'http://', '') || '%'
-         OR cs.source_url = b.website_url
-       ))
-    JOIN contacts ct ON ct.id = cs.contact_id
-    WHERE ct.id IS NOT NULL
+    WHERE (b.email IS NOT NULL OR b.phone IS NOT NULL)
   `;
 
   const params: any[] = [];
@@ -280,11 +274,11 @@ async function queryExportData(filters: {
   }
 
   if (filters.isActiveContactsOnly) {
-    query += ` AND ct.is_active = TRUE`;
+    query += ` AND (b.email IS NOT NULL OR b.phone IS NOT NULL)`;
   }
 
   if (filters.minLastVerifiedDays) {
-    query += ` AND ct.last_verified_at >= NOW() - INTERVAL '${filters.minLastVerifiedDays} days'`;
+    query += ` AND b.updated_at >= NOW() - INTERVAL '${filters.minLastVerifiedDays} days'`;
   }
 
   if (filters.hasWebsite) {
@@ -292,14 +286,14 @@ async function queryExportData(filters: {
   }
 
   if (filters.hasEmail) {
-    query += ` AND ct.email IS NOT NULL`;
+    query += ` AND b.email IS NOT NULL`;
   }
 
   if (filters.hasPhone) {
-    query += ` AND (ct.phone IS NOT NULL OR ct.mobile IS NOT NULL)`;
+    query += ` AND b.phone IS NOT NULL`;
   }
 
-  query += ` ORDER BY b.name, ct.last_verified_at DESC`;
+  query += ` ORDER BY b.name, b.updated_at DESC`;
 
   if (filters.rowLimit) {
     query += ` LIMIT $${paramCount++}`;

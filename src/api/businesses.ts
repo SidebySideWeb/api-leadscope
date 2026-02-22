@@ -201,9 +201,13 @@ router.get('/dataset/:datasetId/contacts', authMiddleware, async (req: AuthReque
       name: string;
       address: string | null;
       postal_code: string | null;
+      email: string | null;
+      phone: string | null;
+      website_url: string | null;
       created_at: Date;
+      updated_at: Date;
     }>(
-      `SELECT id, name, address, postal_code, created_at
+      `SELECT id, name, address, postal_code, email, phone, website_url, created_at, updated_at
        FROM businesses
        WHERE dataset_id = $1
        ORDER BY created_at DESC
@@ -232,35 +236,8 @@ router.get('/dataset/:datasetId/contacts', authMiddleware, async (req: AuthReque
       });
     }
 
-    // Websites are now stored directly in businesses.website_url, no need to query websites table
-    const websiteMap = new Map<string, string>();
-
-    // Get ALL contacts for these businesses
-    const contactsResult = await pool.query<{
-      business_id: string;
-      contact_id: number;
-      email: string | null;
-      phone: string | null;
-      mobile: string | null;
-      source_url: string;
-      page_type: string;
-      found_at: Date;
-    }>(
-      `SELECT 
-        cs.business_id,
-        c.id as contact_id,
-        c.email,
-        c.phone,
-        c.mobile,
-        cs.source_url,
-        cs.page_type,
-        cs.found_at
-      FROM contacts c
-      JOIN contact_sources cs ON cs.contact_id = c.id
-      WHERE cs.business_id = ANY($1)
-      ORDER BY cs.business_id, cs.found_at DESC`,
-      [businessIds]
-    );
+    // Email, phone, and website are now stored directly in businesses table
+    // No need to query contacts or contact_sources tables
 
     // Get extraction jobs
     const extractionJobsResult = await pool.query<{
@@ -275,39 +252,6 @@ router.get('/dataset/:datasetId/contacts', authMiddleware, async (req: AuthReque
        ORDER BY created_at DESC`,
       [businessIds]
     );
-
-    // Group contacts by business
-    const contactsByBusiness = new Map<string, {
-      emails: Array<{ id: number; email: string; source_url: string; page_type: string; found_at: string }>;
-      phones: Array<{ id: number; phone: string; source_url: string; page_type: string; found_at: string }>;
-    }>();
-
-    for (const contact of contactsResult.rows) {
-      if (!contactsByBusiness.has(contact.business_id)) {
-        contactsByBusiness.set(contact.business_id, { emails: [], phones: [] });
-      }
-      const businessContacts = contactsByBusiness.get(contact.business_id)!;
-
-      if (contact.email) {
-        businessContacts.emails.push({
-          id: contact.contact_id,
-          email: contact.email,
-          source_url: contact.source_url,
-          page_type: contact.page_type,
-          found_at: contact.found_at instanceof Date ? contact.found_at.toISOString() : contact.found_at,
-        });
-      }
-
-      if (contact.phone || contact.mobile) {
-        businessContacts.phones.push({
-          id: contact.contact_id,
-          phone: contact.phone || contact.mobile!,
-          source_url: contact.source_url,
-          page_type: contact.page_type,
-          found_at: contact.found_at instanceof Date ? contact.found_at.toISOString() : contact.found_at,
-        });
-      }
-    }
 
     // Group extraction jobs by business (get latest)
     const extractionJobMap = new Map<string, { id: string; status: string; completed_at: string | null }>();
@@ -328,18 +272,41 @@ router.get('/dataset/:datasetId/contacts', authMiddleware, async (req: AuthReque
     );
     const userPlan = (userResult.rows[0]?.plan || 'demo') as string;
 
-    // Build response
+    // Build response - email, phone, and website come directly from businesses table
     const businesses = businessesResult.rows.map(business => {
-      const contacts = contactsByBusiness.get(business.id) || { emails: [], phones: [] };
       const extractionJob = extractionJobMap.get(business.id) || null;
+
+      // Build emails array from businesses.email (single email field)
+      const emails: Array<{ id: string; email: string; source_url: string | null; page_type: string; found_at: string }> = [];
+      if (business.email) {
+        emails.push({
+          id: business.id, // Use business ID as identifier
+          email: business.email,
+          source_url: business.website_url,
+          page_type: 'homepage',
+          found_at: business.updated_at instanceof Date ? business.updated_at.toISOString() : business.updated_at,
+        });
+      }
+
+      // Build phones array from businesses.phone (single phone field)
+      const phones: Array<{ id: string; phone: string; source_url: string | null; page_type: string; found_at: string }> = [];
+      if (business.phone) {
+        phones.push({
+          id: business.id, // Use business ID as identifier
+          phone: business.phone,
+          source_url: business.website_url,
+          page_type: 'homepage',
+          found_at: business.updated_at instanceof Date ? business.updated_at.toISOString() : business.updated_at,
+        });
+      }
 
       return {
         id: business.id,
         name: business.name,
         address: business.address,
-        website: websiteMap.get(business.id) || null,
-        emails: contacts.emails,
-        phones: contacts.phones,
+        website: business.website_url || null,
+        emails: emails,
+        phones: phones,
         extraction_job: extractionJob,
       };
     });
