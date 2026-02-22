@@ -297,6 +297,21 @@ export async function fetchGemiCompaniesForMunicipality(
         console.warn(`[GEMI] ⚠️  No companies found in response at offset ${resultsOffset}`);
         console.log(`[GEMI] Response data keys:`, response.data ? Object.keys(response.data) : 'null');
         console.log(`[GEMI] Full response (first 1000 chars):`, JSON.stringify(response.data).substring(0, 1000));
+        
+        // Check if we've reached the total count - if so, we're done
+        // If totalCount is known and we've reached/passed it, stop
+        if (totalCount > 0 && resultsOffset >= totalCount) {
+          console.log(`[GEMI] Reached total count (${totalCount}) at offset ${resultsOffset}, stopping pagination`);
+          hasMore = false;
+          break;
+        }
+        
+        // If we don't know totalCount yet, or we haven't reached it, this might be an API limit
+        // Try to continue, but log a warning
+        if (totalCount > 0 && resultsOffset < totalCount) {
+          console.warn(`[GEMI] ⚠️  Empty results at offset ${resultsOffset} but totalCount (${totalCount}) suggests more results exist. This may be an API limit.`);
+        }
+        
         hasMore = false;
         break;
       }
