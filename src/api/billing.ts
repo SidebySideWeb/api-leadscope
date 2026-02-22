@@ -6,6 +6,7 @@ import { pool } from '../config/database.js';
 import { getActiveSubscriptionForUser } from '../db/subscriptions.js';
 import { PLAN_LIMITS, type PlanLimits } from '../config/planLimits.js';
 import { CREDIT_COSTS } from '../config/creditCostConfig.js';
+import { fetchStripeCreditPackages, getCreditPackageByPriceId } from '../services/stripeCreditPackages.js';
 import Stripe from 'stripe';
 
 const router = express.Router();
@@ -225,67 +226,49 @@ router.post('/checkout', authMiddleware, async (req: AuthRequest, res) => {
 });
 
 /**
+ * GET /billing/credit-packages
+ * Get available credit packages from Stripe
+ */
+router.get('/credit-packages', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const packages = await fetchStripeCreditPackages();
+    
+    res.json({
+      packages: packages.map(pkg => ({
+        id: pkg.id, // Price ID to use for purchase
+        productId: pkg.productId,
+        name: pkg.name,
+        priceEUR: pkg.priceEUR,
+        credits: pkg.credits,
+        bonus: pkg.bonus,
+      })),
+    });
+  } catch (error: any) {
+    console.error('[billing] Error fetching credit packages:', error);
+    res.status(500).json({ error: 'Failed to fetch credit packages' });
+  }
+});
+
+/**
  * POST /billing/buy-credits
  * Create Stripe checkout session for credit purchase
+ * creditPackage should be a Stripe price ID
  */
 router.post('/buy-credits', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.userId!;
-    const { creditPackage } = req.body;
+    const { creditPackage } = req.body; // This should be a Stripe price ID
 
-    // Define credit packages
-    // Bronze: 50 credits for 50 euros (1:1 ratio)
-    // Silver: 120 credits for 100 euros (20% bonus: 100 + 20 = 120)
-    // Gold: 260 credits for 200 euros (30% bonus: 200 + 60 = 260)
-    const creditPackages: Record<string, { credits: number; priceEUR: number; productId: string; bonus: string; name: string }> = {
-      'bronze': {
-        credits: 50,
-        priceEUR: 50,
-        productId: 'prod_Tt3B60xv6QIv5u', // Bronze package
-        bonus: '0%',
-        name: 'Bronze',
-      },
-      'silver': {
-        credits: 120,
-        priceEUR: 100,
-        productId: 'prod_Tt3B9gbSMgNNdF', // Silver package
-        bonus: '20%',
-        name: 'Silver',
-      },
-      'gold': {
-        credits: 260,
-        priceEUR: 200,
-        productId: 'prod_Tt3CuWqsz7ASaF', // Gold package
-        bonus: '30%',
-        name: 'Gold',
-      },
-      // Legacy numeric keys for backward compatibility
-      '50': {
-        credits: 50,
-        priceEUR: 50,
-        productId: 'prod_Tt3B60xv6QIv5u',
-        bonus: '0%',
-        name: 'Bronze',
-      },
-      '120': {
-        credits: 120,
-        priceEUR: 100,
-        productId: 'prod_Tt3B9gbSMgNNdF',
-        bonus: '20%',
-        name: 'Silver',
-      },
-      '260': {
-        credits: 260,
-        priceEUR: 200,
-        productId: 'prod_Tt3CuWqsz7ASaF',
-        bonus: '30%',
-        name: 'Gold',
-      },
-    };
+    if (!creditPackage) {
+      res.status(400).json({ error: 'Credit package ID is required' });
+      return;
+    }
 
-    const packageData = creditPackages[creditPackage];
-    if (!packageData || !packageData.productId) {
-      res.status(400).json({ error: 'Invalid credit package or product ID not configured' });
+    // Fetch package data from Stripe
+    const packageData = await getCreditPackageByPriceId(creditPackage);
+    
+    if (!packageData) {
+      res.status(400).json({ error: 'Invalid credit package ID' });
       return;
     }
 
@@ -301,20 +284,13 @@ router.post('/buy-credits', authMiddleware, async (req: AuthRequest, res) => {
     );
     const userEmail = userResult.rows[0]?.email;
 
-    // Create Stripe checkout session for one-time payment
-    // Note: Stripe requires price IDs, not product IDs, for line_items
-    // If you have product IDs, you need to get the price IDs from those products
-    // For now, we'll create the price_data inline using the product ID
+    // Create Stripe checkout session using the price ID
     const session = await stripe.checkout.sessions.create({
       customer_email: userEmail,
       payment_method_types: ['card'],
       line_items: [
         {
-          price_data: {
-            product: packageData.productId,
-            currency: 'eur',
-            unit_amount: packageData.priceEUR * 100, // Convert to cents
-          },
+          price: packageData.id, // Use the Stripe price ID
           quantity: 1,
         },
       ],
