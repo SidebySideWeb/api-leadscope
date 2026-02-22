@@ -302,8 +302,27 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
     // Get location name (preference: prefecture > municipality > city)
     let locationName: string = 'Unknown';
     
-    // Try to get prefecture name if we have municipality_id
-    if (municipality_id) {
+    // First, try to get prefecture name directly if prefecture_id or prefecture_gemi_id is provided
+    if (prefecture_id || prefecture_gemi_id) {
+      const prefectureQuery = prefecture_id 
+        ? `SELECT descr, descr_en FROM prefectures WHERE id = $1`
+        : `SELECT descr, descr_en FROM prefectures WHERE gemi_id = $1`;
+      const prefectureParam = prefecture_id || prefecture_gemi_id;
+      
+      const prefectureResult = await pool.query<{ descr: string; descr_en: string }>(
+        prefectureQuery,
+        [prefectureParam]
+      );
+      
+      if (prefectureResult.rows.length > 0) {
+        locationName = prefectureResult.rows[0].descr_en || prefectureResult.rows[0].descr || 'Unknown';
+        console.log(`[discovery] Found prefecture name: ${locationName} for prefecture_id=${prefecture_id || prefecture_gemi_id}`);
+      } else {
+        console.warn(`[discovery] Prefecture not found for prefecture_id=${prefecture_id || prefecture_gemi_id}`);
+      }
+    }
+    // Otherwise, try to get prefecture name from municipality_id
+    else if (municipality_id) {
       const prefectureResult = await pool.query<{ descr: string; descr_en: string }>(
         `SELECT p.descr, p.descr_en 
          FROM prefectures p
@@ -315,9 +334,16 @@ const handleDiscoveryRequest = async (req: AuthRequest, res: Response) => {
       
       if (prefectureResult.rows.length > 0) {
         locationName = prefectureResult.rows[0].descr_en || prefectureResult.rows[0].descr || municipalityName;
+        console.log(`[discovery] Found prefecture name from municipality: ${locationName} for municipality_id=${municipality_id}`);
       } else {
+        // Fallback to municipality name, but log a warning if it's Unknown
         locationName = municipalityName;
+        if (municipalityName === 'Unknown') {
+          console.warn(`[discovery] Could not find prefecture for municipality_id=${municipality_id}, using 'Unknown'`);
+        }
       }
+    } else {
+      console.warn('[discovery] No prefecture_id, prefecture_gemi_id, or municipality_id provided, locationName will be "Unknown"');
     }
     
     // Generate dataset name: "Prefecture - Industry - Date (ddmoyr)"
