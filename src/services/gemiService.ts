@@ -195,8 +195,14 @@ export async function fetchGemiCompaniesForMunicipality(
 
       // Use municipality if provided, otherwise use prefecture
       if (municipalityGemiId) {
-        // GEMI API supports arrays for municipalities parameter
-        params.municipalities = municipalityIds.length === 1 ? municipalityIds[0] : municipalityIds;
+        // GEMI API may need comma-separated string for multiple municipalities
+        // Try sending as comma-separated string if multiple, single number if one
+        if (municipalityIds.length === 1) {
+          params.municipalities = municipalityIds[0];
+        } else {
+          // Send as comma-separated string: "123,456,789"
+          params.municipalities = municipalityIds.join(',');
+        }
       } else if (prefectureGemiId) {
         params.prefectures = prefectureGemiId; // Use 'prefectures' (plural) for prefecture-level queries
       }
@@ -204,8 +210,13 @@ export async function fetchGemiCompaniesForMunicipality(
       if (activityId) {
         // Normalize activityId to array for consistent handling
         const activityIds = Array.isArray(activityId) ? activityId : [activityId];
-        // GEMI API supports arrays for activities parameter
-        params.activities = activityIds.length === 1 ? activityIds[0] : activityIds;
+        // GEMI API may need comma-separated string for multiple activities
+        if (activityIds.length === 1) {
+          params.activities = activityIds[0];
+        } else {
+          // Send as comma-separated string: "123,456,789"
+          params.activities = activityIds.join(',');
+        }
       }
 
       console.log(`[GEMI] Fetching page at offset ${resultsOffset} with size ${resultsSize}...`);

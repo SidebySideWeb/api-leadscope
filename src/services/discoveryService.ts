@@ -559,145 +559,76 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
         const { fetchGemiCompaniesForMunicipality, importGemiCompaniesToDatabase } = await import('./gemiService.js');
         
         try {
-          // Fetch companies from GEMI API (supports municipality, multiple municipalities, or prefecture)
-          // ENHANCEMENT: Make separate API calls for each municipality + activity combination
-          // This ensures maximum reliability and completeness, especially for large prefectures like Attica
+          // OPTIMIZATION: GEMI API supports multiple municipalities AND multiple activities in a single call
+          // Instead of making separate calls for each municipality + activity combination,
+          // we batch municipalities (e.g., 20-30 at a time) and send ALL activities in one call
+          // This reduces API calls from potentially 60 municipalities × 20 activities = 1,200 calls
+          // to just 3-4 calls (batches of 20-30 municipalities each)
           let allCompanies: any[] = [];
           let totalSearchesExecuted = 0;
           
-          // Determine if we should make separate calls per municipality
-          // If we have many municipalities (e.g., Attica has ~60), make separate calls for better reliability
-          const shouldSplitByMunicipality = municipalityGemiId && municipalityGemiId.length > 10;
+          // Batch size for municipalities (GEMI API can handle many, but we batch to avoid timeout)
+          const MUNICIPALITY_BATCH_SIZE = 25; // Process 25 municipalities at a time
           
-          if (shouldSplitByMunicipality && municipalityGemiId) {
-            console.log(`[runDiscoveryJob] Large number of municipalities (${municipalityGemiId.length}), making separate calls per municipality for maximum reliability...`);
-            
-            // Make separate calls for each municipality + activity combination
-            for (let m = 0; m < municipalityGemiId.length; m++) {
-              const singleMunicipalityId = municipalityGemiId[m];
-              console.log(`[runDiscoveryJob] Processing municipality ${m + 1}/${municipalityGemiId.length}: municipality_gemi_id=${singleMunicipalityId}`);
-              
-              // For each municipality, query all activities
-              if (activityIds && activityIds.length > 1) {
-                // Multiple activities: make separate call for each activity
-                for (let a = 0; a < activityIds.length; a++) {
-                  const activityId = activityIds[a];
-                  console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}, Activity ${a + 1}/${activityIds.length}: activity_id=${activityId}`);
-                  
-                  let currentOffset: number | undefined = undefined;
-                  let hasMore = true;
-                  let municipalityActivityCompanies: any[] = [];
-
-                  while (hasMore) {
-                    const result = await fetchGemiCompaniesForMunicipality(
-                      singleMunicipalityId, // Single municipality
-                      activityId, // Single activity
-                      undefined, // No prefecture when using municipality
-                      currentOffset
-                    );
-
-                    municipalityActivityCompanies = municipalityActivityCompanies.concat(result.companies);
-                    currentOffset = result.nextOffset;
-                    hasMore = result.hasMore;
-                    totalSearchesExecuted++;
-
-                    console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}, Activity ${activityId}: Fetched ${result.companies.length} companies (total: ${municipalityActivityCompanies.length}), nextOffset: ${currentOffset}, hasMore: ${hasMore}`);
-
-                    // If we hit the safety limit but there's more data, continue fetching
-                    if (!hasMore && currentOffset >= 10000) {
-                      console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}, Activity ${activityId}: Hit safety limit at offset ${currentOffset}, continuing...`);
-                      hasMore = true;
-                    } else if (!hasMore) {
-                      break;
-                    }
-                  }
-                  
-                  console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}, Activity ${activityId}: Total ${municipalityActivityCompanies.length} companies found`);
-                  allCompanies = allCompanies.concat(municipalityActivityCompanies);
-                }
-              } else {
-                // Single activity (or no activity filter) - single call per municipality
-                const activityId = activityIds && activityIds.length > 0 ? activityIds[0] : undefined;
-                let currentOffset: number | undefined = undefined;
-                let hasMore = true;
-                let municipalityCompanies: any[] = [];
-
-                while (hasMore) {
-                  const result = await fetchGemiCompaniesForMunicipality(
-                    singleMunicipalityId,
-                    activityId,
-                    undefined,
-                    currentOffset
-                  );
-
-                  municipalityCompanies = municipalityCompanies.concat(result.companies);
-                  currentOffset = result.nextOffset;
-                  hasMore = result.hasMore;
-                  totalSearchesExecuted++;
-
-                  console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}: Fetched ${result.companies.length} companies (total: ${municipalityCompanies.length}), nextOffset: ${currentOffset}, hasMore: ${hasMore}`);
-
-                  if (!hasMore && currentOffset >= 10000) {
-                    console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}: Hit safety limit at offset ${currentOffset}, continuing...`);
-                    hasMore = true;
-                  } else if (!hasMore) {
-                    break;
-                  }
-                }
-                
-                console.log(`[runDiscoveryJob] Municipality ${singleMunicipalityId}: Total ${municipalityCompanies.length} companies found`);
-                allCompanies = allCompanies.concat(municipalityCompanies);
-              }
+          if (municipalityGemiId && municipalityGemiId.length > 0) {
+            // We have municipalities - batch them for efficiency
+            const municipalityBatches: number[][] = [];
+            for (let i = 0; i < municipalityGemiId.length; i += MUNICIPALITY_BATCH_SIZE) {
+              municipalityBatches.push(municipalityGemiId.slice(i, i + MUNICIPALITY_BATCH_SIZE));
             }
-          } else if (activityIds && activityIds.length > 1) {
-            // Multiple activities but few municipalities - make separate calls per activity
-            console.log(`[runDiscoveryJob] Making separate API calls for each of ${activityIds.length} activity IDs to ensure complete results...`);
             
-            for (let i = 0; i < activityIds.length; i++) {
-              const activityId = activityIds[i];
-              console.log(`[runDiscoveryJob] Fetching activity ${i + 1}/${activityIds.length}: activity_id=${activityId}`);
+            console.log(`[runDiscoveryJob] Optimizing: ${municipalityGemiId.length} municipalities split into ${municipalityBatches.length} batches of ~${MUNICIPALITY_BATCH_SIZE} each`);
+            console.log(`[runDiscoveryJob] All ${activityIds?.length || 0} activities will be included in each batch call`);
+            
+            // Process each batch of municipalities
+            for (let batchIndex = 0; batchIndex < municipalityBatches.length; batchIndex++) {
+              const municipalityBatch = municipalityBatches[batchIndex];
+              console.log(`[runDiscoveryJob] Processing batch ${batchIndex + 1}/${municipalityBatches.length}: ${municipalityBatch.length} municipalities, ${activityIds?.length || 0} activities`);
               
               let currentOffset: number | undefined = undefined;
               let hasMore = true;
-              let activityCompanies: any[] = [];
+              let batchCompanies: any[] = [];
 
               while (hasMore) {
+                // Make ONE call with batch of municipalities + ALL activities
                 const result = await fetchGemiCompaniesForMunicipality(
-                  municipalityGemiId,
-                  activityId, // Single activity ID per call
-                  prefectureGemiId,
+                  municipalityBatch, // Batch of municipalities (array)
+                  activityIds, // ALL activities at once (array)
+                  undefined, // No prefecture when using municipalities
                   currentOffset
                 );
 
-                activityCompanies = activityCompanies.concat(result.companies);
+                batchCompanies = batchCompanies.concat(result.companies);
                 currentOffset = result.nextOffset;
                 hasMore = result.hasMore;
                 totalSearchesExecuted++;
 
-                console.log(`[runDiscoveryJob] Activity ${activityId}: Fetched ${result.companies.length} companies (total for this activity: ${activityCompanies.length}), nextOffset: ${currentOffset}, hasMore: ${hasMore}`);
+                console.log(`[runDiscoveryJob] Batch ${batchIndex + 1}: Fetched ${result.companies.length} companies (total in batch: ${batchCompanies.length}), nextOffset: ${currentOffset}, hasMore: ${hasMore}`);
 
                 // If we hit the safety limit but there's more data, continue fetching
                 if (!hasMore && currentOffset >= 10000) {
-                  console.log(`[runDiscoveryJob] Activity ${activityId}: Hit safety limit at offset ${currentOffset}, continuing to fetch more...`);
-                  hasMore = true; // Continue fetching from this offset
+                  console.log(`[runDiscoveryJob] Batch ${batchIndex + 1}: Hit safety limit at offset ${currentOffset}, continuing...`);
+                  hasMore = true;
                 } else if (!hasMore) {
-                  // No more data available for this activity
                   break;
                 }
               }
               
-              console.log(`[runDiscoveryJob] Activity ${activityId}: Total ${activityCompanies.length} companies found`);
-              allCompanies = allCompanies.concat(activityCompanies);
+              console.log(`[runDiscoveryJob] Batch ${batchIndex + 1}: Total ${batchCompanies.length} companies found`);
+              allCompanies = allCompanies.concat(batchCompanies);
             }
-          } else {
-            // Single activity ID (or no activity filter) - use original logic
+          } else if (prefectureGemiId) {
+            // Use prefecture-level query (faster than batching all municipalities)
+            console.log(`[runDiscoveryJob] Using prefecture-level query: prefecture_gemi_id=${prefectureGemiId}, ${activityIds?.length || 0} activities`);
+            
             let currentOffset: number | undefined = undefined;
             let hasMore = true;
 
             while (hasMore) {
+              // Make ONE call with prefecture + ALL activities
               const result = await fetchGemiCompaniesForMunicipality(
-                municipalityGemiId,
-                activityIds && activityIds.length > 0 ? activityIds[0] : undefined,
+                undefined, // No municipalities when using prefecture
+                activityIds, // ALL activities at once (array)
                 prefectureGemiId,
                 currentOffset
               );
@@ -712,9 +643,8 @@ export async function runDiscoveryJob(input: DiscoveryJobInput): Promise<JobResu
               // If we hit the safety limit but there's more data, continue fetching
               if (!hasMore && currentOffset >= 10000) {
                 console.log(`[runDiscoveryJob] Hit safety limit at offset ${currentOffset}, continuing to fetch more...`);
-                hasMore = true; // Continue fetching from this offset
+                hasMore = true;
               } else if (!hasMore) {
-                // No more data available
                 break;
               }
             }
