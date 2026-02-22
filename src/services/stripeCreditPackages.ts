@@ -51,11 +51,16 @@ export async function fetchStripeCreditPackages(): Promise<CreditPackage[]> {
     for (const product of products.data) {
       // Check if this is a credit package (via metadata)
       // Look for: metadata.type = 'credit_package', or metadata.credits set, or product name contains "credit"
+      // Also check for known package names: Gold, Silver, Bronze
       const metadata = product.metadata || {};
+      const productNameLower = product.name.toLowerCase();
       const isCreditPackage = 
         metadata.type === 'credit_package' || 
         metadata.credits !== undefined ||
-        product.name.toLowerCase().includes('credit');
+        productNameLower.includes('credit') ||
+        productNameLower === 'gold' ||
+        productNameLower === 'silver' ||
+        productNameLower === 'bronze';
 
       if (!isCreditPackage) {
         continue;
@@ -95,15 +100,47 @@ export async function fetchStripeCreditPackages(): Promise<CreditPackage[]> {
 
       const priceEUR = (price.unit_amount || 0) / 100; // Convert from cents
 
-      // Get credits from metadata (preferred) or calculate from price
-      const credits = metadata.credits 
-        ? parseInt(metadata.credits, 10)
-        : Math.round(priceEUR); // Fallback: 1 credit per euro
+      // Get credits from metadata (preferred)
+      // If not in metadata, try to infer from price structure or use known values for Gold/Silver/Bronze
+      let credits: number;
+      if (metadata.credits) {
+        credits = parseInt(metadata.credits, 10);
+      } else {
+        // For known package names, use the standard credit amounts
+        // Otherwise fallback to 1 credit per euro
+        if (productNameLower === 'gold') {
+          credits = 260;
+        } else if (productNameLower === 'silver') {
+          credits = 120;
+        } else if (productNameLower === 'bronze') {
+          credits = 50;
+        } else {
+          credits = Math.round(priceEUR); // Fallback: 1 credit per euro
+        }
+      }
 
       // Get bonus percentage from metadata
-      const bonusPercent = metadata.bonus 
-        ? parseInt(metadata.bonus, 10)
-        : 0;
+      // If not in metadata, calculate from credits vs base price for known packages
+      let bonusPercent: number;
+      if (metadata.bonus) {
+        bonusPercent = parseInt(metadata.bonus, 10);
+      } else {
+        // Calculate bonus: (credits - priceEUR) / priceEUR * 100
+        // For known packages, use standard bonuses
+        if (productNameLower === 'gold') {
+          bonusPercent = 30; // 200€ -> 260 credits = 30% bonus
+        } else if (productNameLower === 'silver') {
+          bonusPercent = 20; // 100€ -> 120 credits = 20% bonus
+        } else if (productNameLower === 'bronze') {
+          bonusPercent = 0; // 50€ -> 50 credits = 0% bonus
+        } else {
+          // Calculate bonus from credits vs price
+          const baseCredits = Math.round(priceEUR);
+          bonusPercent = credits > baseCredits 
+            ? Math.round(((credits - baseCredits) / baseCredits) * 100)
+            : 0;
+        }
+      }
 
       creditPackages.push({
         id: price.id,
