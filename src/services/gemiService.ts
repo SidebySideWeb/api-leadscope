@@ -692,7 +692,7 @@ export async function importGemiCompaniesToDatabase(
     }
   }
   
-  // Step 5: Batch UPDATE existing businesses
+  // Step 5: Batch UPDATE existing businesses using unnest for performance
   if (businessesToUpdate.length > 0) {
     console.log(`[GEMI] Batch updating ${businessesToUpdate.length} existing businesses...`);
     const BATCH_SIZE = 500; // Update in batches of 500
@@ -700,43 +700,86 @@ export async function importGemiCompaniesToDatabase(
     for (let i = 0; i < businessesToUpdate.length; i += BATCH_SIZE) {
       const batch = businessesToUpdate.slice(i, i + BATCH_SIZE);
       
-      // Use CASE statements for batch update
-      const idList = batch.map(b => b.id);
-      const cases = {
-        name: batch.map((b, idx) => `WHEN '${b.id}' THEN $${idx + 1}`).join(' '),
-        address: batch.map((b, idx) => `WHEN '${b.id}' THEN $${batch.length + idx + 1}`).join(' '),
-        // ... etc for all fields
-      };
-      
-      // Simpler approach: Update in smaller batches using WHERE id = ANY()
-      for (const b of batch) {
-        try {
-          await pool.query(
-            `UPDATE businesses SET
-              name = $1,
-              address = COALESCE($2, address),
-              postal_code = COALESCE($3, postal_code),
-              municipality_id = COALESCE($4, municipality_id),
-              prefecture_id = COALESCE($5, prefecture_id),
-              website_url = COALESCE($6, website_url),
-              phone = COALESCE($7, phone),
-              email = COALESCE($8, email),
-              dataset_id = $9,
-              discovery_run_id = COALESCE($10, discovery_run_id),
-              updated_at = NOW()
-            WHERE id = $11`,
-            [b.name, b.address, b.postal_code, b.municipality_id, b.prefecture_id,
-             b.website_url, b.phone, b.email, b.dataset_id, b.discovery_run_id, b.id]
-          );
-          updated++;
-        } catch (error: any) {
-          console.error(`[GEMI] Failed to update ${b.ar_gemi}:`, error.message);
-          skipped++;
+      try {
+        // Use unnest for efficient batch UPDATE
+        const ids = batch.map(b => b.id);
+        const names = batch.map(b => b.name);
+        const addresses = batch.map(b => b.address);
+        const postalCodes = batch.map(b => b.postal_code);
+        const municipalityIds = batch.map(b => b.municipality_id);
+        const prefectureIds = batch.map(b => b.prefecture_id);
+        const websiteUrls = batch.map(b => b.website_url);
+        const phones = batch.map(b => b.phone);
+        const emails = batch.map(b => b.email);
+        const datasetIds = batch.map(b => b.dataset_id);
+        const discoveryRunIds = batch.map(b => b.discovery_run_id);
+        
+        const result = await pool.query(
+          `UPDATE businesses b SET
+            name = u.name,
+            address = COALESCE(u.address, b.address),
+            postal_code = COALESCE(u.postal_code, b.postal_code),
+            municipality_id = COALESCE(u.municipality_id, b.municipality_id),
+            prefecture_id = COALESCE(u.prefecture_id, b.prefecture_id),
+            website_url = COALESCE(u.website_url, b.website_url),
+            phone = COALESCE(u.phone, b.phone),
+            email = COALESCE(u.email, b.email),
+            dataset_id = u.dataset_id,
+            discovery_run_id = COALESCE(u.discovery_run_id, b.discovery_run_id),
+            updated_at = NOW()
+          FROM (
+            SELECT 
+              unnest($1::uuid[]) as id,
+              unnest($2::text[]) as name,
+              unnest($3::text[]) as address,
+              unnest($4::text[]) as postal_code,
+              unnest($5::uuid[]) as municipality_id,
+              unnest($6::uuid[]) as prefecture_id,
+              unnest($7::text[]) as website_url,
+              unnest($8::text[]) as phone,
+              unnest($9::text[]) as email,
+              unnest($10::uuid[]) as dataset_id,
+              unnest($11::uuid[]) as discovery_run_id
+          ) u
+          WHERE b.id = u.id`,
+          [
+            ids, names, addresses, postalCodes, municipalityIds, prefectureIds,
+            websiteUrls, phones, emails, datasetIds, discoveryRunIds
+          ]
+        );
+        
+        updated += result.rowCount || batch.length;
+        if ((i / BATCH_SIZE + 1) % 10 === 0 || i === 0) {
+          console.log(`[GEMI] Updated batch ${Math.floor(i / BATCH_SIZE) + 1}: ${updated} total updated`);
         }
-      }
-      
-      if ((i / BATCH_SIZE + 1) % 10 === 0 || i === 0) {
-        console.log(`[GEMI] Updated batch ${Math.floor(i / BATCH_SIZE) + 1}: ${updated} total updated`);
+      } catch (error: any) {
+        console.error(`[GEMI] Error in batch update (batch ${Math.floor(i / BATCH_SIZE) + 1}):`, error.message);
+        // Fallback to individual updates for this batch
+        for (const b of batch) {
+          try {
+            await pool.query(
+              `UPDATE businesses SET
+                name = $1,
+                address = COALESCE($2, address),
+                postal_code = COALESCE($3, postal_code),
+                municipality_id = COALESCE($4, municipality_id),
+                prefecture_id = COALESCE($5, prefecture_id),
+                website_url = COALESCE($6, website_url),
+                phone = COALESCE($7, phone),
+                email = COALESCE($8, email),
+                dataset_id = $9,
+                discovery_run_id = COALESCE($10, discovery_run_id),
+                updated_at = NOW()
+              WHERE id = $11`,
+              [b.name, b.address, b.postal_code, b.municipality_id, b.prefecture_id,
+               b.website_url, b.phone, b.email, b.dataset_id, b.discovery_run_id, b.id]
+            );
+            updated++;
+          } catch (individualError: any) {
+            console.error(`[GEMI] Failed to update ${b.ar_gemi}:`, individualError.message);
+            skipped++;
+          }
+        }
       }
     }
   }
