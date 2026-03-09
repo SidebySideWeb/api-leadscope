@@ -189,24 +189,30 @@ export async function getCreditPackageByProductId(productId: string): Promise<Cr
 function getFallbackPackages(): CreditPackage[] {
   return [
     {
+      // Fallback Bronze package (50€ -> 50 credits)
       id: 'fallback-1',
-      productId: 'fallback-prod-1',
+      // Real Stripe product ID for Bronze (50€) as provided
+      productId: 'prod_Tt3B60xv6QIv5u',
       name: 'Bronze',
       priceEUR: 50,
       credits: 50,
       bonus: '0%',
     },
     {
+      // Fallback Silver package (100€ -> 120 credits)
       id: 'fallback-2',
-      productId: 'fallback-prod-2',
+      // Real Stripe product ID for Silver (100€) as provided
+      productId: 'prod_Tt3B9gbSMgNNdF',
       name: 'Silver',
       priceEUR: 100,
       credits: 120,
       bonus: '20%',
     },
     {
+      // Fallback Gold package (200€ -> 260 credits)
       id: 'fallback-3',
-      productId: 'fallback-prod-3',
+      // Real Stripe product ID for Gold (200€) as provided
+      productId: 'prod_Tt3CuWqsz7ASaF',
       name: 'Gold',
       priceEUR: 200,
       credits: 260,

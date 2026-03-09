@@ -284,16 +284,31 @@ router.post('/buy-credits', authMiddleware, async (req: AuthRequest, res) => {
     );
     const userEmail = userResult.rows[0]?.email;
 
-    // Create Stripe checkout session using the price ID
+    // Build line item:
+    // - If we have a real Stripe price ID (price_*), use it directly
+    // - Otherwise (fallback packages), create inline price data so checkout still works
+    const lineItem: any =
+      packageData.id && packageData.id.startsWith('price_')
+        ? {
+            price: packageData.id,
+            quantity: 1,
+          }
+        : {
+            price_data: {
+              currency: 'eur',
+              unit_amount: Math.round(packageData.priceEUR * 100),
+              product_data: {
+                name: packageData.name,
+              },
+            },
+            quantity: 1,
+          };
+
+    // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
       customer_email: userEmail,
       payment_method_types: ['card'],
-      line_items: [
-        {
-          price: packageData.id, // Use the Stripe price ID
-          quantity: 1,
-        },
-      ],
+      line_items: [lineItem],
       mode: 'payment',
       success_url: `${process.env.FRONTEND_URL || 'https://www.leadscope.gr'}/billing?success=true&credits=${packageData.credits}&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.FRONTEND_URL || 'https://www.leadscope.gr'}/billing?canceled=true`,
