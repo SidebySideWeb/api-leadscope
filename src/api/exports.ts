@@ -307,13 +307,28 @@ router.post('/run', authMiddleware, async (req: AuthRequest, res): Promise<void>
       startRow = start_row !== undefined ? parseInt(String(start_row), 10) : 1;
       endRow = end_row !== undefined ? parseInt(String(end_row), 10) : totalRows;
 
-      if (isNaN(startRow) || isNaN(endRow) || startRow < 1 || endRow < startRow || endRow > totalRows) {
+      // Basic validation: start >= 1 and end >= start
+      if (isNaN(startRow) || isNaN(endRow) || startRow < 1 || endRow < startRow) {
         res.status(400).json({ 
-          error: `Invalid row range. Start must be >= 1, end must be >= start, and end must be <= ${totalRows}` 
+          error: 'Invalid row range. Start must be >= 1 and end must be >= start.' 
         });
         return;
       }
 
+      // Clamp endRow to totalRows so that exports always work even if the
+      // client-side range exceeds the available contacts. This matches the
+      // UI message shown in the export modal.
+      const clampedEndRow = Math.min(endRow, totalRows);
+
+      // If the clamped range is empty (e.g. startRow > totalRows), return error.
+      if (clampedEndRow < startRow) {
+        res.status(400).json({
+          error: `Invalid row range. Start must be <= ${totalRows}.`,
+        });
+        return;
+      }
+
+      endRow = clampedEndRow;
       rowsToExport = endRow - startRow + 1;
     }
 
